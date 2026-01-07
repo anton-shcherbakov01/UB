@@ -1,0 +1,6 @@
+.env
+backend/proxy_ext/
+venv/
+backend/__pycache__/
+node_modules/
+*.png

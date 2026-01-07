@@ -23,7 +23,7 @@ export default function App() {
     try {
       // Передаем данные инициализации Telegram в заголовке для безопасности
       const tgData = window.Telegram?.WebApp?.initData || "";
-      const response = await fetch(`https://many-boxes-sell.loca.lt/api/analyze/${sku}`, {
+      const response = await fetch(`https://ulike-bot.ru/api/analyze/${sku}`, {
         headers: { 'X-TG-Data': tgData }
       });
       const result = await response.json();
