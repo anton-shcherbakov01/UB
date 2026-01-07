@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Стили для того, чтобы приложение выглядело как родное в Telegram */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--tg-theme-bg-color, #f8fafc);
+  color: var(--tg-theme-text-color, #0f172a);
+  -webkit-tap-highlight-color: transparent;
+}
