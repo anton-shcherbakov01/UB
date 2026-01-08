@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # 1. База данных для очереди (Redis)
+  redis:
+    image: redis:alpine
+    container_name: wb_redis
+    restart: always
+
+  # 2. Основное API (FastAPI)
+  api:
+    build: ./backend
+    container_name: wb_api
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PROXY_USER=${PROXY_USER}
+      - PROXY_PASS=${PROXY_PASS}
+      - PROXY_HOST=${PROXY_HOST}
+      - PROXY_PORT=${PROXY_PORT}
+      - HEADLESS=True
+    depends_on:
+      - redis
+
+  # 3. Рабочий (Celery Worker) - именно он запускает браузер
+  worker:
+    build: ./backend
+    container_name: wb_worker
+    # Запускаем Celery с concurrency=1 (один браузер одновременно), чтобы не убить сервер
+    command: celery -A celery_app worker --loglevel=info --concurrency=1
+    volumes:
+      - ./backend:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PROXY_USER=${PROXY_USER}
+      - PROXY_PASS=${PROXY_PASS}
+      - PROXY_HOST=${PROXY_HOST}
+      - PROXY_PORT=${PROXY_PORT}
+      - HEADLESS=True
+    depends_on:
+      - redis
