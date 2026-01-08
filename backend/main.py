@@ -22,13 +22,16 @@ app.add_middleware(
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
 
+# Убираем async, чтобы FastAPI запускал парсинг в пуле потоков
+# Это позволит обрабатывать несколько запросов параллельно
 @app.get("/api/analyze/{sku}")
-async def analyze_product(sku: int, x_tg_data: str = Header(None)):
-    # Проверка Telegram (можно раскомментировать для продакшена)
-    # if not auth_manager.validate_init_data(x_tg_data):
-    #     raise HTTPException(status_code=401, detail="Unauthorized")
-
+def analyze_product(sku: int, x_tg_data: str = Header(None)):
+    """
+    Эндпоинт анализа товара. 
+    Использует блокирующий вызов парсера в отдельном потоке (Thread Pool).
+    """
     result = parser_service.get_product_data(sku)
+    
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message"))
     
@@ -36,4 +39,5 @@ async def analyze_product(sku: int, x_tg_data: str = Header(None)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Увеличиваем лимиты таймаута для uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=300)
