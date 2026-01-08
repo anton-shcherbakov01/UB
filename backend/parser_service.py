@@ -29,8 +29,7 @@ logger = logging.getLogger("WB-Parser")
 class SeleniumWBParser:
     """
     Микросервис парсинга Wildberries. 
-    Версия с ротацией сессий, обходом Касперского и динамическим ожиданием.
-    Оптимизирована для работы внутри Docker с увеличенными таймаутами для стабильности.
+    Оптимизирован для работы внутри Docker с балансом между стабильностью и скоростью ответа.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -78,7 +77,7 @@ class SeleniumWBParser:
         return extension_path
 
     def _init_driver(self):
-        """Инициализация драйвера с возвращенными таймаутами."""
+        """Инициализация драйвера с настройками для Docker."""
         logger.info("Запуск инициализации Selenium драйвера...")
         edge_options = EdgeOptions()
         if self.headless:
@@ -105,10 +104,8 @@ class SeleniumWBParser:
             os.environ['WDM_LOG_LEVEL'] = '0'
             system_driver = '/usr/local/bin/msedgedriver'
             if os.path.exists(system_driver):
-                logger.info("Использование локального драйвера сервера")
                 service = EdgeService(executable_path=system_driver)
             else:
-                logger.info("Локальный драйвер не найден, запуск через WDM...")
                 service = EdgeService(EdgeChromiumDriverManager().install())
             
             driver = webdriver.Edge(service=service, options=edge_options)
@@ -117,8 +114,9 @@ class SeleniumWBParser:
             logger.error(f"Ошибка инициализации драйвера: {e}")
             raise e
             
-        # ВОЗВРАЩЕНО: Увеличиваем таймаут ожидания до 120 секунд
-        driver.set_page_load_timeout(120)
+        # Устанавливаем разумный таймаут загрузки страницы (45 сек), 
+        # чтобы успеть ответить фронтенду до обрыва связи (60 сек).
+        driver.set_page_load_timeout(45)
         return driver
 
     def _extract_price(self, driver, selector):
@@ -140,9 +138,10 @@ class SeleniumWBParser:
         return 0
 
     def get_product_data(self, sku: int):
-        """Основной метод парсинга (Таймауты возвращены к исходным значениям)."""
+        """Основной метод парсинга с ограничением по времени для предотвращения таймаутов HTTP."""
         logger.info(f"--- ЗАПРОС НА АНАЛИЗ SKU: {sku} ---")
-        max_attempts = 3
+        # Сокращаем количество попыток до 2, чтобы уложиться в лимит ожидания клиента (60-90 сек)
+        max_attempts = 2
         last_error = ""
 
         price_selectors_list = [
@@ -160,8 +159,8 @@ class SeleniumWBParser:
                 logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
                 
-                # Даем время на первичную загрузку и скроллим
-                time.sleep(3)
+                # Сокращаем паузы
+                time.sleep(2)
                 driver.execute_script("window.scrollTo(0, 400);")
                 
                 # Проверка на блокировки
@@ -173,14 +172,14 @@ class SeleniumWBParser:
 
                 logger.info("Ожидание появления цен...")
                 
-                # ВОЗВРАЩЕНО: Ожидание загрузки цен до 60 секунд
+                # Сокращаем время ожидания появления элементов до 30 секунд
                 found = False
                 start_wait = time.time()
-                while time.time() - start_wait < 60:
+                while time.time() - start_wait < 30:
                     if any(driver.find_elements(By.CSS_SELECTOR, s) for s in price_selectors_list):
                         found = True
                         break
-                    time.sleep(2)
+                    time.sleep(1)
 
                 if found:
                     logger.info(f"Цены обнаружены через {int(time.time() - start_wait)} сек.")
@@ -191,7 +190,7 @@ class SeleniumWBParser:
                 standard = self._extract_price(driver, "[class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
                 base = self._extract_price(driver, "[class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
 
-                # Глубокий сканер
+                # Глубокий сканер (если стандартные классы не сработали)
                 if not standard and not wallet:
                     logger.info("Стандартные классы цен не сработали. Запуск JS-сканера...")
                     fallback_script = """
@@ -215,11 +214,12 @@ class SeleniumWBParser:
                             standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
 
                 if not wallet and not standard:
-                    logger.error("Парсинг не удался: цены не обнаружены.")
+                    logger.error("Парсинг не удался: цены не обнаружены даже глубоким сканером.")
                     raise Exception("Цены не обнаружены.")
 
                 logger.info("Извлечение информации о бренде и названии...")
                 
+                # Используем find_elements, чтобы не падать с ошибкой, если WB изменил классы
                 brand_els = driver.find_elements(By.CLASS_NAME, "product-page__header-brand")
                 name_els = driver.find_elements(By.CLASS_NAME, "product-page__header-title")
                 
@@ -236,13 +236,16 @@ class SeleniumWBParser:
             except Exception as e:
                 last_error = str(e)
                 logger.error(f"Ошибка во время попытки {attempt}: {last_error}")
+                # Если первая попытка заняла слишком много времени, сразу выходим, чтобы успеть ответить клиенту
+                if attempt == 1 and (time.time() - start_wait) > 40:
+                    break
                 continue
             finally:
                 if driver: 
                     logger.info("Закрытие драйвера")
                     driver.quit()
 
-        logger.error(f"Все {max_attempts} попытки исчерпаны. Финальная ошибка: {last_error}")
+        logger.error(f"Финальная ошибка: {last_error}")
         return {"id": sku, "status": "error", "message": f"Ошибка на сервере: {last_error}"}
 
 parser_service = SeleniumWBParser()
