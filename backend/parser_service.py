@@ -22,7 +22,7 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 class SeleniumWBParser:
     """
     Микросервис парсинга Wildberries. 
-    Версия с ротацией сессий, обходом Касперского и динамическим ожиданием.
+    Оптимизирован для работы внутри Docker контейнера.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -43,7 +43,6 @@ class SeleniumWBParser:
             "background": {"scripts": ["background.js"]}
         })
         
-        # Генерируем ID сессии для ротации IP (крайне важно для обхода Касперского)
         session_id = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=10))
         auth_user = f"{user}-session-{session_id};country-ru"
 
@@ -65,10 +64,15 @@ class SeleniumWBParser:
         return extension_path
 
     def _init_driver(self):
-        """Инициализация драйвера с подавлением мусора в консоли."""
+        """Инициализация драйвера с критическими флагами для Docker."""
         edge_options = EdgeOptions()
-        if self.headless:
-            edge_options.add_argument("--headless=new")
+        
+        # КРИТИЧЕСКИЕ ФЛАГИ ДЛЯ DOCKER
+        edge_options.add_argument("--headless=new")
+        edge_options.add_argument("--no-sandbox")            # Важно для работы под root
+        edge_options.add_argument("--disable-dev-shm-usage")  # Важно для Docker памяти
+        edge_options.add_argument("--disable-gpu")
+        edge_options.add_argument("--remote-debugging-port=9222")
         
         plugin_path = self._create_proxy_auth_extension(
             self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port
@@ -76,8 +80,6 @@ class SeleniumWBParser:
         edge_options.add_extension(plugin_path)
         
         edge_options.add_argument("--log-level=3")
-        edge_options.add_argument("--disable-logging")
-        edge_options.add_argument("--ignore-certificate-errors")
         edge_options.add_argument("--disable-blink-features=AutomationControlled")
         edge_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         edge_options.add_argument("--window-size=1920,1080")
@@ -87,8 +89,9 @@ class SeleniumWBParser:
             os.environ['WDM_LOG_LEVEL'] = '0'
             service = EdgeService(EdgeChromiumDriverManager().install())
             driver = webdriver.Edge(service=service, options=edge_options)
-        except:
-            driver = webdriver.Edge(options=edge_options)
+        except Exception as e:
+            logging.error(f"Ошибка инициализации драйвера: {e}")
+            raise e
             
         driver.set_page_load_timeout(120)
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -213,6 +216,6 @@ class SeleniumWBParser:
                 if driver:
                     driver.quit()
 
-        return {"id": sku, "status": "error", "message": f"Ошибка после всех попыток: {last_error}"}
+        return {"id": sku, "status": "error", "message": f"Ошибка запуска браузера в Docker: {last_error}"}
 
 parser_service = SeleniumWBParser()
