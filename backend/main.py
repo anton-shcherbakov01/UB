@@ -13,7 +13,7 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory
-from tasks import parse_and_save_sku
+from tasks import parse_and_save_sku, analyze_reviews_task # Добавили новую задачу
 from dotenv import load_dotenv
 
 # Инициализация окружения
@@ -209,6 +209,54 @@ async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession =
         "total_items_monitored": len(items_count),
         "server_status": "OK"
     }
+
+# --- AI & REVIEWS ---
+
+@app.post("/api/ai/analyze/{sku}")
+async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
+    """Запуск ИИ анализа отзывов"""
+    # Проверка тарифа
+    limit = 50 if user.subscription_plan == "free" else 200
+    
+    task = analyze_reviews_task.delay(sku, user.id)
+    return {"status": "accepted", "task_id": task.id, "message": "ИИ начал работу"}
+
+@app.get("/api/ai/result/{task_id}")
+async def get_ai_result(task_id: str):
+    """Получение результата ИИ (тот же поллинг)"""
+    task_result = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "status": task_result.status}
+    
+    if task_result.status == 'SUCCESS':
+        response["data"] = task_result.result
+    elif task_result.status == 'PROGRESS':
+        response["info"] = task_result.info.get('status', 'Думаем...')
+    
+    return response
+
+# --- TARIFFS ---
+
+@app.get("/api/user/tariffs")
+async def get_tariffs():
+    """Возвращает список доступных тарифов (для фронтенда)"""
+    return [
+        {
+            "id": "free",
+            "name": "Старт",
+            "price": "0 ₽",
+            "features": ["3 товара в мониторинге", "50 отзывов для ИИ", "Базовая поддержка"],
+            "color": "slate",
+            "current": True # Логику current можно доработать на основе user.plan
+        },
+        {
+            "id": "pro",
+            "name": "PRO Seller",
+            "price": "990 ₽",
+            "features": ["50 товаров в мониторинге", "200 отзывов для ИИ", "Уведомления (скоро)", "Приоритетная очередь"],
+            "color": "indigo",
+            "is_best": True
+        }
+    ]
 
 if __name__ == "__main__":
     import uvicorn

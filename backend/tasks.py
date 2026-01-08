@@ -2,7 +2,8 @@ import asyncio
 from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
-from database import AsyncSessionLocal, MonitoredItem, PriceHistory
+from database import AsyncSessionLocal, User
+from tasks import parse_and_save_sku, analyze_reviews_task # Добавили новую задачу
 from sqlalchemy import select
 import logging
 
@@ -80,3 +81,43 @@ def update_all_monitored_items():
             parse_and_save_sku.delay(sku)
     except Exception as e:
         logger.error(f"Beat Error: {e}")
+
+@celery_app.task(bind=True, name="analyze_reviews_task")
+def analyze_reviews_task(self, sku: int, user_id: int):
+    """
+    Задача: Собрать отзывы -> Отправить в ИИ -> Вернуть результат.
+    """
+    logger.info(f"Task: AI Анализ отзывов {sku} для юзера {user_id}")
+    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов с WB...'})
+    
+    # 1. Проверяем тариф пользователя, чтобы узнать лимит
+    # (Здесь упрощенно, в идеале нужно делать запрос в БД, но можно передать лимит в аргументах)
+    limit = 50 # Default Free
+    
+    # 2. Парсим отзывы
+    product_data = parser_service.get_full_product_info(sku, limit)
+    
+    if product_data.get("status") == "error":
+        return {"status": "error", "error": product_data.get("message")}
+    
+    self.update_state(state='PROGRESS', meta={'status': 'Думает нейросеть...'})
+    
+    # 3. Отправляем в ИИ
+    ai_result = {}
+    if product_data['reviews']:
+        # Запускаем асинхронный вызов ИИ внутри синхронной задачи
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        ai_result = loop.run_until_complete(
+            analysis_service.analyze_reviews_with_ai(product_data['reviews'], f"Товар {sku}")
+        )
+    
+    # 4. Формируем красивый отчет
+    return {
+        "status": "success",
+        "sku": sku,
+        "image": product_data['image'],
+        "rating": product_data['rating'],
+        "ai_analysis": ai_result,
+        "reviews_count": product_data['reviews_count']
+    }

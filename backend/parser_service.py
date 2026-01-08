@@ -15,21 +15,20 @@ from selenium.webdriver.common.by import By
 # Загрузка настроек из .env
 load_dotenv()
 
-# Настройка логирования для Docker
+# Настройка расширенного логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger("WB-Parser")
-# Глушим лишний шум от библиотек
-logging.getLogger('WDM').setLevel(logging.ERROR)
-logging.getLogger('selenium').setLevel(logging.WARNING)
 
 class SeleniumWBParser:
     """
     Микросервис парсинга Wildberries. 
-    Оптимизирован для работы внутри Docker с локальным драйвером.
+    Версия адаптирована для работы в Docker с детальным логированием каждого шага.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -40,7 +39,8 @@ class SeleniumWBParser:
         logger.info("Инициализация сервиса парсинга завершена")
 
     def _create_proxy_auth_extension(self, user, pw, host, port):
-        """Создает расширение для авторизации прокси."""
+        """Создает расширение для авторизации прокси с уникальной сессией."""
+        logger.info(f"Создание расширения прокси для {host}:{port}")
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
@@ -52,7 +52,6 @@ class SeleniumWBParser:
         })
         
         session_id = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=10))
-        # Фильтрация по РФ для скорости и правильных цен
         auth_user = f"{user}-session-{session_id};country-ru"
 
         background_js = """
@@ -71,22 +70,21 @@ class SeleniumWBParser:
             with zipfile.ZipFile(extension_path, 'w') as zp:
                 zp.writestr("manifest.json", manifest_json)
                 zp.writestr("background.js", background_js)
+            logger.info("Файл расширения прокси успешно создан")
         except Exception as e:
-            logger.error(f"Ошибка создания прокси-плагина: {e}")
+            logger.error(f"Ошибка при создании архива расширения: {e}")
         return extension_path
 
     def _init_driver(self):
         """Инициализация драйвера с использованием локального пути в Docker."""
+        logger.info("Запуск инициализации Selenium драйвера...")
         edge_options = EdgeOptions()
         if self.headless:
             edge_options.add_argument("--headless=new")
         
-        # --- ФЛАГИ ДЛЯ DOCKER (Обязательные) ---
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
-        edge_options.add_argument("--remote-debugging-port=9222")
-        # ---------------------------------------
         
         plugin_path = self._create_proxy_auth_extension(
             self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port
@@ -100,14 +98,12 @@ class SeleniumWBParser:
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         try:
-            # Путь берется из Dockerfile: /usr/local/bin/msedgedriver
-            # Это обходит проблемы с загрузкой из интернета
             driver_bin = '/usr/local/bin/msedgedriver'
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
-            logger.info("Драйвер Selenium успешно запущен (локальный)")
+            logger.info("Драйвер Selenium успешно запущен")
         except Exception as e:
-            logger.error(f"Ошибка запуска драйвера: {e}")
+            logger.error(f"Критическая ошибка инициализации драйвера: {e}", exc_info=True)
             raise e
             
         driver.set_page_load_timeout(120)
@@ -124,23 +120,34 @@ class SeleniumWBParser:
                 digits = re.sub(r'[^\d]', '', txt)
                 val = int(digits) if digits else 0
                 if val > 0:
-                    logger.info(f"Найдена цена ({selector}): {val}")
+                    logger.info(f"Извлечена цена по селектору '{selector}': {val}")
                 return val
-        except:
+        except Exception as e:
+            logger.debug(f"Не удалось извлечь цену по селектору '{selector}': {e}")
             return 0
         return 0
 
     def get_product_data(self, sku: int):
         """Основной метод парсинга с ретраями и глубоким поиском."""
-        logger.info(f"--- АНАЛИЗ SKU: {sku} ---")
+        logger.info(f"--- ЗАПРОС НА АНАЛИЗ SKU: {sku} ---")
         max_attempts = 3
         last_error = ""
 
-        # Актуальные селекторы WB
+        # Расширенный список селекторов (WB часто меняет классы)
         price_selectors_list = [
+            ".price-block__wallet-price", ".price-block__final-price",
             "[class*='productLinePriceWallet']", "[class*='priceBlockWalletPrice']",
-            "[class*='productLinePriceNow']", "[class*='priceBlockFinalPrice']",
-            "[class*='productLinePriceOld']", "[class*='priceBlockOldPrice']"
+            "[class*='productLinePriceNow']", "[class*='priceBlockFinalPrice']"
+        ]
+
+        brand_selectors = [
+            ".product-page__header-brand", ".product-page__brand", 
+            "span.brand", "[data-link*='brandName']", ".product-page__brand-name"
+        ]
+
+        name_selectors = [
+            ".product-page__header-title", "h1.product-page__title",
+            "h1", ".product-page__name", ".product-page__title"
         ]
 
         for attempt in range(1, max_attempts + 1):
@@ -150,82 +157,121 @@ class SeleniumWBParser:
                 driver = self._init_driver()
                 url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
                 
+                logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
                 
-                # Проверка на блокировки
-                if "Kaspersky" in driver.page_source or "Остановлен переход" in driver.title:
-                    logger.warning(f"Попытка {attempt}: Блокировка Касперским. Смена IP...")
+                # Имитация активности пользователя для подгрузки контента
+                time.sleep(3)
+                driver.execute_script("window.scrollTo(0, 400);")
+                
+                page_title = driver.title
+                if "Kaspersky" in driver.page_source or "Остановлен переход" in page_title:
+                    logger.warning(f"Попытка {attempt}: Обнаружена блокировка. Смена сессии...")
                     driver.quit()
                     continue
 
-                # Ожидание загрузки цен
+                # Проверка, что страница вообще загрузила хоть какой-то контент товара
+                if not driver.find_elements(By.CLASS_NAME, "product-page__main-container") and \
+                   not driver.find_elements(By.ID, "container"):
+                    logger.warning("Контейнер товара не найден. Страница могла не прогрузиться.")
+
+                logger.info("Ожидание появления цен...")
+                
                 found = False
                 start_wait = time.time()
-                while time.time() - start_wait < 60:
+                while time.time() - start_wait < 35:
                     if any(driver.find_elements(By.CSS_SELECTOR, s) for s in price_selectors_list):
                         found = True
                         break
                     time.sleep(2)
-                
+
                 if found:
-                    logger.info(f"Элементы цен обнаружены за {int(time.time() - start_wait)}с")
+                    logger.info(f"Цены обнаружены через {int(time.time() - start_wait)} сек.")
+                else:
+                    logger.warning("Цены не появились за отведенное время через селекторы.")
 
-                # Извлечение цен по целевым классам
-                wallet = self._extract_price(driver, "[class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
-                standard = self._extract_price(driver, "[class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
-                base = self._extract_price(driver, "[class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
+                # Сбор цен
+                wallet = self._extract_price(driver, ".price-block__wallet-price, [class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
+                standard = self._extract_price(driver, ".price-block__final-price, [class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
+                base = self._extract_price(driver, ".price-block__old-price, [class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
 
-                # Глубокий сканер (ВАШ КОД)
+                # Глубокий сканер (если стандартные классы не сработали)
                 if not standard and not wallet:
-                    logger.info("Классы не сработали. Запуск глубокого JS-сканера...")
+                    logger.info("Запуск JS-сканера (поиск по текстовым шаблонам)...")
                     fallback_script = """
                     let results = [];
-                    document.querySelectorAll('*').forEach(el => {
-                        let text = el.innerText || el.textContent;
-                        if (text && /\\d/.test(text) && text.length < 30) {
-                            let d = text.replace(/[^\\d]/g, '');
-                            if (d.length >= 3 && d.length <= 6) results.push(parseInt(d));
+                    // Ищем все элементы, содержащие цифры и символ рубля или просто цифры в блоке цены
+                    document.querySelectorAll('.price-block__content, .product-page__price-block, .price-block').forEach(block => {
+                        let text = block.innerText || block.textContent;
+                        let matches = text.match(/\\d[\\d\\s]{2,}/g);
+                        if (matches) {
+                            matches.forEach(m => {
+                                let val = parseInt(m.replace(/\\s/g, ''));
+                                if (val > 100 && val < 1000000) results.push(val);
+                            });
                         }
                     });
-                    return results;
+                    // Если ничего не нашли в блоках, ищем вообще везде короткие числа
+                    if (results.length === 0) {
+                        document.querySelectorAll('*').forEach(el => {
+                            if (el.children.length === 0) {
+                                let text = el.innerText || el.textContent;
+                                if (text && /^\\d[\\d\\s]{2,7}$/.test(text.trim())) {
+                                    let val = parseInt(text.replace(/\\s/g, ''));
+                                    if (val > 100 && val < 1000000) results.push(val);
+                                }
+                            }
+                        });
+                    }
+                    return [...new Set(results)];
                     """
                     all_nums = driver.execute_script(fallback_script)
                     if all_nums:
-                        clean_nums = sorted(list(set([n for n in all_nums if n > 400])))
-                        logger.info(f"JS-сканер нашел: {clean_nums}")
-                        if clean_nums:
+                        # Сортируем: самая маленькая - кошелек, средняя - обычная, большая - зачеркнутая
+                        clean_nums = sorted([n for n in all_nums if n > 100])
+                        logger.info(f"JS-сканер нашел числа: {clean_nums}")
+                        if len(clean_nums) >= 1:
                             wallet = clean_nums[0]
-                            base = clean_nums[-1]
-                            standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
+                            standard = clean_nums[1] if len(clean_nums) > 1 else clean_nums[0]
+                            base = clean_nums[-1] if len(clean_nums) > 1 else 0
 
                 if not wallet and not standard:
-                    raise Exception("Цены не обнаружены на странице.")
+                    logger.error("Парсинг не удался: цены не обнаружены.")
+                    raise Exception("Цены не обнаружены.")
 
-                # Данные о товаре (безопасно)
+                logger.info("Извлечение информации о бренде и названии...")
                 brand = "Не определен"
                 name = f"Товар {sku}"
-                try:
-                    b_el = driver.find_elements(By.CLASS_NAME, "product-page__header-brand")
-                    if b_el: brand = b_el[0].text.strip()
-                    n_el = driver.find_elements(By.CLASS_NAME, "product-page__header-title")
-                    if n_el: name = n_el[0].text.strip()
-                except: pass
 
-                logger.info(f"Успех: {brand} | {name} | {wallet}₽")
+                for s in brand_selectors:
+                    els = driver.find_elements(By.CSS_SELECTOR, s)
+                    if els:
+                        brand = els[0].text.strip()
+                        break
+                
+                for s in name_selectors:
+                    els = driver.find_elements(By.CSS_SELECTOR, s)
+                    if els:
+                        name = els[0].text.strip()
+                        break
+
+                logger.info(f"Успешно спарсено: {brand} | {name} | Wallet: {wallet}")
                 return {
                     "id": sku, "name": name, "brand": brand,
                     "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
-                    "status": "success",
-                    "attempts": attempt
+                    "status": "success"
                 }
 
             except Exception as e:
                 last_error = str(e)
-                logger.error(f"Ошибка на попытке {attempt}: {last_error}")
+                logger.error(f"Ошибка во время попытки {attempt}: {last_error}")
                 continue
             finally:
-                if driver: driver.quit()
+                if driver: 
+                    logger.info("Закрытие драйвера")
+                    driver.quit()
 
-        return {"id": sku, "status": "error", "message": f"Ошибка парсинга: {last_error}"}
+        logger.error(f"Все попытки исчерпаны. Финальная ошибка: {last_error}")
+        return {"id": sku, "status": "error", "message": f"Ошибка на сервере: {last_error}"}
 
 parser_service = SeleniumWBParser()
