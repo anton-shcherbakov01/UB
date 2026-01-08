@@ -2,7 +2,7 @@ import asyncio
 from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
-from database import AsyncSessionLocal, MonitoredItem, PriceHistory, User
+from database import AsyncSessionLocal, MonitoredItem, PriceHistory
 from sqlalchemy import select
 import logging
 
@@ -15,7 +15,7 @@ async def save_price_to_db(sku: int, data: dict):
         result = await session.execute(stmt)
         item = result.scalars().first()
         if not item:
-            # Для мониторинга, добавленного через API, имя обновляется тут
+            # Создаем только если вызываем из мониторинга
             pass
         else:
             item.name = data.get("name")
@@ -34,7 +34,7 @@ async def save_price_to_db(sku: int, data: dict):
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
 def parse_and_save_sku(self, sku: int):
-    self.update_state(state='PROGRESS', meta={'status': 'Запуск браузера...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Запуск парсера...'})
     raw_result = parser_service.get_product_data(sku)
     
     if raw_result.get("status") == "error": 
@@ -52,23 +52,21 @@ def parse_and_save_sku(self, sku: int):
 @celery_app.task(bind=True, name="analyze_reviews_task")
 def analyze_reviews_task(self, sku: int, limit: int = 50):
     logger.info(f"Start AI analysis for {sku}")
-    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов с WB...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов (API)...'})
     
-    # 1. Парсим (теперь через API fallback)
+    # Теперь это работает через aiohttp внутри парсера, блокирует поток минимально
     product_data = parser_service.get_full_product_info(sku, limit)
     
     if product_data.get("status") == "error":
         return {"status": "error", "error": product_data.get("message")}
     
-    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть анализирует...'})
     
-    # 2. Отправляем в ИИ
     ai_result = {}
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Передаем список отзывов, если они есть
         reviews = product_data.get('reviews', [])
         if reviews:
             ai_result = loop.run_until_complete(
