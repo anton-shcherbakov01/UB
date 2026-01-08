@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, ArrowUpRight, Plus } from 'lucide-react';
+import { Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, ArrowUpRight, Plus, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const API_URL = "https://api.ulike-bot.ru"; 
@@ -10,7 +10,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [monitorList, setMonitorList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
-  const [statusMsg, setStatusMsg] = useState('');
+  const [statusMsg, setStatusMsg] = useState('Начать');
 
   useEffect(() => {
     if (window.Telegram?.WebApp) {
@@ -33,30 +33,34 @@ export default function App() {
     if (!sku) return;
     setLoading(true);
     setHistoryData(null);
-    setStatusMsg('Запуск задачи...');
+    setStatusMsg('В очереди...');
 
     try {
-      // 1. Отправляем задачу в очередь
+      // 1. Ставим задачу
       const res = await fetch(`${API_URL}/api/monitor/add/${sku}`, { 
         method: 'POST',
-        headers: {
-            'X-TG-Data': window.Telegram?.WebApp?.initData || ""
-        }
+        headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
       });
       const data = await res.json();
       const taskId = data.task_id;
 
-      // 2. Полллинг статуса (ждем пока воркер закончит)
+      // 2. Ждем выполнения (Polling)
       let attempts = 0;
-      const maxAttempts = 60; // 3 минуты (60 * 3 сек)
+      const maxAttempts = 100; // Ждем до 5 минут (100 * 3 сек)
       
       while (attempts < maxAttempts) {
-        setStatusMsg('Парсинг WB...');
-        await new Promise(r => setTimeout(r, 3000)); // Ждем 3 сек
+        await new Promise(r => setTimeout(r, 3000));
         
         const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
         const statusData = await statusRes.json();
         
+        // Обновляем текст на кнопке (Прозрачность процесса!)
+        if (statusData.info && typeof statusData.info === 'string') {
+             setStatusMsg(statusData.info);
+        } else if (statusData.status === 'PENDING') {
+             setStatusMsg('В очереди...');
+        }
+
         if (statusData.status === 'SUCCESS') {
            setStatusMsg('Готово!');
            await fetchMonitorList();
@@ -72,12 +76,13 @@ export default function App() {
         
         attempts++;
       }
-      throw new Error("Таймаут ожидания (сервер перегружен)");
+      throw new Error("Сервер долго не отвечает. Проверьте вкладку Мониторинг позже.");
 
     } catch (e) {
       console.error("Ошибка:", e);
-      alert(`Ошибка: ${e.message}`); // Показываем ошибку пользователю
+      alert(`⚠️ ${e.message}`);
       setLoading(false);
+      setStatusMsg('Найти');
     }
   };
 
@@ -98,20 +103,25 @@ export default function App() {
         <h1 className="text-2xl font-black text-indigo-600 flex items-center gap-2">
           <Sparkles className="text-amber-400 fill-amber-400" size={24} /> WB Analytics
         </h1>
-        <p className="text-xs text-slate-400 font-bold tracking-widest mt-1">PRO MONITORING TOOL</p>
+        <div className="flex justify-between items-center mt-1">
+            <p className="text-[10px] text-slate-400 font-bold tracking-widest">PRO MONITORING TOOL</p>
+            <button onClick={fetchMonitorList} className="p-1 bg-slate-50 rounded-full text-slate-400 active:rotate-180 transition-all">
+                <RefreshCw size={14}/>
+            </button>
+        </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-2 px-4 mb-6">
         <button 
           onClick={() => setActiveTab('scanner')}
-          className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'scanner' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-slate-400'}`}
+          className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'scanner' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-white text-slate-400'}`}
         >
           Сканер
         </button>
         <button 
           onClick={() => setActiveTab('monitor')}
-          className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'monitor' ? 'bg-indigo-600 text-white shadow-lg' : 'bg-white text-slate-400'}`}
+          className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'monitor' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-white text-slate-400'}`}
         >
           Мониторинг
         </button>
@@ -120,11 +130,11 @@ export default function App() {
       {activeTab === 'scanner' && (
         <div className="px-4 animate-in fade-in slide-in-from-bottom-4">
           <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-            <label className="text-sm font-bold text-slate-400 ml-1 mb-2 block uppercase">Анализ артикула</label>
+            <label className="text-sm font-bold text-slate-400 ml-1 mb-2 block uppercase">Добавить товар</label>
             <div className="relative mb-4">
               <input
                 type="number"
-                placeholder="Например: 171877467"
+                placeholder="Артикул (например 171877467)"
                 className="w-full bg-slate-50 border-none rounded-2xl p-4 pl-12 text-lg font-semibold focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                 value={sku}
                 onChange={(e) => setSku(e.target.value)}
@@ -142,6 +152,10 @@ export default function App() {
                 <><Plus size={20} /> Отследить</>
               )}
             </button>
+          </div>
+          
+          <div className="mt-8 px-4 text-center">
+             <p className="text-xs text-slate-400">Бот работает в фоновом режиме.<br/>История цен обновляется каждые 4 часа.</p>
           </div>
         </div>
       )}
@@ -175,7 +189,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-3 pb-10">
             {monitorList.length === 0 ? (
               <div className="text-center p-12 bg-white rounded-3xl border border-dashed border-slate-200">
                 <p className="text-slate-400 font-bold text-sm">Список пуст</p>
@@ -204,7 +218,6 @@ export default function App() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
