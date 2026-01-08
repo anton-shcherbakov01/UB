@@ -1,4 +1,6 @@
 import os
+import json
+from urllib.parse import parse_qsl
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,7 @@ from database import init_db, get_db, User, MonitoredItem, PriceHistory
 from tasks import parse_and_save_sku
 from dotenv import load_dotenv
 
+# Инициализация окружения
 load_dotenv()
 
 app = FastAPI(title="WB Analytics Platform")
@@ -25,53 +28,55 @@ app.add_middleware(
 )
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
-ADMIN_USERNAME = "AAntonShch" 
+# Твой username (без @), чтобы система сделала тебя админом при первом входе
+ADMIN_USERNAME = "AntonShch" 
 
 # --- ЗАВИСИМОСТИ ---
 
 async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Depends(get_db)):
     """Определяет пользователя по данным из Telegram"""
     
-    # 1. Проверяем валидность данных, если они есть
-    user_data = None
+    user_data_dict = None
+
+    # 1. Попытка авторизации через Telegram
     if x_tg_data:
-        # validate_init_data теперь должна возвращать dict или False
-        # В auth_service.py нужно убедиться, что она возвращает данные, а не просто True
-        # Но пока предположим, что она возвращает True/False, нам нужно распарсить данные самим если True
-        # ЛИБО (лучший вариант): auth_service должен возвращать распаршенные данные.
-        # ДАВАЙТЕ ИСПРАВИМ ЛОГИКУ НИЖЕ, предполагая, что validate_init_data возвращает dict или None/False
+        # Проверяем валидность подписи (возвращает True/False)
+        is_valid = auth_manager.validate_init_data(x_tg_data)
         
-        # В текущей реализации auth_service возвращает bool. Нам нужно это исправить или парсить данные здесь.
-        # Для простоты, давайте распарсим данные здесь, если валидация прошла.
-        if auth_manager.validate_init_data(x_tg_data):
-            from urllib.parse import parse_qsl
-            import json
-            parsed = dict(parse_qsl(x_tg_data))
-            if 'user' in parsed:
-                user_data = json.loads(parsed['user'])
+        if is_valid:
+            # Если подпись верна, парсим данные сами
+            try:
+                parsed = dict(parse_qsl(x_tg_data))
+                if 'user' in parsed:
+                    user_data_dict = json.loads(parsed['user'])
+            except Exception as e:
+                print(f"Auth parse error: {e}")
 
-    # 2. Режим отладки для локального запуска без Telegram
-    if not user_data and os.getenv("DEBUG_MODE", "False") == "True":
-         user_data = {"id": 111111, "username": "test_user", "first_name": "Tester"}
+    # 2. Режим отладки (если нет данных TG или они невалидны, но включен DEBUG)
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
+         user_data_dict = {"id": 111111, "username": "test_user", "first_name": "Tester"}
 
-    # 3. Если пользователя нет - ошибка
-    if not user_data:
-        raise HTTPException(status_code=401, detail="Invalid Telegram Data or Unauthorized")
+    # 3. Если пользователя нет - ошибка 401
+    if not user_data_dict:
+        # Важно: для первого запуска фронтенда иногда данные не приходят, 
+        # но мы не должны падать с 500. Лучше вернуть 401.
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    tg_id = user_data.get('id')
-    username = user_data.get('username')
+    tg_id = user_data_dict.get('id')
+    username = user_data_dict.get('username')
+    first_name = user_data_dict.get('first_name')
 
     # Ищем пользователя в БД
     result = await db.execute(select(User).where(User.telegram_id == tg_id))
     user = result.scalars().first()
 
+    # Если пользователя нет - регистрируем
     if not user:
-        # Регистрация нового пользователя
         is_admin = (username == ADMIN_USERNAME)
         user = User(
             telegram_id=tg_id,
             username=username,
-            first_name=user_data.get('first_name'),
+            first_name=first_name,
             is_admin=is_admin,
             subscription_plan="free"
         )
@@ -83,6 +88,7 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
 
 @app.on_event("startup")
 async def on_startup():
+    # Создаем таблицы при старте
     await init_db()
 
 # --- ПОЛЬЗОВАТЕЛЬСКИЕ ЭНДПОИНТЫ ---
@@ -96,6 +102,7 @@ async def get_profile(user: User = Depends(get_current_user)):
         "name": user.first_name,
         "plan": user.subscription_plan,
         "is_admin": user.is_admin,
+        # Безопасное получение длины списка
         "items_count": len(user.items) if user.items else 0
     }
 
@@ -103,12 +110,15 @@ async def get_profile(user: User = Depends(get_current_user)):
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Добавить товар в ЛИЧНЫЙ список мониторинга"""
     
-    current_items_count = len(user.items) if user.items else 0
+    # Проверка лимитов
+    current_items = len(user.items) if user.items else 0
     limit = 3 if user.subscription_plan == "free" else 50
     
-    if current_items_count >= limit:
-        raise HTTPException(status_code=403, detail=f"Лимит тарифа {user.subscription_plan} исчерпан ({limit} товаров). Обновите подписку!")
+    if current_items >= limit:
+        # 403 Forbidden - лимит исчерпан
+        raise HTTPException(status_code=403, detail=f"Лимит тарифа исчерпан ({limit} товаров).")
 
+    # Проверка на дубликаты у ЭТОГО пользователя
     stmt = select(MonitoredItem).where(
         MonitoredItem.user_id == user.id,
         MonitoredItem.sku == sku
@@ -116,19 +126,20 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     existing = (await db.execute(stmt)).scalars().first()
     
     if existing:
-        return {"status": "exists", "message": "Товар уже отслеживается"}
+        return {"status": "exists", "message": "Товар уже в списке"}
 
-    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...")
+    # Создаем запись
+    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
     db.add(new_item)
     await db.commit()
 
-    # Запускаем парсинг
+    # Запускаем задачу в фоне
     task = parse_and_save_sku.delay(sku)
     return {"status": "accepted", "task_id": task.id, "message": "Добавлено в очередь"}
 
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Получить ТОЛЬКО свои товары"""
+    """Получить список товаров текущего пользователя"""
     result = await db.execute(
         select(MonitoredItem)
         .where(MonitoredItem.user_id == user.id)
@@ -138,7 +149,7 @@ async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession 
 
 @app.delete("/api/monitor/delete/{sku}")
 async def delete_item(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Удалить товар из своего списка"""
+    """Удалить товар"""
     stmt = delete(MonitoredItem).where(
         MonitoredItem.user_id == user.id,
         MonitoredItem.sku == sku
@@ -149,7 +160,8 @@ async def delete_item(sku: int, user: User = Depends(get_current_user), db: Asyn
 
 @app.get("/api/monitor/history/{sku}")
 async def get_history(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """История цен конкретного товара пользователя"""
+    """Получить историю цен"""
+    # Сначала ищем товар, принадлежащий именно этому пользователю
     item_res = await db.execute(
         select(MonitoredItem).where(
             MonitoredItem.user_id == user.id,
@@ -157,8 +169,9 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
         )
     )
     item = item_res.scalars().first()
+    
     if not item:
-        raise HTTPException(404, "Товар не найден")
+        raise HTTPException(status_code=404, detail="Товар не найден в вашем списке")
         
     history_res = await db.execute(
         select(PriceHistory)
@@ -172,6 +185,23 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
         "name": item.name,
         "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price} for h in history]
     }
+
+# --- SYSTEM & PROXY ---
+from celery.result import AsyncResult
+from celery_app import celery_app
+
+@app.get("/api/monitor/status/{task_id}")
+async def get_task_status(task_id: str):
+    task_result = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "status": task_result.status}
+    if task_result.status == 'SUCCESS':
+        response["result"] = task_result.result
+    elif task_result.status == 'FAILURE':
+        response["error"] = str(task_result.result)
+    elif task_result.status == 'PROGRESS':
+         # Если воркер передает статус, показываем его
+         response["info"] = task_result.info.get('status', 'В процессе...')
+    return response
 
 # --- ADMIN PANEL ---
 
@@ -188,20 +218,6 @@ async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession =
         "total_items_monitored": len(items_count),
         "server_status": "OK"
     }
-
-# --- SYSTEM & PROXY ---
-from celery.result import AsyncResult
-from celery_app import celery_app
-
-@app.get("/api/monitor/status/{task_id}")
-async def get_task_status(task_id: str):
-    task_result = AsyncResult(task_id, app=celery_app)
-    response = {"task_id": task_id, "status": task_result.status}
-    if task_result.status == 'SUCCESS':
-        response["result"] = task_result.result
-    elif task_result.status == 'FAILURE':
-        response["error"] = str(task_result.result)
-    return response
 
 if __name__ == "__main__":
     import uvicorn
