@@ -1,6 +1,6 @@
 FROM python:3.9-slim
 
-# Установка системных зависимостей
+# Установка системных зависимостей для работы Edge
 RUN apt-get update && apt-get install -y \
     wget gnupg unzip curl \
     && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft.gpg \
@@ -8,16 +8,14 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y microsoft-edge-stable \
     && apt-get clean
 
-# Автоматическая установка Edge Driver (соответствующего версии браузера)
-RUN EDGE_VERSION=$(microsoft-edge --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+") && \
-    echo "Браузер версии: $EDGE_VERSION" && \
-    curl -k -L -o edgedriver_linux64.zip "https://msedgedriver.azureedge.net/$EDGE_VERSION/edgedriver_linux64.zip" && \
-    unzip edgedriver_linux64.zip && \
-    mv msedgedriver /usr/local/bin/msedgedriver && \
-    chmod +x /usr/local/bin/msedgedriver && \
-    rm edgedriver_linux64.zip
-
+# Настройка рабочей папки
 WORKDIR /app
+
+# Копируем драйвер, который мы скачали вручную и положили в папку backend
+COPY msedgedriver /usr/local/bin/msedgedriver
+RUN chmod +x /usr/local/bin/msedgedriver
+
+# Копируем зависимости и код
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .

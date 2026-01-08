@@ -65,7 +65,7 @@ class SeleniumWBParser:
         return extension_path
 
     def _init_driver(self):
-        """Инициализация драйвера с подавлением мусора и флагами Docker."""
+        """Инициализация драйвера с поддержкой локального пути Docker."""
         edge_options = EdgeOptions()
         if self.headless:
             edge_options.add_argument("--headless=new")
@@ -74,6 +74,7 @@ class SeleniumWBParser:
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
+        edge_options.add_argument("--remote-debugging-port=9222")
         # -------------------------------------
 
         plugin_path = self._create_proxy_auth_extension(
@@ -91,14 +92,18 @@ class SeleniumWBParser:
         
         try:
             os.environ['WDM_LOG_LEVEL'] = '0'
-            # Проверка: если драйвер уже есть на сервере (из Dockerfile), используем его
+            # Приоритет: проверяем наличие драйвера, скопированного в Docker-образ
             system_driver = '/usr/local/bin/msedgedriver'
             if os.path.exists(system_driver):
+                logging.info("Использование локального драйвера Docker")
                 service = EdgeService(executable_path=system_driver)
             else:
+                logging.info("Локальный драйвер не найден, попытка через WDM...")
                 service = EdgeService(EdgeChromiumDriverManager().install())
+            
             driver = webdriver.Edge(service=service, options=edge_options)
-        except:
+        except Exception as e:
+            logging.error(f"Сбой инициализации: {e}. Пробуем базовый запуск.")
             driver = webdriver.Edge(options=edge_options)
             
         driver.set_page_load_timeout(120)
