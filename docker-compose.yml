@@ -6,7 +6,6 @@ services:
     container_name: wb_redis
     restart: always
 
-  # --- НОВЫЙ СЕРВИС: БАЗА ДАННЫХ ---
   db:
     image: postgres:15-alpine
     container_name: wb_postgres
@@ -19,6 +18,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb_user -d wb_monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   api:
     build: ./backend
@@ -30,20 +34,24 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      # ВАЖНО: Пароль должен совпадать с db
       - DATABASE_URL=postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
       - PROXY_HOST=${PROXY_HOST}
       - PROXY_PORT=${PROXY_PORT}
       - HEADLESS=True
+      - BOT_TOKEN=${BOT_TOKEN}
+      - AI_API_KEY=${AI_API_KEY}
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   worker:
     build: ./backend
     container_name: wb_worker
-    # C_FORCE_ROOT=1 убирает предупреждение в логах
     environment:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
@@ -53,20 +61,22 @@ services:
       - PROXY_HOST=${PROXY_HOST}
       - PROXY_PORT=${PROXY_PORT}
       - HEADLESS=True
-    command: celery -A celery_app worker --loglevel=warning --concurrency=1
+      - AI_API_KEY=${AI_API_KEY}
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
     volumes:
       - ./backend:/app
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
-  # --- НОВЫЙ СЕРВИС: ПЛАНИРОВЩИК (BEAT) ---
   beat:
     build: ./backend
     container_name: wb_beat
     environment:
       - REDIS_URL=redis://redis:6379/0
-    # Запускает задачи по расписанию
+      - DATABASE_URL=postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor
     command: celery -A celery_app beat --loglevel=info
     volumes:
       - ./backend:/app
