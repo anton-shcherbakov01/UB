@@ -1,87 +1,99 @@
-import os
-import re
-import aiohttp
-import json
+import asyncio
+from celery_app import celery_app
+from parser_service import parser_service
+from analysis_service import analysis_service
+from database import AsyncSessionLocal, MonitoredItem, PriceHistory, User
+from sqlalchemy import select
 import logging
 
-logger = logging.getLogger("AI-Service")
+logger = logging.getLogger("CeleryWorker")
 
-class AnalysisService:
-    def __init__(self):
-        self.ai_api_key = os.getenv("AI_API_KEY", "") 
-        self.ai_url = "https://api.artemox.com/v1/chat/completions" 
+async def save_price_to_db(sku: int, data: dict):
+    if data.get("status") == "error": return
+    async with AsyncSessionLocal() as session:
+        stmt = select(MonitoredItem).where(MonitoredItem.sku == sku)
+        result = await session.execute(stmt)
+        item = result.scalars().first()
+        if not item:
+            # Для мониторинга, добавленного через API, имя обновляется тут
+            pass
+        else:
+            item.name = data.get("name")
+            item.brand = data.get("brand")
+            
+        prices = data.get("prices", {})
+        history = PriceHistory(
+            item_id=item.id if item else None,
+            wallet_price=prices.get("wallet_purple", 0),
+            standard_price=prices.get("standard_black", 0),
+            base_price=prices.get("base_crossed", 0)
+        )
+        if item:
+            session.add(history)
+            await session.commit()
 
-    @staticmethod
-    def calculate_metrics(raw_data: dict):
-        if raw_data.get("status") == "error": return raw_data
-        p = raw_data.get("prices", {})
-        wallet = p.get("wallet_purple", 0)
-        standard = p.get("standard_black", 0)
-        base = p.get("base_crossed", 0)
-        raw_data["metrics"] = {
-            "wallet_benefit": standard - wallet if standard > wallet else 0,
-            "total_discount_percent": round(((base - wallet) / base * 100), 1) if base > 0 else 0,
-            "is_favorable": ((base - wallet) / base) > 0.45 if base > 0 else False
-        }
-        return raw_data
+@celery_app.task(bind=True, name="parse_and_save_sku")
+def parse_and_save_sku(self, sku: int):
+    self.update_state(state='PROGRESS', meta={'status': 'Запуск браузера...'})
+    raw_result = parser_service.get_product_data(sku)
+    
+    if raw_result.get("status") == "error": 
+        return {"status": "error", "error": raw_result.get("message")}
+    
+    self.update_state(state='PROGRESS', meta={'status': 'Сохранение...'})
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(save_price_to_db(sku, raw_result))
+    except Exception as e: logger.error(f"DB Error: {e}")
+    
+    return analysis_service.calculate_metrics(raw_result)
 
-    def clean_ai_text(self, text: str) -> str:
-        if not text: return ""
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text) 
-        text = re.sub(r'#+\s?', '', text)
-        return text.replace("`", "").strip()
+@celery_app.task(bind=True, name="analyze_reviews_task")
+def analyze_reviews_task(self, sku: int, limit: int = 50):
+    logger.info(f"Start AI analysis for {sku}")
+    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов с WB...'})
+    
+    # 1. Парсим
+    product_data = parser_service.get_full_product_info(sku, limit)
+    
+    if product_data.get("status") == "error":
+        return {"status": "error", "error": product_data.get("message")}
+    
+    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть анализирует...'})
+    
+    # 2. Отправляем в ИИ
+    ai_result = {}
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Передаем список отзывов, если они есть
+    reviews = product_data.get('reviews', [])
+    if reviews:
+        ai_result = loop.run_until_complete(
+            analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+        )
+    else:
+        ai_result = {"flaws": ["Отзывы не найдены"], "strategy": ["Попробуйте другой товар"]}
 
-    async def analyze_reviews_with_ai(self, reviews: list, product_name: str):
-        if not reviews: return {"error": "Отзывы не найдены"}
+    return {
+        "status": "success",
+        "sku": sku,
+        "image": product_data.get('image'),
+        "rating": product_data.get('rating'),
+        "reviews_count": product_data.get('reviews_count'),
+        "ai_analysis": ai_result
+    }
 
-        reviews_text = "\n".join([f"- {r['text']} ({r['rating']}*)" for r in reviews[:20]])
-        
-        prompt = f"""
-        Анализ товара WB: "{product_name}".
-        Отзывы:
-        {reviews_text}
-        
-        Задача:
-        1. 3 главных минуса.
-        2. 5 советов для конкурента (как сделать лучше).
-        
-        JSON ответ:
-        {{
-            "flaws": ["минус 1", "минус 2", "минус 3"],
-            "strategy": ["совет 1", "совет 2", "совет 3", "совет 4", "совет 5"]
-        }}
-        """
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "model": "deepseek-chat", 
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.5
-                }
-                headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
-                
-                async with session.post(self.ai_url, json=payload, headers=headers) as resp:
-                    if resp.status != 200:
-                        return {"error": f"Ошибка ИИ: {resp.status}"}
-                    
-                    result = await resp.json()
-                    content = result['choices'][0]['message']['content']
-                    
-                    try:
-                        json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                        if json_match:
-                            parsed = json.loads(json_match.group(0))
-                            parsed['flaws'] = [self.clean_ai_text(f) for f in parsed['flaws']]
-                            parsed['strategy'] = [self.clean_ai_text(s) for s in parsed['strategy']]
-                            return parsed
-                        else:
-                            return {"flaws": ["Ошибка формата"], "strategy": [self.clean_ai_text(content[:200])]}
-                    except:
-                        return {"error": "Ошибка парсинга ответа ИИ"}
-
-        except Exception as e:
-            logger.error(f"AI Error: {e}")
-            return {"error": "Сбой соединения с ИИ"}
-
-analysis_service = AnalysisService()
+@celery_app.task(name="update_all_monitored_items")
+def update_all_monitored_items():
+    async def get_all_skus():
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(MonitoredItem.sku))
+            return result.scalars().all()
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        skus = loop.run_until_complete(get_all_skus())
+        for sku in skus: parse_and_save_sku.delay(sku)
+    except: pass
