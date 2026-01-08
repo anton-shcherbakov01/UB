@@ -5,7 +5,6 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
-# Импортируем selectinload для жадной загрузки связей
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
@@ -13,7 +12,7 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory
-from tasks import parse_and_save_sku, analyze_reviews_task # Добавили новую задачу
+from tasks import parse_and_save_sku, analyze_reviews_task
 from dotenv import load_dotenv
 
 # Инициализация окружения
@@ -39,9 +38,13 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
     
     user_data_dict = None
 
+    # 1. Попытка авторизации через Telegram
     if x_tg_data:
+        # Проверяем валидность подписи
         is_valid = auth_manager.validate_init_data(x_tg_data)
+        
         if is_valid:
+            # Парсим данные вручную, так как validate возвращает bool
             try:
                 parsed = dict(parse_qsl(x_tg_data))
                 if 'user' in parsed:
@@ -49,18 +52,19 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
             except Exception as e:
                 print(f"Auth parse error: {e}")
 
+    # 2. Режим отладки
     if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
          user_data_dict = {"id": 111111, "username": "test_user", "first_name": "Tester"}
 
     if not user_data_dict:
+        # Возвращаем 401, чтобы фронтенд мог обработать это (хотя для первого запуска можно игнорировать)
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     tg_id = user_data_dict.get('id')
     username = user_data_dict.get('username')
     first_name = user_data_dict.get('first_name')
 
-    # Ищем пользователя в БД с ЖАДНОЙ загрузкой товаров (items)
-    # Это предотвращает ошибку MissingGreenlet при обращении к user.items
+    # Ищем пользователя в БД с ЖАДНОЙ загрузкой (чтобы избежать MissingGreenlet)
     stmt = select(User).options(selectinload(User.items)).where(User.telegram_id == tg_id)
     result = await db.execute(stmt)
     user = result.scalars().first()
@@ -76,9 +80,9 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
         )
         db.add(user)
         await db.commit()
-        # При refresh тоже нужно подгрузить items, если планируем к ним обращаться, 
-        # но для нового юзера список пуст, так что это безопасно.
         await db.refresh(user)
+        # После refresh связь items может сброситься, для надежности можно перезагрузить
+        # Но для нового юзера items пуст, так что не критично.
     
     return user
 
@@ -91,23 +95,42 @@ async def on_startup():
 @app.get("/api/user/me")
 async def get_profile(user: User = Depends(get_current_user)):
     """Получить профиль текущего пользователя"""
-    # Теперь user.items уже загружен в память, и len() сработает без запроса к БД
-    items_count = len(user.items) if user.items else 0
-    
     return {
         "id": user.telegram_id,
         "username": user.username,
         "name": user.first_name,
         "plan": user.subscription_plan,
         "is_admin": user.is_admin,
-        "items_count": items_count
+        "items_count": len(user.items) if user.items else 0
     }
+
+@app.get("/api/user/tariffs")
+async def get_tariffs(user: User = Depends(get_current_user)):
+    """Отдает список тарифов"""
+    return [
+        {
+            "id": "free",
+            "name": "Старт",
+            "price": "0 ₽",
+            "features": ["3 товара в мониторинге", "AI Анализ (30 отзывов)", "История цен"],
+            "current": user.subscription_plan == "free",
+            "color": "slate"
+        },
+        {
+            "id": "pro",
+            "name": "PRO Seller",
+            "price": "990 ₽",
+            "features": ["50 товаров в мониторинге", "AI Анализ (100 отзывов)", "Приоритетная очередь", "Экспорт отчетов"],
+            "current": user.subscription_plan == "pro",
+            "color": "indigo",
+            "is_best": True
+        }
+    ]
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Добавить товар в ЛИЧНЫЙ список мониторинга"""
     
-    # user.items доступен благодаря selectinload в get_current_user
     current_items = len(user.items) if user.items else 0
     limit = 3 if user.subscription_plan == "free" else 50
     
@@ -133,6 +156,8 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Получить список товаров текущего пользователя"""
+    # Здесь user.items уже загружен в память (благодаря selectinload в get_current_user),
+    # но если мы хотим сортировку или фильтрацию, лучше сделать отдельный запрос.
     result = await db.execute(
         select(MonitoredItem)
         .where(MonitoredItem.user_id == user.id)
@@ -178,7 +203,34 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
         "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price} for h in history]
     }
 
-# --- SYSTEM & PROXY ---
+# --- AI ENDPOINTS ---
+
+@app.post("/api/ai/analyze/{sku}")
+async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
+    """Запуск ИИ анализа"""
+    limit = 30 if user.subscription_plan == "free" else 100
+    task = analyze_reviews_task.delay(sku, limit)
+    return {"status": "accepted", "task_id": task.id, "message": "Анализ запущен"}
+
+@app.get("/api/ai/result/{task_id}")
+async def get_ai_result(task_id: str):
+    """Получение результата ИИ"""
+    from celery.result import AsyncResult
+    from celery_app import celery_app
+    
+    task_result = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "status": task_result.status}
+    
+    if task_result.status == 'SUCCESS':
+        response["data"] = task_result.result
+    elif task_result.status == 'FAILURE':
+        response["error"] = str(task_result.result)
+    elif task_result.status == 'PROGRESS':
+        response["info"] = task_result.info.get('status', 'В процессе...')
+    
+    return response
+
+# --- SYSTEM & ADMIN ---
 from celery.result import AsyncResult
 from celery_app import celery_app
 
@@ -194,8 +246,6 @@ async def get_task_status(task_id: str):
          response["info"] = task_result.info.get('status', 'В процессе...')
     return response
 
-# --- ADMIN PANEL ---
-
 @app.get("/api/admin/stats")
 async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user.is_admin:
@@ -209,54 +259,6 @@ async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession =
         "total_items_monitored": len(items_count),
         "server_status": "OK"
     }
-
-# --- AI & REVIEWS ---
-
-@app.post("/api/ai/analyze/{sku}")
-async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
-    """Запуск ИИ анализа отзывов"""
-    # Проверка тарифа
-    limit = 50 if user.subscription_plan == "free" else 200
-    
-    task = analyze_reviews_task.delay(sku, user.id)
-    return {"status": "accepted", "task_id": task.id, "message": "ИИ начал работу"}
-
-@app.get("/api/ai/result/{task_id}")
-async def get_ai_result(task_id: str):
-    """Получение результата ИИ (тот же поллинг)"""
-    task_result = AsyncResult(task_id, app=celery_app)
-    response = {"task_id": task_id, "status": task_result.status}
-    
-    if task_result.status == 'SUCCESS':
-        response["data"] = task_result.result
-    elif task_result.status == 'PROGRESS':
-        response["info"] = task_result.info.get('status', 'Думаем...')
-    
-    return response
-
-# --- TARIFFS ---
-
-@app.get("/api/user/tariffs")
-async def get_tariffs():
-    """Возвращает список доступных тарифов (для фронтенда)"""
-    return [
-        {
-            "id": "free",
-            "name": "Старт",
-            "price": "0 ₽",
-            "features": ["3 товара в мониторинге", "50 отзывов для ИИ", "Базовая поддержка"],
-            "color": "slate",
-            "current": True # Логику current можно доработать на основе user.plan
-        },
-        {
-            "id": "pro",
-            "name": "PRO Seller",
-            "price": "990 ₽",
-            "features": ["50 товаров в мониторинге", "200 отзывов для ИИ", "Уведомления (скоро)", "Приоритетная очередь"],
-            "color": "indigo",
-            "is_best": True
-        }
-    ]
 
 if __name__ == "__main__":
     import uvicorn

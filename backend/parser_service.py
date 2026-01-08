@@ -65,7 +65,7 @@ class SeleniumWBParser:
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
         except Exception as e:
-            logger.error(f"Driver Init Error: {e}")
+            logger.error(f"Driver Error: {e}")
             raise e
         driver.set_page_load_timeout(120)
         return driver
@@ -75,20 +75,20 @@ class SeleniumWBParser:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
             if elements:
                 txt = driver.execute_script("return arguments[0].textContent;", elements[0])
-                if not txt: txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
                 return int(digits) if digits else 0
         except: return 0
         return 0
 
     def get_product_data(self, sku: int):
-        """Базовый парсинг цен (как было раньше)"""
+        logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
             driver = None
             try:
-                logger.info(f"Price Parse {sku} (Try {attempt})")
                 driver = self._init_driver()
+                driver.get("https://www.wildberries.ru/")
+                driver.add_cookie({"name": "x-city-id", "value": "77"})
                 driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
                 
                 time.sleep(3)
@@ -96,17 +96,17 @@ class SeleniumWBParser:
                 
                 if "Kaspersky" in driver.page_source: driver.quit(); continue
 
-                # Ожидание цен
                 start = time.time()
+                found = False
                 while time.time() - start < 45:
-                    if driver.find_elements(By.CSS_SELECTOR, "[class*='priceBlockFinalPrice']"): break
+                    if driver.find_elements(By.CSS_SELECTOR, "[class*='priceBlockFinalPrice']"): 
+                        found = True; break
                     time.sleep(1)
 
-                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], [class*='productLinePriceWallet']")
-                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], [class*='productLinePriceNow']")
-                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], [class*='productLinePriceOld']")
+                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], [class*='productLinePriceWallet'], .price-block__wallet-price")
+                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], [class*='productLinePriceNow'], .price-block__final-price")
+                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], [class*='productLinePriceOld'], .price-block__old-price")
 
-                # Fallback JS
                 if not standard and not wallet:
                     js_prices = driver.execute_script("let r=[]; document.querySelectorAll('[class*=\"price\"]').forEach(e=>{let t=e.innerText; let m=t.match(/\\d[\\d\\s]{2,}/g); if(m) m.forEach(v=>{let n=parseInt(v.replace(/\\s/g,'')); if(n>100 && n<1000000) r.push(n)})}); return [...new Set(r)].sort((a,b)=>a-b);")
                     if js_prices:
@@ -114,10 +114,11 @@ class SeleniumWBParser:
                         standard = js_prices[1] if len(js_prices) > 1 else js_prices[0]
                         base = js_prices[-1] if len(js_prices) > 2 else 0
 
-                if not standard: raise Exception("Price not found")
+                if wallet == 0: wallet = standard
+                if standard == 0: raise Exception("Price not found")
 
-                brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
-                name_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-title")
+                brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand, .product-page__brand, span.brand")
+                name_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-title, h1")
                 
                 return {
                     "id": sku, 
@@ -135,30 +136,27 @@ class SeleniumWBParser:
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        НОВЫЙ МЕТОД: Парсинг отзывов и статики для ИИ.
+        НОВЫЙ МЕТОД: Парсинг отзывов для ИИ.
+        Использует расширенные селекторы.
         """
-        logger.info(f"--- FEEDBACK PARSE {sku} (Limit {limit}) ---")
+        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         driver = None
         try:
             driver = self._init_driver()
-            # Прямая ссылка на отзывы
             url = f"https://www.wildberries.ru/catalog/{sku}/feedbacks?targetUrl=GP&dest=-1257786"
             driver.get(url)
             
-            # Ожидание загрузки (Касперский чек)
             time.sleep(5)
-            if "Kaspersky" in driver.page_source: 
-                raise Exception("Blocked by Kaspersky")
+            if "Kaspersky" in driver.page_source: raise Exception("Blocked by Kaspersky")
 
-            # Скроллим вниз, чтобы подгрузить отзывы (3 раза)
+            # Скролл
             for _ in range(3):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(3)
+                time.sleep(2)
 
-            # 1. Собираем статику (Фото, Рейтинг)
+            # Статика
             img_url = ""
             try:
-                # Фото товара (обычно первое в галерее или превью)
                 img = driver.find_elements(By.CSS_SELECTOR, ".photo-container__photo, .j-image-canvas, img[src*='images.wbstatic']")
                 if img: img_url = img[0].get_attribute("src")
             except: pass
@@ -169,21 +167,19 @@ class SeleniumWBParser:
                 if rate: rating = float(rate[0].text.strip())
             except: pass
 
-            # 2. Собираем текст отзывов
+            # Отзывы
             reviews_data = []
-            review_cards = driver.find_elements(By.CSS_SELECTOR, ".comments__item, .feedback__item")
+            # Обновленные селекторы для отзывов
+            review_cards = driver.find_elements(By.CSS_SELECTOR, ".comments__item, .feedback__item, .comments__item-wrap")
             
-            logger.info(f"Найдено карточек: {len(review_cards)}")
-
             for card in review_cards[:limit]:
                 try:
-                    text_el = card.find_elements(By.CSS_SELECTOR, ".comments__text, .feedback__text")
+                    text_el = card.find_elements(By.CSS_SELECTOR, ".comments__text, .feedback__text, .j-feedback-text")
                     if not text_el: continue
                     text = text_el[0].text.strip()
                     
-                    # Звезды (считаем активные)
                     stars = len(card.find_elements(By.CSS_SELECTOR, ".star.star--active, .feedback__rating-star--active"))
-                    if stars == 0: stars = 5 # Если не нашли, считаем 5 (безопасно)
+                    if stars == 0: stars = 5
                     
                     if text:
                         reviews_data.append({"text": text, "rating": stars})
