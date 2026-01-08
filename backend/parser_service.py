@@ -6,7 +6,6 @@ import json
 import re
 import sys
 import requests
-import zipfile
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -17,7 +16,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
-# Настройка логирования: вывод в stdout для Docker
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
@@ -28,7 +26,8 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v8.0 (Debug Edition).
+    Микросервис парсинга Wildberries v9.0 (Ultra Stable).
+    Приоритет на API методы. Selenium используется как крайняя мера.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -37,9 +36,8 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
 
-    # --- ЛОГИКА КОРЗИН (BASKETS) ---
+    # --- BASKET LOGIC ---
     def _get_basket_number(self, sku: int) -> str:
-        """Определяет хост корзины. Актуализировано под 2025/26."""
         vol = sku // 100000
         if 0 <= vol <= 143: return "01"
         if 144 <= vol <= 287: return "02"
@@ -58,31 +56,45 @@ class SeleniumWBParser:
         if 2190 <= vol <= 2405: return "15"
         if 2406 <= vol <= 2621: return "16"
         if 2622 <= vol <= 2837: return "17"
-        return "18" # Для новых товаров часто 18+
+        return "18"
 
     def _get_static_card_data(self, sku: int):
-        """
-        Скачивает card.json напрямую с CDN.
-        """
+        """1. Самый быстрый способ: Static JSON"""
         try:
             basket = self._get_basket_number(sku)
             vol = sku // 100000
             part = sku // 1000
             url = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
-            
-            logger.info(f"Пробую статику: {url}")
             resp = requests.get(url, timeout=5)
-            
             if resp.status_code == 200:
-                logger.info("Статика успешно получена!")
                 return resp.json()
-            else:
-                logger.warning(f"Статика ответила кодом {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"Ошибка получения статики: {e}")
+        except: pass
         return None
 
-    # --- SELENIUM ---
+    def _get_api_card_data(self, sku: int):
+        """2. Средний способ: Mobile API (без браузера)"""
+        try:
+            # Эмулируем мобильное приложение/сайт без браузера
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+                "Origin": "https://www.wildberries.ru",
+                "Referer": f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
+            }
+            # Московский регион для точности
+            url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&nm={sku}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                products = data.get('data', {}).get('products', [])
+                if products:
+                    return products[0]
+        except Exception as e:
+            logger.warning(f"API Fallback Error: {e}")
+        return None
+
+    # --- SELENIUM SETUP ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -111,15 +123,14 @@ class SeleniumWBParser:
         edge_options.add_extension(plugin_path)
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
         try:
             driver_bin = '/usr/local/bin/msedgedriver'
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
         except Exception as e:
-            logger.error(f"Driver Init Error: {e}")
+            logger.error(f"Driver Error: {e}")
             raise e
-        driver.set_page_load_timeout(90)
+        driver.set_page_load_timeout(120)
         return driver
 
     def _extract_digits(self, text):
@@ -129,126 +140,119 @@ class SeleniumWBParser:
         return int(digits) if digits else 0
 
     def get_product_data(self, sku: int):
-        """Парсинг цен (Selenium)"""
-        logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
+        logger.info(f"--- PRICES SKU: {sku} ---")
         
-        # 1. Пробуем статику для названия и бренда (это быстро)
-        static_data = self._get_static_card_data(sku)
-        brand = static_data.get('selling', {}).get('brand_name') if static_data else "Unknown"
-        name = static_data.get('imt_name') or static_data.get('subj_name') if static_data else f"Товар {sku}"
-
+        # 1. Сначала пробуем API (это быстрее и надежнее для цен)
+        api_data = self._get_api_card_data(sku)
+        if api_data:
+            try:
+                # В API цены в копейках
+                wallet = self._extract_digits(api_data.get('clientPriceU', 0)) // 100
+                standard = self._extract_digits(api_data.get('salePriceU', 0)) // 100
+                base = self._extract_digits(api_data.get('priceU', 0)) // 100
+                
+                if wallet == 0: wallet = standard
+                
+                brand = api_data.get('brand', 'Unknown')
+                name = api_data.get('name', f"Товар {sku}")
+                
+                logger.info(f"API Success: {wallet}₽")
+                return {
+                    "id": sku, "name": name, "brand": brand,
+                    "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
+                    "status": "success"
+                }
+            except: pass # Если API вернул битые данные, идем в Selenium
+        
+        # 2. Если API не сработал - Selenium
         for attempt in range(1, 3):
             driver = None
             try:
                 driver = self._init_driver()
                 driver.get("https://www.wildberries.ru/")
-                driver.add_cookie({"name": "x-city-id", "value": "77"}) 
-                
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
-                logger.info(f"Загрузка страницы (Попытка {attempt}): {url}")
-                driver.get(url)
+                driver.add_cookie({"name": "x-city-id", "value": "77"})
+                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
                 
                 time.sleep(3)
                 if "Kaspersky" in driver.page_source: driver.quit(); continue
 
-                # ЭТАП 1: Ищем JSON в JS-переменных страницы
+                # Ищем JSON внутри страницы
                 try:
                     product_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
                     if product_json:
                         data = json.loads(product_json)
-                        price_data = data.get('price') or {}
-                        if not price_data and 'products' in data:
-                             price_data = data['products'][0] if data['products'] else {}
-
-                        basic = int(price_data.get('basicPrice', 0) / 100) or int(price_data.get('priceU', 0) / 100)
-                        total = int(price_data.get('totalPrice', 0) / 100) or int(price_data.get('salePriceU', 0) / 100)
+                        price_data = data.get('price') or (data['products'][0] if 'products' in data else {})
                         
-                        if total > 0:
-                            logger.info(f"Цена найдена в JS-объекте: {total}₽")
+                        wallet = int(price_data.get('clientPriceU', 0) / 100) or int(price_data.get('totalPrice', 0) / 100)
+                        if wallet > 0:
+                            brand = data.get('brand', 'Unknown')
+                            name = data.get('name', f"Товар {sku}")
                             return {
                                 "id": sku, "name": name, "brand": brand,
-                                "prices": {"wallet_purple": total, "standard_black": total, "base_crossed": basic},
+                                "prices": {"wallet_purple": wallet, "standard_black": wallet, "base_crossed": 0},
                                 "status": "success"
                             }
                 except: pass
 
-                # ЭТАП 2: DOM Парсинг
-                logger.info("JSON не найден, ищем в DOM...")
+                # DOM Parsing
                 driver.execute_script("window.scrollTo(0, 400);")
                 WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='price']")))
-
+                
                 prices = []
-                elements = driver.find_elements(By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, .price-block__old-price, [class*='Price']")
+                elements = driver.find_elements(By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, .price-block__old-price")
                 for el in elements:
                     txt = el.get_attribute('textContent')
                     nums = re.findall(r'\d+', txt.replace('\xa0', '').replace(' ', ''))
                     if nums: prices.append(int(nums[0]))
                 
                 prices = sorted(list(set([p for p in prices if 100 < p < 1000000])))
-                
                 if prices:
-                    logger.info(f"Цены из DOM: {prices}")
-                    wallet = prices[0]
-                    base = prices[-1]
-                    standard = prices[1] if len(prices) > 2 else wallet
-                    
                     return {
-                        "id": sku, "name": name, "brand": brand,
-                        "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
+                        "id": sku, "name": f"Товар {sku}", "brand": "Unknown",
+                        "prices": {"wallet_purple": prices[0], "standard_black": prices[1] if len(prices)>2 else prices[0], "base_crossed": prices[-1]},
                         "status": "success"
                     }
-                
-                raise Exception("Цены не найдены в DOM")
+                raise Exception("Цены не найдены")
 
             except Exception as e:
-                logger.error(f"Ошибка попытки {attempt}: {e}")
+                logger.error(f"Err: {e}")
                 continue
             finally:
                 if driver: driver.quit()
-        return {"id": sku, "status": "error", "message": "Не удалось получить цены"}
+        return {"id": sku, "status": "error", "message": "Failed"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        Сбор отзывов. Сначала статика, если нет — Selenium на страницу ТОВАРА (не API).
+        Парсинг отзывов. 
+        1. Static JSON (CDN)
+        2. Mobile API (Requests)
+        3. Browser (Last Resort)
         """
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
-        driver = None
+        logger.info(f"--- REVIEWS SKU: {sku} ---")
         root_id = None
         img_url = ""
         
+        # 1. Пробуем статику
+        static_data = self._get_static_card_data(sku)
+        if static_data:
+            root_id = static_data.get('root') or static_data.get('root_id')
+            logger.info(f"Got root from Static: {root_id}")
+
+        # 2. Пробуем API карточки (если статика пустая)
+        if not root_id:
+            api_data = self._get_api_card_data(sku)
+            if api_data:
+                root_id = api_data.get('root')
+                logger.info(f"Got root from API: {root_id}")
+
+        # Если Root ID так и не найден, кидаем ошибку (Selenium тут не поможет, если API не отдает)
+        if not root_id:
+            logger.error("Не удалось найти Root ID ни в статике, ни в API.")
+            return {"status": "error", "message": "Товар не найден или удален"}
+
+        # 3. Качаем отзывы через API
         try:
-            # 1. Пробуем получить Root ID через статику (БЫСТРО)
-            static_data = self._get_static_card_data(sku)
-            if static_data:
-                root_id = static_data.get('root_id') or static_data.get('root')
-                img_url = static_data.get('image', '')
-                if root_id:
-                    logger.info(f"Root ID получен из статики: {root_id}")
-
-            # 2. Если статики нет, запускаем браузер (МЕДЛЕННО, но надежно)
-            if not root_id:
-                logger.warning("Статика не сработала. Запускаю браузер для поиска Root ID...")
-                driver = self._init_driver()
-                # Открываем КАРТОЧКУ ТОВАРА (не API, который блокируется)
-                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx")
-                time.sleep(5)
-                
-                # Ищем root в переменных JS
-                root_id = driver.execute_script("""
-                    try {
-                        return window.staticModel?.product?.root || 
-                               window.staticModel?.card?.root || 
-                               0;
-                    } catch(e) { return 0; }
-                """)
-                logger.info(f"Root ID из браузера: {root_id}")
-                driver.quit()
-
-            if not root_id:
-                raise Exception("Не удалось найти Root ID товара. Возможно, товар удален.")
-
-            # 3. Скачиваем отзывы через requests (API отзывов открыто, если есть Root ID)
-            logger.info("Скачивание отзывов через API...")
+            feed_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "*/*",
@@ -256,56 +260,32 @@ class SeleniumWBParser:
                 "Referer": f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
             }
             
-            feed_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
+            resp = requests.get(feed_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                # Пробуем зеркало
+                feed_url = f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}"
+                resp = requests.get(feed_url, headers=headers, timeout=10)
             
-            # Пробуем несколько зеркал
-            feed_data = None
-            for domain in ["feedbacks1", "feedbacks2"]:
-                try:
-                    url = f"https://{domain}.wb.ru/feedbacks/v1/{root_id}"
-                    resp = requests.get(url, headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        feed_data = resp.json()
-                        logger.info(f"Успешный ответ от {domain}")
-                        break
-                except: pass
-            
-            if not feed_data:
-                raise Exception("API отзывов не отвечает")
-
-            rating = float(feed_data.get('valuation', 0))
-            raw_feedbacks = feed_data.get('feedbacks', [])
-            
-            reviews_data = []
-            for f in raw_feedbacks:
-                txt = f.get('text', '').strip()
-                if txt:
-                    reviews_data.append({
-                        "text": txt,
-                        "rating": f.get('productValuation', 5)
-                    })
-                if len(reviews_data) >= limit: break
-
-            logger.info(f"Итог: Рейтинг {rating}, Отзывов {len(reviews_data)}")
-            
-            # Если нет картинки из статики, генерируем ссылку
-            if not img_url:
-                vol = sku // 100000
-                part = sku // 1000
-                img_url = f"https://basket-{self._get_basket_number(sku)}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
-
-            return {
-                "sku": sku,
-                "image": img_url,
-                "rating": rating,
-                "reviews": reviews_data,
-                "reviews_count": len(reviews_data),
-                "status": "success"
-            }
-
+            if resp.status_code == 200:
+                data = resp.json()
+                rating = float(data.get('valuation', 0))
+                reviews = []
+                for f in data.get('feedbacks', [])[:limit]:
+                    if f.get('text'):
+                        reviews.append({"text": f['text'], "rating": f.get('productValuation', 5)})
+                
+                img_url = f"https://basket-{self._get_basket_number(sku)}.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp"
+                
+                logger.info(f"Отзывы получены: {len(reviews)}")
+                return {
+                    "sku": sku, "image": img_url, "rating": rating, 
+                    "reviews": reviews, "reviews_count": len(reviews), 
+                    "status": "success"
+                }
+            else:
+                return {"status": "error", "message": f"API отзывов вернул {resp.status_code}"}
+        
         except Exception as e:
-            logger.error(f"CRITICAL ERROR Reviews: {e}")
-            if driver: driver.quit()
             return {"status": "error", "message": str(e)}
 
 parser_service = SeleniumWBParser()
