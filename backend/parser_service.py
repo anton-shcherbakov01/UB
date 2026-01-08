@@ -5,6 +5,7 @@ import logging
 import json
 import re
 import sys
+import zipfile
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
