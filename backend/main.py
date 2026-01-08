@@ -25,21 +25,38 @@ app.add_middleware(
 )
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
-ADMIN_USERNAME = "AAntonShch" # Твой username для авто-админки
+ADMIN_USERNAME = "AAntonShch" 
 
 # --- ЗАВИСИМОСТИ ---
 
-async def get_current_user(x_tg_data: str = Header(...), db: AsyncSession = Depends(get_db)):
+async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Depends(get_db)):
     """Определяет пользователя по данным из Telegram"""
-    user_data = auth_manager.validate_init_data(x_tg_data)
     
-    # ДЛЯ ТЕСТОВ БЕЗ ТЕЛЕГРАМ (если хедер пустой - создаем тестового юзера)
-    # В продакшене этот блок можно убрать или оставить для локальной разработки
+    # 1. Проверяем валидность данных, если они есть
+    user_data = None
+    if x_tg_data:
+        # validate_init_data теперь должна возвращать dict или False
+        # В auth_service.py нужно убедиться, что она возвращает данные, а не просто True
+        # Но пока предположим, что она возвращает True/False, нам нужно распарсить данные самим если True
+        # ЛИБО (лучший вариант): auth_service должен возвращать распаршенные данные.
+        # ДАВАЙТЕ ИСПРАВИМ ЛОГИКУ НИЖЕ, предполагая, что validate_init_data возвращает dict или None/False
+        
+        # В текущей реализации auth_service возвращает bool. Нам нужно это исправить или парсить данные здесь.
+        # Для простоты, давайте распарсим данные здесь, если валидация прошла.
+        if auth_manager.validate_init_data(x_tg_data):
+            from urllib.parse import parse_qsl
+            import json
+            parsed = dict(parse_qsl(x_tg_data))
+            if 'user' in parsed:
+                user_data = json.loads(parsed['user'])
+
+    # 2. Режим отладки для локального запуска без Telegram
     if not user_data and os.getenv("DEBUG_MODE", "False") == "True":
          user_data = {"id": 111111, "username": "test_user", "first_name": "Tester"}
 
+    # 3. Если пользователя нет - ошибка
     if not user_data:
-        raise HTTPException(status_code=401, detail="Invalid Telegram Data")
+        raise HTTPException(status_code=401, detail="Invalid Telegram Data or Unauthorized")
 
     tg_id = user_data.get('id')
     username = user_data.get('username')
@@ -86,15 +103,12 @@ async def get_profile(user: User = Depends(get_current_user)):
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Добавить товар в ЛИЧНЫЙ список мониторинга"""
     
-    # Проверка лимитов тарифа
     current_items_count = len(user.items) if user.items else 0
     limit = 3 if user.subscription_plan == "free" else 50
     
     if current_items_count >= limit:
         raise HTTPException(status_code=403, detail=f"Лимит тарифа {user.subscription_plan} исчерпан ({limit} товаров). Обновите подписку!")
 
-    # Проверяем, не добавлен ли уже этот товар у ЭТОГО пользователя
-    # (Один и тот же SKU может мониториться разными людьми)
     stmt = select(MonitoredItem).where(
         MonitoredItem.user_id == user.id,
         MonitoredItem.sku == sku
@@ -104,7 +118,6 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     if existing:
         return {"status": "exists", "message": "Товар уже отслеживается"}
 
-    # Создаем запись сразу, чтобы застолбить место
     new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...")
     db.add(new_item)
     await db.commit()
@@ -177,7 +190,6 @@ async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession =
     }
 
 # --- SYSTEM & PROXY ---
-# Эти эндпоинты нужны для работы фронтенда (проверка статуса задач Celery)
 from celery.result import AsyncResult
 from celery_app import celery_app
 
