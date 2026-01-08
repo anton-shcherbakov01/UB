@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Wallet, CreditCard, Loader2, Sparkles, TrendingUp, Plus, BarChart3, ArrowUpRight } from 'lucide-react';
+import { Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, ArrowUpRight, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
 const API_URL = "https://api.ulike-bot.ru"; // ЗАМЕНИТЕ НА СВОЙ ДОМЕН
@@ -25,18 +25,19 @@ export default function App() {
     try {
       const res = await fetch(`${API_URL}/api/monitor/list`);
       if (res.ok) setMonitorList(await res.json());
-    } catch (e) console.error(e);
+    } catch (e) {
+      // ИСПРАВЛЕНО: Добавлены фигурные скобки
+      console.error(e);
+    }
   };
 
   const handleScan = async () => {
     if (!sku) return;
     setLoading(true);
     setScanResult(null);
-    // Для сканера используем тот же метод добавления, чтобы сразу сохранить историю
     try {
-      // Сначала добавляем задачу
       const res = await fetch(`${API_URL}/api/monitor/add/${sku}`, { method: 'POST' });
-      // В реальном приложении тут нужен поллинг статуса, для демо просто ждем немного и обновляем список
+      // Имитация поллинга для демо
       setTimeout(() => {
         fetchMonitorList();
         loadHistory(sku); 
@@ -49,8 +50,12 @@ export default function App() {
   };
 
   const loadHistory = async (sku) => {
-    const res = await fetch(`${API_URL}/api/monitor/history/${sku}`);
-    if (res.ok) setHistoryData(await res.json());
+    try {
+      const res = await fetch(`${API_URL}/api/monitor/history/${sku}`);
+      if (res.ok) setHistoryData(await res.json());
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
@@ -136,7 +141,7 @@ export default function App() {
 
           <div className="space-y-3">
             {monitorList.map((item) => (
-              <div key={item.id} onClick={() => loadHistory(item.sku)} className="bg-white p-4 rounded-2xl flex items-center gap-4 active:scale-95 transition-transform border border-slate-100">
+              <div key={item.id} onClick={() => loadHistory(item.sku)} className="bg-white p-4 rounded-2xl flex items-center gap-4 active:scale-95 transition-transform border border-slate-100 cursor-pointer">
                 <div className="bg-slate-100 p-3 rounded-xl">
                   <BarChart3 className="text-slate-500" />
                 </div>
