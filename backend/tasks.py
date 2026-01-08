@@ -15,10 +15,9 @@ async def save_price_to_db(sku: int, data: dict):
         result = await session.execute(stmt)
         item = result.scalars().first()
         if not item:
-            # Если товара нет (странно для воркера, но возможно), пропускаем
+            # Для мониторинга, добавленного через API, имя обновляется тут
             pass
         else:
-            # Обновляем имя и бренд
             item.name = data.get("name")
             item.brand = data.get("brand")
             
@@ -55,13 +54,13 @@ def analyze_reviews_task(self, sku: int, limit: int = 50):
     logger.info(f"Start AI analysis for {sku}")
     self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов с WB...'})
     
-    # 1. Парсим
+    # 1. Парсим (теперь через API fallback)
     product_data = parser_service.get_full_product_info(sku, limit)
     
     if product_data.get("status") == "error":
         return {"status": "error", "error": product_data.get("message")}
     
-    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть анализирует...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
     
     # 2. Отправляем в ИИ
     ai_result = {}

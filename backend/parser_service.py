@@ -2,10 +2,10 @@ import os
 import time
 import random
 import logging
-import zipfile
 import json
 import re
 import sys
+import requests
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -16,7 +16,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
@@ -27,8 +26,8 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v3.0.
-    Гибридный метод: DOM-сканирование + извлечение JSON-данных из скриптов страницы.
+    Микросервис парсинга Wildberries.
+    Версия 4.0: Hybrid Engine (Selenium + Direct API).
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -62,10 +61,8 @@ class SeleniumWBParser:
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--disable-blink-features=AutomationControlled")
         edge_options.add_argument("--lang=ru-RU")
-        
         plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
         edge_options.add_extension(plugin_path)
-        
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
@@ -76,201 +73,150 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"Driver Init Error: {e}")
             raise e
-            
         driver.set_page_load_timeout(90)
         return driver
 
-    def _try_extract_json_from_page(self, driver):
-        """Пытается найти JSON с данными товара в исходном коде страницы (самый надежный метод)."""
-        try:
-            # WB часто хранит состояние в window.__INITIAL_STATE__ или похожих объектах
-            data = driver.execute_script("return window.__INITIAL_STATE__ || window.__NUXT__ || null;")
-            if not data: return None
-            
-            # Пытаемся найти продукт в этой структуре (структура меняется, ищем рекурсивно или по ключам)
-            # Это упрощенный пример, нужно адаптировать под текущую структуру WB
-            # Обычно это data.product или data.card
-            return data
-        except:
-            return None
-
-    def _extract_digits(self, text):
-        if not text: return 0
-        text = text.replace('&nbsp;', '').replace(u'\xa0', '')
-        digits = re.sub(r'[^\d]', '', text)
-        return int(digits) if digits else 0
-
     def get_product_data(self, sku: int):
         logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
-        max_attempts = 2
-        
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, 3):
             driver = None
             try:
                 driver = self._init_driver()
+                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
                 
-                # 1. Установка региона (Москва)
-                driver.get("https://www.wildberries.ru/")
-                driver.add_cookie({"name": "x-city-id", "value": "77"}) 
-                
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
-                logger.info(f"Попытка {attempt}: {url}")
-                driver.get(url)
-                
-                # 2. Проверка антибота
-                if "Kaspersky" in driver.page_source or "Остановлен переход" in driver.title:
-                    logger.warning("Блокировка. Рестарт...")
-                    driver.quit(); continue
-
-                # 3. Ожидание и скролл
                 time.sleep(3)
-                driver.execute_script("window.scrollTo(0, 400);")
-                
-                # Ждем любой ценник
+                if "Kaspersky" in driver.page_source: driver.quit(); continue
+
+                # ЭТАП 1: Попытка вытащить JSON из страницы (Самый надежный метод)
+                # WB часто хранит данные в window.staticModel или похожих объектах
                 try:
-                    WebDriverWait(driver, 30).until(
-                        lambda d: d.find_elements(By.CSS_SELECTOR, "[class*='price'], .price-block__content")
-                    )
-                except:
-                    logger.warning("Элементы цен долго не появляются.")
+                    product_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
+                    if product_json:
+                        data = json.loads(product_json)
+                        # Ищем цены в JSON
+                        price_data = data.get('price') or {}
+                        # Если формат сменился, ищем в products
+                        if not price_data and 'products' in data:
+                             price_data = data['products'][0] if data['products'] else {}
 
-                # 4. Сбор данных (Гибридный метод)
-                wallet = 0
-                standard = 0
-                base = 0
-                
-                # Попытка 1: Через селекторы (визуальные)
-                try:
-                    wallet_el = driver.find_elements(By.CSS_SELECTOR, ".price-block__wallet-price, [class*='WalletPrice']")
-                    final_el = driver.find_elements(By.CSS_SELECTOR, ".price-block__final-price, [class*='FinalPrice'], .price-block__price-now")
-                    old_el = driver.find_elements(By.CSS_SELECTOR, ".price-block__old-price, [class*='OldPrice'], .price-block__price-old")
-                    
-                    if wallet_el: wallet = self._extract_digits(wallet_el[0].text)
-                    if final_el: standard = self._extract_digits(final_el[0].text)
-                    if old_el: base = self._extract_digits(old_el[0].text)
-                except Exception as e:
-                    logger.error(f"Selector parsing error: {e}")
+                        basic = int(price_data.get('basicPrice', 0) / 100) or int(price_data.get('priceU', 0) / 100)
+                        total = int(price_data.get('totalPrice', 0) / 100) or int(price_data.get('salePriceU', 0) / 100)
+                        
+                        brand = data.get('brand') or data.get('selling', {}).get('brand_name') or "Unknown"
+                        name = data.get('name') or data.get('imt_name') or f"Товар {sku}"
 
-                # Попытка 2: Если селекторы не сработали - Глубокий JS скан
-                if standard == 0:
-                    logger.info("Селекторы пусты. Запуск JS-сканера...")
-                    js_prices = driver.execute_script("""
-                        let res = [];
-                        // Ищем в блоке цен
-                        document.querySelectorAll('.price-block__content, .product-page__price-block').forEach(el => {
-                            let txt = el.innerText;
-                            let matches = txt.match(/\\d[\\d\\s]{1,10}/g);
-                            if (matches) matches.forEach(m => res.push(parseInt(m.replace(/\\s/g, ''))));
-                        });
-                        // Если пусто, ищем по всей странице (осторожно)
-                        if (res.length === 0) {
-                            document.querySelectorAll('*').forEach(el => {
-                                if (el.children.length === 0 && el.innerText.includes('₽')) {
-                                    let d = el.innerText.replace(/[^0-9]/g, '');
-                                    if (d.length > 2 && d.length < 8) res.push(parseInt(d));
-                                }
-                            });
-                        }
-                        return [...new Set(res)].sort((a,b) => a-b);
-                    """)
-                    
-                    if js_prices:
-                        valid_prices = [p for p in js_prices if p > 50] # Фильтр мусора
-                        if valid_prices:
-                            logger.info(f"JS нашел: {valid_prices}")
-                            wallet = valid_prices[0]
-                            standard = valid_prices[1] if len(valid_prices) > 1 else valid_prices[0]
-                            base = valid_prices[-1] if len(valid_prices) > 1 else 0
-
-                if wallet == 0: wallet = standard
-                if standard == 0: raise Exception("Цена не найдена")
-
-                # Бренд и название
-                brand = "Не определен"
-                name = f"Товар {sku}"
-                try:
-                    b_els = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand, .brand-name")
-                    if b_els: brand = b_els[0].text.strip()
-                    n_els = driver.find_elements(By.CSS_SELECTOR, "h1, .product-page__title")
-                    if n_els: name = n_els[0].text.strip()
+                        if total > 0:
+                            logger.info(f"JSON Success: {total}₽")
+                            return {
+                                "id": sku, "name": name, "brand": brand,
+                                "prices": {"wallet_purple": total, "standard_black": total, "base_crossed": basic},
+                                "status": "success"
+                            }
                 except: pass
 
-                logger.info(f"Успех: {brand} | {wallet}₽")
-                return {
-                    "id": sku, "name": name, "brand": brand,
-                    "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
-                    "status": "success"
-                }
+                # ЭТАП 2: DOM Парсинг (Если JSON не найден)
+                driver.execute_script("window.scrollTo(0, 400);")
+                WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='price']")))
+
+                # Ищем любые цифры, похожие на цену
+                prices = []
+                elements = driver.find_elements(By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, .price-block__old-price, [class*='Price']")
+                for el in elements:
+                    txt = el.get_attribute('textContent')
+                    nums = re.findall(r'\d+', txt.replace('\xa0', '').replace(' ', ''))
+                    if nums: prices.append(int(nums[0]))
+                
+                prices = sorted(list(set([p for p in prices if 100 < p < 1000000])))
+                
+                if prices:
+                    wallet = prices[0]
+                    base = prices[-1]
+                    standard = prices[1] if len(prices) > 2 else wallet
+                    
+                    brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
+                    brand = brand_el[0].text.strip() if brand_el else "Unknown"
+                    name_el = driver.find_elements(By.CSS_SELECTOR, "h1")
+                    name = name_el[0].text.strip() if name_el else str(sku)
+
+                    return {
+                        "id": sku, "name": name, "brand": brand,
+                        "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
+                        "status": "success"
+                    }
+                
+                raise Exception("Цены не найдены")
 
             except Exception as e:
-                logger.error(f"Ошибка попытки {attempt}: {e}")
+                logger.error(f"Try {attempt}: {e}")
                 continue
             finally:
                 if driver: driver.quit()
-
-        return {"id": sku, "status": "error", "message": "Не удалось определить цену. Попробуйте позже."}
+        return {"id": sku, "status": "error", "message": "Failed to parse prices"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        Сбор данных для ИИ. Парсинг отзывов через DOM (без API-инъекций).
+        Получение отзывов. Сначала получаем root (imtId) через Selenium,
+        затем делаем чистый запрос к API отзывов через requests.
         """
-        logger.info(f"--- ОТЗЫВЫ SKU: {sku} ---")
+        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         driver = None
         try:
+            # 1. Получаем imtId (root) товара
             driver = self._init_driver()
-            # Идем сразу в отзывы
-            url = f"https://www.wildberries.ru/catalog/{sku}/feedbacks?targetUrl=GP&dest=-1257786"
-            driver.get(url)
+            driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx")
+            time.sleep(3)
             
-            time.sleep(5)
-            if "Kaspersky" in driver.page_source: raise Exception("Blocked")
+            if "Kaspersky" in driver.page_source: raise Exception("Blocked by Kaspersky")
 
-            # Агрессивный скроллинг для подгрузки отзывов
-            for _ in range(5):
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1.5)
+            # Пытаемся достать root ID из JS
+            root_id = driver.execute_script("return window.staticModel?.product?.root || window.staticModel?.card?.root || 0;")
+            
+            # Если не вышло, пробуем через API card.wb.ru (это публичный API)
+            if not root_id:
+                logger.info("Root ID не в staticModel, пробую API...")
+                # Используем requests внутри Python, чтобы не мучить браузер
+                card_resp = requests.get(f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}")
+                if card_resp.status_code == 200:
+                    data = card_resp.json()
+                    root_id = data['data']['products'][0]['root']
+            
+            driver.quit() # Браузер больше не нужен
+            driver = None
 
-            # Статика
-            img_url = ""
-            try:
-                img = driver.find_elements(By.CSS_SELECTOR, "img.photo-container__photo")
-                if img: img_url = img[0].get_attribute("src")
-            except: pass
+            if not root_id:
+                raise Exception("Не удалось получить root ID товара")
 
-            rating = 0.0
-            try:
-                rate = driver.find_elements(By.CSS_SELECTOR, ".product-review__rating")
-                if rate: rating = float(rate[0].text.strip())
-            except: pass
+            logger.info(f"Root ID: {root_id}. Скачиваю отзывы через API...")
 
-            # Сбор отзывов из HTML
+            # 2. Скачиваем отзывы через прямой запрос (самый надежный метод)
+            # feedbacks1.wb.ru/feedbacks/v1/{root_id}
+            
             reviews_data = []
-            # Используем самые широкие селекторы для карточек отзывов
-            cards = driver.find_elements(By.CSS_SELECTOR, "li.comments__item, div.feedback__item")
+            rating = 0.0
             
-            logger.info(f"Найдено карточек: {len(cards)}")
+            api_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
+            resp = requests.get(api_url)
             
-            for card in cards[:limit]:
-                try:
-                    # Ищем текст
-                    text_els = card.find_elements(By.CSS_SELECTOR, ".comments__text, .feedback__text")
-                    if not text_els: continue
-                    text = text_els[0].text.strip()
-                    
-                    # Ищем звезды (класс star--active)
-                    stars = len(card.find_elements(By.CSS_SELECTOR, ".star.star--active"))
-                    if stars == 0: stars = 5 # Дефолт, если звезды не распарсились
-                    
-                    if len(text) > 5:
-                        reviews_data.append({"text": text, "rating": stars})
-                except: continue
-
-            if not reviews_data:
-                raise Exception("Отзывы не прогрузились или отсутствуют")
+            if resp.status_code == 200:
+                data = resp.json()
+                rating = float(data.get('valuation', 0))
+                
+                raw_feedbacks = data.get('feedbacks', [])
+                # Сортируем по дате (свежие первые) или полезности
+                # Берем только текстовые
+                for f in raw_feedbacks:
+                    if f.get('text'):
+                        reviews_data.append({
+                            "text": f['text'],
+                            "rating": f.get('productValuation', 5)
+                        })
+                        if len(reviews_data) >= limit: break
+            else:
+                raise Exception(f"API отзывов вернул {resp.status_code}")
 
             return {
                 "sku": sku,
-                "image": img_url,
+                "image": f"https://basket-01.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp", # Генерируем ссылку на фото
                 "rating": rating,
                 "reviews": reviews_data,
                 "reviews_count": len(reviews_data),
@@ -279,7 +225,7 @@ class SeleniumWBParser:
 
         except Exception as e:
             logger.error(f"Reviews Error: {e}")
-            return {"status": "error", "message": "Не удалось собрать отзывы"}
+            return {"status": "error", "message": str(e)}
         finally:
             if driver: driver.quit()
 

@@ -9,3 +9,4 @@ sqlalchemy
 asyncpg
 psycopg2-binary
 aiohttp
+requests

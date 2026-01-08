@@ -34,18 +34,18 @@ class AnalysisService:
     async def analyze_reviews_with_ai(self, reviews: list, product_name: str):
         if not reviews: return {"error": "Нет отзывов"}
 
-        reviews_text = "\n".join([f"- {r['text'][:300]} ({r['rating']}*)" for r in reviews[:25]])
+        reviews_text = "\n".join([f"- {r['text'][:200]} ({r['rating']}*)" for r in reviews[:25]])
         
         prompt = f"""
-        Анализ товара WB: "{product_name}".
+        Проанализируй товар WB: "{product_name}".
         Отзывы покупателей:
         {reviews_text}
         
-        Твоя задача:
-        1. Напиши 3 главных минуса, на которые жалуются.
-        2. Напиши 5 советов продавцу, как улучшить товар.
+        Задача:
+        1. Напиши 3 главных минуса (жалобы).
+        2. Напиши 5 советов продавцу (стратегия улучшения).
         
-        Верни ответ СТРОГО в формате JSON:
+        Ответ верни СТРОГО в формате JSON:
         {{
             "flaws": ["минус 1", "минус 2", "минус 3"],
             "strategy": ["совет 1", "совет 2", "совет 3", "совет 4", "совет 5"]
@@ -63,33 +63,23 @@ class AnalysisService:
                 
                 async with session.post(self.ai_url, json=payload, headers=headers) as resp:
                     if resp.status != 200:
-                        err = await resp.text()
-                        logger.error(f"AI API Error: {err}")
-                        return {"flaws": ["Ошибка нейросети"], "strategy": ["Попробуйте позже"]}
+                        return {"flaws": ["Ошибка ИИ"], "strategy": ["Попробуйте позже"]}
                     
                     result = await resp.json()
                     content = result['choices'][0]['message']['content']
                     
-                    # Надежный парсинг JSON из текста
                     try:
                         json_match = re.search(r'\{[\s\S]*\}', content)
                         if json_match:
                             parsed = json.loads(json_match.group(0))
-                            # Валидация ключей
-                            if 'flaws' not in parsed: parsed['flaws'] = []
-                            if 'strategy' not in parsed: parsed['strategy'] = []
-                            
-                            parsed['flaws'] = [self.clean_ai_text(str(f)) for f in parsed['flaws']]
-                            parsed['strategy'] = [self.clean_ai_text(str(s)) for s in parsed['strategy']]
+                            parsed['flaws'] = [self.clean_ai_text(str(f)) for f in parsed.get('flaws', [])]
+                            parsed['strategy'] = [self.clean_ai_text(str(s)) for s in parsed.get('strategy', [])]
                             return parsed
                         else:
                              return {"flaws": ["Формат ответа неверен"], "strategy": [self.clean_ai_text(content[:300])]}
-                    except Exception as e:
-                        logger.error(f"JSON Parse Error: {e}")
-                        return {"flaws": ["Ошибка обработки"], "strategy": ["Не удалось прочитать ответ ИИ"]}
+                    except: return {"flaws": ["Ошибка JSON"], "strategy": ["Не удалось прочитать ответ"]}
 
         except Exception as e:
-            logger.error(f"Connection Error: {e}")
             return {"flaws": ["Сбой сети"], "strategy": ["Ошибка подключения"]}
 
 analysis_service = AnalysisService()
