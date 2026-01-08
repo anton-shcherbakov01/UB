@@ -119,7 +119,8 @@ class SeleniumWBParser:
                     txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
                 val = int(digits) if digits else 0
-                logger.info(f"Извлечена цена по селектору '{selector}': {val}")
+                if val > 0:
+                    logger.info(f"Извлечена цена по селектору '{selector}': {val}")
                 return val
         except Exception as e:
             logger.debug(f"Не удалось извлечь цену по селектору '{selector}': {e}")
@@ -132,22 +133,21 @@ class SeleniumWBParser:
         max_attempts = 3
         last_error = ""
 
-        # Список селекторов для цен
+        # Расширенный список селекторов (WB часто меняет классы)
         price_selectors_list = [
+            ".price-block__wallet-price", ".price-block__final-price",
             "[class*='productLinePriceWallet']", "[class*='priceBlockWalletPrice']",
             "[class*='productLinePriceNow']", "[class*='priceBlockFinalPrice']"
         ]
 
-        # Список селекторов для бренда
         brand_selectors = [
             ".product-page__header-brand", ".product-page__brand", 
-            "span.brand", "[data-link*='brandName']"
+            "span.brand", "[data-link*='brandName']", ".product-page__brand-name"
         ]
 
-        # Список селекторов для названия
         name_selectors = [
             ".product-page__header-title", "h1.product-page__title",
-            "h1", ".product-page__name"
+            "h1", ".product-page__name", ".product-page__title"
         ]
 
         for attempt in range(1, max_attempts + 1):
@@ -160,17 +160,26 @@ class SeleniumWBParser:
                 logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
                 
+                # Имитация активности пользователя для подгрузки контента
+                time.sleep(3)
+                driver.execute_script("window.scrollTo(0, 400);")
+                
                 page_title = driver.title
                 if "Kaspersky" in driver.page_source or "Остановлен переход" in page_title:
-                    logger.warning(f"Попытка {attempt}: Блокировка Касперским. Смена сессии...")
+                    logger.warning(f"Попытка {attempt}: Обнаружена блокировка. Смена сессии...")
                     driver.quit()
                     continue
 
-                logger.info("Страница загружена. Ожидание появления цен...")
+                # Проверка, что страница вообще загрузила хоть какой-то контент товара
+                if not driver.find_elements(By.CLASS_NAME, "product-page__main-container") and \
+                   not driver.find_elements(By.ID, "container"):
+                    logger.warning("Контейнер товара не найден. Страница могла не прогрузиться.")
+
+                logger.info("Ожидание появления цен...")
                 
                 found = False
                 start_wait = time.time()
-                while time.time() - start_wait < 45:
+                while time.time() - start_wait < 35:
                     if any(driver.find_elements(By.CSS_SELECTOR, s) for s in price_selectors_list):
                         found = True
                         break
@@ -179,34 +188,52 @@ class SeleniumWBParser:
                 if found:
                     logger.info(f"Цены обнаружены через {int(time.time() - start_wait)} сек.")
                 else:
-                    logger.warning("Цены не появились за отведенное время.")
+                    logger.warning("Цены не появились за отведенное время через селекторы.")
 
-                wallet = self._extract_price(driver, "[class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
-                standard = self._extract_price(driver, "[class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
-                base = self._extract_price(driver, "[class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
+                # Сбор цен
+                wallet = self._extract_price(driver, ".price-block__wallet-price, [class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
+                standard = self._extract_price(driver, ".price-block__final-price, [class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
+                base = self._extract_price(driver, ".price-block__old-price, [class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
 
                 # Глубокий сканер (если стандартные классы не сработали)
                 if not standard and not wallet:
-                    logger.info("Стандартные классы цен не сработали. Запуск JS-сканера...")
+                    logger.info("Запуск JS-сканера (поиск по текстовым шаблонам)...")
                     fallback_script = """
                     let results = [];
-                    document.querySelectorAll('*').forEach(el => {
-                        let text = el.innerText || el.textContent;
-                        if (text && /\\d/.test(text) && text.length < 30) {
-                            let d = text.replace(/[^\\d]/g, '');
-                            if (d.length >= 3 && d.length <= 6) results.push(parseInt(d));
+                    // Ищем все элементы, содержащие цифры и символ рубля или просто цифры в блоке цены
+                    document.querySelectorAll('.price-block__content, .product-page__price-block, .price-block').forEach(block => {
+                        let text = block.innerText || block.textContent;
+                        let matches = text.match(/\\d[\\d\\s]{2,}/g);
+                        if (matches) {
+                            matches.forEach(m => {
+                                let val = parseInt(m.replace(/\\s/g, ''));
+                                if (val > 100 && val < 1000000) results.push(val);
+                            });
                         }
                     });
-                    return results;
+                    // Если ничего не нашли в блоках, ищем вообще везде короткие числа
+                    if (results.length === 0) {
+                        document.querySelectorAll('*').forEach(el => {
+                            if (el.children.length === 0) {
+                                let text = el.innerText || el.textContent;
+                                if (text && /^\\d[\\d\\s]{2,7}$/.test(text.trim())) {
+                                    let val = parseInt(text.replace(/\\s/g, ''));
+                                    if (val > 100 && val < 1000000) results.push(val);
+                                }
+                            }
+                        });
+                    }
+                    return [...new Set(results)];
                     """
                     all_nums = driver.execute_script(fallback_script)
                     if all_nums:
-                        clean_nums = sorted(list(set([n for n in all_nums if n > 400])))
+                        # Сортируем: самая маленькая - кошелек, средняя - обычная, большая - зачеркнутая
+                        clean_nums = sorted([n for n in all_nums if n > 100])
                         logger.info(f"JS-сканер нашел числа: {clean_nums}")
-                        if clean_nums:
+                        if len(clean_nums) >= 1:
                             wallet = clean_nums[0]
-                            base = clean_nums[-1]
-                            standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
+                            standard = clean_nums[1] if len(clean_nums) > 1 else clean_nums[0]
+                            base = clean_nums[-1] if len(clean_nums) > 1 else 0
 
                 if not wallet and not standard:
                     logger.error("Парсинг не удался: цены не обнаружены.")
@@ -216,14 +243,12 @@ class SeleniumWBParser:
                 brand = "Не определен"
                 name = f"Товар {sku}"
 
-                # Безопасное извлечение бренда
                 for s in brand_selectors:
                     els = driver.find_elements(By.CSS_SELECTOR, s)
                     if els:
                         brand = els[0].text.strip()
                         break
                 
-                # Безопасное извлечение названия
                 for s in name_selectors:
                     els = driver.find_elements(By.CSS_SELECTOR, s)
                     if els:
