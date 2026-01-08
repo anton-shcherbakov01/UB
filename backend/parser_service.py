@@ -97,15 +97,17 @@ class SeleniumWBParser:
                 standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], .price-block__final-price")
                 base = self._extract_price(driver, "[class*='priceBlockOldPrice'], .price-block__old-price")
 
-                if not standard: # Fallback JS
+                if not standard: 
                     js_prices = driver.execute_script("let r=[]; document.querySelectorAll('[class*=\"price\"]').forEach(e=>{let t=e.innerText; let m=t.match(/\\d[\\d\\s]{2,}/g); if(m) m.forEach(v=>{let n=parseInt(v.replace(/\\s/g,'')); if(n>100 && n<1000000) r.push(n)})}); return [...new Set(r)].sort((a,b)=>a-b);")
                     if js_prices:
-                        wallet = js_prices[0]
-                        standard = js_prices[1] if len(js_prices) > 1 else js_prices[0]
-                        base = js_prices[-1] if len(js_prices) > 2 else 0
+                        clean = sorted([n for n in js_prices if n > 400])
+                        if clean:
+                            wallet = clean[0]
+                            standard = clean[1] if len(clean) > 1 else clean[0]
+                            base = clean[-1] if len(clean) > 1 else 0
 
                 if wallet == 0: wallet = standard
-                if standard == 0: raise Exception("Prices not found")
+                if standard == 0: raise Exception("Price not found")
 
                 brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
                 name_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-title")
@@ -127,32 +129,78 @@ class SeleniumWBParser:
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
         Сбор отзывов через API WB (feedbacks1.wb.ru).
-        Не требует Selenium, работает мгновенно.
+        Теперь с ретраями и логами ошибок.
         """
         logger.info(f"--- REVIEWS API SKU: {sku} ---")
+        
+        # Заголовки как у настоящего браузера
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Origin": "https://www.wildberries.ru",
+            "Referer": f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
+        }
+
         try:
-            # 1. Получаем imtId (root) через карточку товара (публичный JSON)
+            # 1. Получаем imtId (root) через карточку товара
             card_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}"
-            resp = requests.get(card_url, timeout=10)
-            if resp.status_code != 200: raise Exception("WB Card API error")
+            data = None
             
-            data = resp.json()
+            # Ретрай для получения карточки
+            for i in range(3):
+                try:
+                    logger.info(f"GET Card Attempt {i+1}: {card_url}")
+                    resp = requests.get(card_url, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        break
+                    else:
+                        logger.warning(f"Card API Fail {resp.status_code}: {resp.text[:100]}")
+                except Exception as req_e:
+                    logger.warning(f"Card API Error: {req_e}")
+                time.sleep(2)
+            
+            if not data:
+                raise Exception("Не удалось получить данные карточки после 3 попыток")
+
             products = data.get('data', {}).get('products', [])
-            if not products: raise Exception("Product not found")
+            if not products: 
+                raise Exception(f"Товар не найден в API WB. Ответ: {str(data)[:200]}")
             
             root_id = products[0].get('root')
-            img_url = f"https://basket-01.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp" # Генерация ссылки на фото
+            if not root_id:
+                raise Exception(f"Root ID (imtId) не найден для SKU {sku}")
+                
+            img_url = f"https://basket-01.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp" 
             rating = float(products[0].get('reviewRating', 0))
+
+            logger.info(f"Root ID: {root_id}. Запрос отзывов...")
 
             # 2. Получаем отзывы
             feed_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
-            feed_resp = requests.get(feed_url, timeout=10)
-            if feed_resp.status_code != 200: raise Exception("Feedbacks API error")
+            feed_data = None
             
-            feed_data = feed_resp.json()
+            # Ретрай для отзывов
+            for i in range(3):
+                try:
+                    resp = requests.get(feed_url, headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        feed_data = resp.json()
+                        break
+                    else:
+                        logger.warning(f"Feedbacks API Fail {resp.status_code}")
+                except Exception as req_e:
+                    logger.warning(f"Feedbacks API Error: {req_e}")
+                time.sleep(2)
+
+            if not feed_data:
+                 raise Exception("Не удалось скачать отзывы (API недоступен)")
+
             raw_feedbacks = feed_data.get('feedbacks', [])
+            if not raw_feedbacks:
+                 logger.info("У товара нет отзывов.")
             
-            # Сортировка: полезные и с текстом
             reviews_data = []
             for f in raw_feedbacks:
                 txt = f.get('text', '').strip()
@@ -173,7 +221,7 @@ class SeleniumWBParser:
             }
 
         except Exception as e:
-            logger.error(f"Reviews Error: {e}")
+            logger.error(f"REVIEWS CRITICAL ERROR: {str(e)}")
             return {"status": "error", "message": str(e)}
 
 parser_service = SeleniumWBParser()
