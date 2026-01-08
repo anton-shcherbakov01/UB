@@ -320,44 +320,48 @@ const MonitorPage = () => {
 };
 
 const AIAnalysisPage = () => {
-    const [sku, setSku] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [status, setStatus] = useState('');
-    const [result, setResult] = useState(null);
+  const [sku, setSku] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('');
+  const [result, setResult] = useState(null);
 
-    const runAnalysis = async () => {
-        if(!sku) return;
-        setLoading(true);
-        setResult(null);
-        try {
-            const res = await fetch(`${API_URL}/api/ai/analyze/${sku}`, { 
-                method: 'POST',
-                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-            });
-            const data = await res.json();
-            const taskId = data.task_id;
-            
-            let attempts = 0;
-            while(attempts < 60) {
-                setStatus('Анализ отзывов...');
-                await new Promise(r => setTimeout(r, 4000));
-                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
-                const sData = await sRes.json();
-                
-                if (sData.status === 'SUCCESS') {
-                    setResult(sData.data);
-                    break;
-                }
-                if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
-                if (sData.info) setStatus(sData.info);
-                attempts++;
-            }
-        } catch(e) {
-            alert(e.message);
-        } finally {
-            setLoading(false);
-        }
-    };
+  const runAnalysis = async () => {
+      if(!sku) return;
+      setLoading(true);
+      setResult(null);
+      try {
+          const res = await fetch(`${API_URL}/api/ai/analyze/${sku}`, { 
+              method: 'POST',
+              headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+          });
+          const data = await res.json();
+          
+          // Polling с таймаутом 3 минуты
+          let attempts = 0;
+          while(attempts < 45) { // 45 * 4 сек = 3 мин
+              await new Promise(r => setTimeout(r, 4000));
+              
+              const sRes = await fetch(`${API_URL}/api/ai/result/${data.task_id}`);
+              const sData = await sRes.json();
+              
+              if (sData.status === 'SUCCESS') {
+                  setResult(sData.data);
+                  break;
+              }
+              if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
+              
+              // Показываем реальный статус от воркера
+              if (sData.info) setStatus(sData.info);
+              else setStatus('Обработка...');
+              
+              attempts++;
+          }
+      } catch(e) {
+          alert(e.message);
+      } finally {
+          setLoading(false);
+      }
+  };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
