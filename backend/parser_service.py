@@ -10,19 +10,17 @@ from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 # Загрузка настроек из .env
 load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
-logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
     Микросервис парсинга Wildberries. 
-    Оптимизирован для работы внутри Docker контейнера.
+    Оптимизирован для работы внутри Docker контейнера без зависимости от внешних загрузок драйвера.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -64,13 +62,13 @@ class SeleniumWBParser:
         return extension_path
 
     def _init_driver(self):
-        """Инициализация драйвера с критическими флагами для Docker."""
+        """Инициализация драйвера с использованием предустановленного в Docker драйвера."""
         edge_options = EdgeOptions()
         
         # КРИТИЧЕСКИЕ ФЛАГИ ДЛЯ DOCKER
         edge_options.add_argument("--headless=new")
-        edge_options.add_argument("--no-sandbox")            # Важно для работы под root
-        edge_options.add_argument("--disable-dev-shm-usage")  # Важно для Docker памяти
+        edge_options.add_argument("--no-sandbox")
+        edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--remote-debugging-port=9222")
         
@@ -86,17 +84,18 @@ class SeleniumWBParser:
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         try:
-            os.environ['WDM_LOG_LEVEL'] = '0'
-            service = EdgeService(EdgeChromiumDriverManager().install())
+            # Используем прямой путь к msedgedriver, который мы установим через Dockerfile
+            service = EdgeService(executable_path='/usr/local/bin/msedgedriver')
             driver = webdriver.Edge(service=service, options=edge_options)
         except Exception as e:
             logging.error(f"Ошибка инициализации драйвера: {e}")
-            raise e
+            # Резервный вариант, если путь отличается
+            try:
+                driver = webdriver.Edge(options=edge_options)
+            except:
+                raise e
             
         driver.set_page_load_timeout(120)
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        })
         return driver
 
     def _extract_price(self, driver, selector):
