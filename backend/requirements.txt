@@ -5,3 +5,6 @@ webdriver-manager
 python-dotenv
 celery
 redis
+sqlalchemy
+asyncpg
+psycopg2-binary

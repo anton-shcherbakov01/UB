@@ -1,18 +1,19 @@
 import os
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from celery.result import AsyncResult
-from celery_app import celery_app
-from tasks import parse_sku_task
-from dotenv import load_dotenv
+from typing import List
 
-# Импортируем сервисы для синхронного режима (совместимость)
-from parser_service import parser_service
-from analysis_service import analysis_service
+from database import init_db, get_db, MonitoredItem, PriceHistory
+from celery_app import celery_app
+from tasks import parse_and_save_sku
+from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="WB Async Monitor API")
+app = FastAPI(title="WB Analytics Pro")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,58 +23,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- АСИНХРОННЫЕ ЭНДПОИНТЫ (Очереди) ---
+@app.on_event("startup")
+async def on_startup():
+    await init_db()
+
+# --- MONITORING API ---
 
 @app.post("/api/monitor/add/{sku}")
-async def add_to_queue(sku: int):
-    """Добавить товар в очередь на парсинг"""
-    task = parse_sku_task.delay(sku)
-    return {
-        "task_id": task.id, 
-        "message": "Товар добавлен в очередь", 
-        "queue_position": "Вычисляется..." 
-    }
+async def add_to_monitor(sku: int):
+    """Добавить товар в базу мониторинга (запускает парсинг немедленно)"""
+    task = parse_and_save_sku.delay(sku)
+    return {"status": "accepted", "task_id": task.id, "message": "Товар добавлен в трекер"}
 
-@app.get("/api/monitor/status/{task_id}")
-async def get_task_status(task_id: str):
-    """Узнать статус задачи"""
-    task_result = AsyncResult(task_id, app=celery_app)
+@app.get("/api/monitor/list")
+async def get_monitored_items(db: AsyncSession = Depends(get_db)):
+    """Получить список всех отслеживаемых товаров"""
+    result = await db.execute(select(MonitoredItem).order_by(MonitoredItem.id.desc()))
+    items = result.scalars().all()
+    return items
+
+@app.get("/api/monitor/history/{sku}")
+async def get_price_history(sku: int, db: AsyncSession = Depends(get_db)):
+    """Получить историю цен для графика"""
+    # Находим ID товара
+    item_res = await db.execute(select(MonitoredItem).where(MonitoredItem.sku == sku))
+    item = item_res.scalars().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Товар не найден в мониторинге")
     
-    response = {
-        "task_id": task_id,
-        "status": task_result.status,
-    }
-
-    if task_result.status == 'PENDING':
-        response["info"] = "Ожидает свободного воркера"
-    elif task_result.status == 'PROGRESS':
-        response["info"] = task_result.info.get('status', 'В процессе...')
-    elif task_result.status == 'SUCCESS':
-        response["result"] = task_result.result
-    elif task_result.status == 'FAILURE':
-        response["error"] = str(task_result.result)
-
-    return response
-
-# --- СИНХРОННЫЙ ЭНДПОИНТ (СОВМЕСТИМОСТЬ) ---
-# Этот метод нужен, чтобы старый фронтенд не получал 404
-
-@app.get("/api/analyze/{sku}")
-def analyze_product_sync(sku: int):
-    """
-    Старый метод для прямой проверки (блокирующий).
-    Нужен для совместимости с текущим фронтендом.
-    """
-    # 1. Парсинг (прямой вызов, не через очередь)
-    result = parser_service.get_product_data(sku)
+    # Берем историю
+    history_res = await db.execute(
+        select(PriceHistory)
+        .where(PriceHistory.item_id == item.id)
+        .order_by(PriceHistory.recorded_at.asc())
+    )
+    history = history_res.scalars().all()
     
-    if result.get("status") == "error":
-        raise HTTPException(status_code=500, detail=result.get("message"))
-    
-    # 2. Анализ
-    final_report = analysis_service.calculate_metrics(result)
-        
-    return final_report
+    # Формируем данные для графика (Recharts)
+    chart_data = [
+        {
+            "date": h.recorded_at.strftime("%d.%m %H:%M"),
+            "wallet": h.wallet_price,
+            "standard": h.standard_price
+        }
+        for h in history
+    ]
+    return {"sku": sku, "name": item.name, "history": chart_data}
 
 if __name__ == "__main__":
     import uvicorn

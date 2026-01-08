@@ -1,13 +1,25 @@
 version: '3.8'
 
 services:
-  # 1. База данных для очереди (Redis)
   redis:
     image: redis:alpine
     container_name: wb_redis
     restart: always
 
-  # 2. Основное API (FastAPI)
+  # --- НОВЫЙ СЕРВИС: БАЗА ДАННЫХ ---
+  db:
+    image: postgres:15-alpine
+    container_name: wb_postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=wb_user
+      - POSTGRES_PASSWORD=wb_secret_password
+      - POSTGRES_DB=wb_monitor
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
   api:
     build: ./backend
     container_name: wb_api
@@ -18,6 +30,7 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
       - PROXY_HOST=${PROXY_HOST}
@@ -25,21 +38,40 @@ services:
       - HEADLESS=True
     depends_on:
       - redis
+      - db
 
-  # 3. Рабочий (Celery Worker) - именно он запускает браузер
   worker:
     build: ./backend
     container_name: wb_worker
-    # Запускаем Celery с concurrency=1 (один браузер одновременно), чтобы не убить сервер
-    command: celery -A celery_app worker --loglevel=info --concurrency=1
-    volumes:
-      - ./backend:/app
+    # C_FORCE_ROOT=1 убирает предупреждение в логах
     environment:
+      - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
       - PROXY_HOST=${PROXY_HOST}
       - PROXY_PORT=${PROXY_PORT}
       - HEADLESS=True
+    command: celery -A celery_app worker --loglevel=warning --concurrency=1
+    volumes:
+      - ./backend:/app
     depends_on:
       - redis
+      - db
+
+  # --- НОВЫЙ СЕРВИС: ПЛАНИРОВЩИК (BEAT) ---
+  beat:
+    build: ./backend
+    container_name: wb_beat
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    # Запускает задачи по расписанию
+    command: celery -A celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
