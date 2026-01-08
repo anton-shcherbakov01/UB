@@ -5,6 +5,8 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+# Импортируем selectinload для жадной загрузки связей
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 
 from parser_service import parser_service
@@ -28,7 +30,6 @@ app.add_middleware(
 )
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
-# Твой username (без @), чтобы система сделала тебя админом при первом входе
 ADMIN_USERNAME = "AntonShch" 
 
 # --- ЗАВИСИМОСТИ ---
@@ -38,13 +39,9 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
     
     user_data_dict = None
 
-    # 1. Попытка авторизации через Telegram
     if x_tg_data:
-        # Проверяем валидность подписи (возвращает True/False)
         is_valid = auth_manager.validate_init_data(x_tg_data)
-        
         if is_valid:
-            # Если подпись верна, парсим данные сами
             try:
                 parsed = dict(parse_qsl(x_tg_data))
                 if 'user' in parsed:
@@ -52,25 +49,22 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
             except Exception as e:
                 print(f"Auth parse error: {e}")
 
-    # 2. Режим отладки (если нет данных TG или они невалидны, но включен DEBUG)
     if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
          user_data_dict = {"id": 111111, "username": "test_user", "first_name": "Tester"}
 
-    # 3. Если пользователя нет - ошибка 401
     if not user_data_dict:
-        # Важно: для первого запуска фронтенда иногда данные не приходят, 
-        # но мы не должны падать с 500. Лучше вернуть 401.
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     tg_id = user_data_dict.get('id')
     username = user_data_dict.get('username')
     first_name = user_data_dict.get('first_name')
 
-    # Ищем пользователя в БД
-    result = await db.execute(select(User).where(User.telegram_id == tg_id))
+    # Ищем пользователя в БД с ЖАДНОЙ загрузкой товаров (items)
+    # Это предотвращает ошибку MissingGreenlet при обращении к user.items
+    stmt = select(User).options(selectinload(User.items)).where(User.telegram_id == tg_id)
+    result = await db.execute(stmt)
     user = result.scalars().first()
 
-    # Если пользователя нет - регистрируем
     if not user:
         is_admin = (username == ADMIN_USERNAME)
         user = User(
@@ -82,13 +76,14 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
         )
         db.add(user)
         await db.commit()
+        # При refresh тоже нужно подгрузить items, если планируем к ним обращаться, 
+        # но для нового юзера список пуст, так что это безопасно.
         await db.refresh(user)
     
     return user
 
 @app.on_event("startup")
 async def on_startup():
-    # Создаем таблицы при старте
     await init_db()
 
 # --- ПОЛЬЗОВАТЕЛЬСКИЕ ЭНДПОИНТЫ ---
@@ -96,29 +91,29 @@ async def on_startup():
 @app.get("/api/user/me")
 async def get_profile(user: User = Depends(get_current_user)):
     """Получить профиль текущего пользователя"""
+    # Теперь user.items уже загружен в память, и len() сработает без запроса к БД
+    items_count = len(user.items) if user.items else 0
+    
     return {
         "id": user.telegram_id,
         "username": user.username,
         "name": user.first_name,
         "plan": user.subscription_plan,
         "is_admin": user.is_admin,
-        # Безопасное получение длины списка
-        "items_count": len(user.items) if user.items else 0
+        "items_count": items_count
     }
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Добавить товар в ЛИЧНЫЙ список мониторинга"""
     
-    # Проверка лимитов
+    # user.items доступен благодаря selectinload в get_current_user
     current_items = len(user.items) if user.items else 0
     limit = 3 if user.subscription_plan == "free" else 50
     
     if current_items >= limit:
-        # 403 Forbidden - лимит исчерпан
         raise HTTPException(status_code=403, detail=f"Лимит тарифа исчерпан ({limit} товаров).")
 
-    # Проверка на дубликаты у ЭТОГО пользователя
     stmt = select(MonitoredItem).where(
         MonitoredItem.user_id == user.id,
         MonitoredItem.sku == sku
@@ -128,12 +123,10 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     if existing:
         return {"status": "exists", "message": "Товар уже в списке"}
 
-    # Создаем запись
     new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
     db.add(new_item)
     await db.commit()
 
-    # Запускаем задачу в фоне
     task = parse_and_save_sku.delay(sku)
     return {"status": "accepted", "task_id": task.id, "message": "Добавлено в очередь"}
 
@@ -161,7 +154,6 @@ async def delete_item(sku: int, user: User = Depends(get_current_user), db: Asyn
 @app.get("/api/monitor/history/{sku}")
 async def get_history(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Получить историю цен"""
-    # Сначала ищем товар, принадлежащий именно этому пользователю
     item_res = await db.execute(
         select(MonitoredItem).where(
             MonitoredItem.user_id == user.id,
@@ -199,7 +191,6 @@ async def get_task_status(task_id: str):
     elif task_result.status == 'FAILURE':
         response["error"] = str(task_result.result)
     elif task_result.status == 'PROGRESS':
-         # Если воркер передает статус, показываем его
          response["info"] = task_result.info.get('status', 'В процессе...')
     return response
 
