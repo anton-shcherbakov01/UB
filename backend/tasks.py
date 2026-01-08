@@ -3,7 +3,6 @@ from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
 from database import AsyncSessionLocal, User
-from tasks import parse_and_save_sku, analyze_reviews_task # Добавили новую задачу
 from sqlalchemy import select
 import logging
 
