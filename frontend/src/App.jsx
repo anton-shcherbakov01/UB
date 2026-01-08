@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, ArrowUpRight, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 
-// Ваш реальный домен
 const API_URL = "https://api.ulike-bot.ru"; 
 
 export default function App() {
@@ -11,6 +10,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [monitorList, setMonitorList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
+  const [statusMsg, setStatusMsg] = useState('');
 
   useEffect(() => {
     if (window.Telegram?.WebApp) {
@@ -25,7 +25,6 @@ export default function App() {
       const res = await fetch(`${API_URL}/api/monitor/list`);
       if (res.ok) setMonitorList(await res.json());
     } catch (e) {
-      // Исправлено: добавлены фигурные скобки
       console.error("Ошибка загрузки списка:", e);
     }
   };
@@ -34,23 +33,50 @@ export default function App() {
     if (!sku) return;
     setLoading(true);
     setHistoryData(null);
+    setStatusMsg('Запуск задачи...');
+
     try {
-      await fetch(`${API_URL}/api/monitor/add/${sku}`, { 
+      // 1. Отправляем задачу в очередь
+      const res = await fetch(`${API_URL}/api/monitor/add/${sku}`, { 
         method: 'POST',
         headers: {
             'X-TG-Data': window.Telegram?.WebApp?.initData || ""
         }
       });
+      const data = await res.json();
+      const taskId = data.task_id;
+
+      // 2. Полллинг статуса (ждем пока воркер закончит)
+      let attempts = 0;
+      const maxAttempts = 60; // 3 минуты (60 * 3 сек)
       
-      // Пауза перед обновлением, чтобы сервер успел начать парсинг
-      setTimeout(() => {
-        fetchMonitorList();
-        loadHistory(sku); 
-        setLoading(false);
-        setActiveTab('monitor');
-      }, 4000); 
+      while (attempts < maxAttempts) {
+        setStatusMsg('Парсинг WB...');
+        await new Promise(r => setTimeout(r, 3000)); // Ждем 3 сек
+        
+        const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
+        const statusData = await statusRes.json();
+        
+        if (statusData.status === 'SUCCESS') {
+           setStatusMsg('Готово!');
+           await fetchMonitorList();
+           await loadHistory(sku);
+           setLoading(false);
+           setActiveTab('monitor');
+           return;
+        }
+        
+        if (statusData.status === 'FAILURE') {
+           throw new Error(statusData.error || "Ошибка парсинга");
+        }
+        
+        attempts++;
+      }
+      throw new Error("Таймаут ожидания (сервер перегружен)");
+
     } catch (e) {
-      console.error("Ошибка добавления:", e);
+      console.error("Ошибка:", e);
+      alert(`Ошибка: ${e.message}`); // Показываем ошибку пользователю
       setLoading(false);
     }
   };
@@ -110,7 +136,11 @@ export default function App() {
               disabled={loading}
               className="w-full bg-black text-white p-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl disabled:opacity-70"
             >
-              {loading ? <Loader2 className="animate-spin" /> : <><Plus size={20} /> Отследить</>}
+              {loading ? (
+                <><Loader2 className="animate-spin" /> {statusMsg}</>
+              ) : (
+                <><Plus size={20} /> Отследить</>
+              )}
             </button>
           </div>
         </div>
@@ -154,7 +184,10 @@ export default function App() {
               monitorList.map((item) => (
                 <div 
                   key={item.id} 
-                  onClick={() => loadHistory(item.sku)} 
+                  onClick={() => {
+                    loadHistory(item.sku);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }} 
                   className="bg-white p-4 rounded-2xl flex items-center gap-4 active:scale-[0.98] transition-all border border-slate-100 cursor-pointer shadow-sm"
                 >
                   <div className="bg-indigo-50 p-3 rounded-xl">
