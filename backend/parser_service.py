@@ -118,7 +118,8 @@ class SeleniumWBParser:
             logger.error(f"Ошибка инициализации драйвера: {e}")
             raise e
             
-        driver.set_page_load_timeout(120)
+        # Уменьшаем таймаут ожидания загрузки страницы, чтобы укладываться в лимиты HTTP
+        driver.set_page_load_timeout(35)
         return driver
 
     def _extract_price(self, driver, selector):
@@ -161,7 +162,7 @@ class SeleniumWBParser:
                 driver.get(url)
                 
                 # Даем немного времени на первичную загрузку и скроллим
-                time.sleep(3)
+                time.sleep(2)
                 driver.execute_script("window.scrollTo(0, 400);")
                 
                 # Проверка на блокировки
@@ -173,14 +174,14 @@ class SeleniumWBParser:
 
                 logger.info("Ожидание появления цен...")
                 
-                # Ожидание загрузки цен
+                # Ожидание загрузки цен (сократили до 30 секунд для стабильности)
                 found = False
                 start_wait = time.time()
-                while time.time() - start_wait < 45:
+                while time.time() - start_wait < 30:
                     if any(driver.find_elements(By.CSS_SELECTOR, s) for s in price_selectors_list):
                         found = True
                         break
-                    time.sleep(2)
+                    time.sleep(1) # Проверяем чаще
 
                 if found:
                     logger.info(f"Цены обнаружены через {int(time.time() - start_wait)} сек.")
@@ -215,12 +216,12 @@ class SeleniumWBParser:
                             standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
 
                 if not wallet and not standard:
-                    logger.error("Парсинг не удался: цены не обнаружены даже глубоким сканером.")
+                    logger.error("Парсинг не удался: цены не обнаружены.")
                     raise Exception("Цены не обнаружены.")
 
                 logger.info("Извлечение информации о бренде и названии...")
                 
-                # АККУРАТНАЯ ПРАВКА: Используем find_elements вместо find_element, чтобы не падать при отсутствии
+                # Безопасное извлечение, чтобы не падать
                 brand_els = driver.find_elements(By.CLASS_NAME, "product-page__header-brand")
                 name_els = driver.find_elements(By.CLASS_NAME, "product-page__header-title")
                 
@@ -237,6 +238,7 @@ class SeleniumWBParser:
             except Exception as e:
                 last_error = str(e)
                 logger.error(f"Ошибка во время попытки {attempt}: {last_error}")
+                # Если первая попытка упала по таймауту, нет смысла мучить сервер долго
                 continue
             finally:
                 if driver: 
