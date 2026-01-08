@@ -131,7 +131,8 @@ class SeleniumWBParser:
                     txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
                 val = int(digits) if digits else 0
-                logger.info(f"Извлечена цена по селектору '{selector}': {val}")
+                if val > 0:
+                    logger.info(f"Извлечена цена по селектору '{selector}': {val}")
                 return val
         except Exception as e:
             logger.debug(f"Не удалось извлечь цену по селектору '{selector}': {e}")
@@ -158,6 +159,10 @@ class SeleniumWBParser:
                 
                 logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
+                
+                # Даем немного времени на первичную загрузку и скроллим
+                time.sleep(3)
+                driver.execute_script("window.scrollTo(0, 400);")
                 
                 # Проверка на блокировки
                 page_title = driver.title
@@ -214,8 +219,13 @@ class SeleniumWBParser:
                     raise Exception("Цены не обнаружены.")
 
                 logger.info("Извлечение информации о бренде и названии...")
-                brand = driver.find_element(By.CLASS_NAME, "product-page__header-brand").text
-                name = driver.find_element(By.CLASS_NAME, "product-page__header-title").text
+                
+                # АККУРАТНАЯ ПРАВКА: Используем find_elements вместо find_element, чтобы не падать при отсутствии
+                brand_els = driver.find_elements(By.CLASS_NAME, "product-page__header-brand")
+                name_els = driver.find_elements(By.CLASS_NAME, "product-page__header-title")
+                
+                brand = brand_els[0].text.strip() if brand_els else "Не определен"
+                name = name_els[0].text.strip() if name_els else f"Товар {sku}"
 
                 logger.info(f"Успешно спарсено: {brand} | {name} | Wallet: {wallet}")
                 return {
