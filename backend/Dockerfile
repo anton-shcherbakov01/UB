@@ -9,8 +9,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean
 
 # Автоматическая установка Edge Driver (соответствующего версии браузера)
-RUN EDGE_VERSION=$(microsoft-edge --version | cut -d' ' -f3) && \
-    wget -q "https://msedgedriver.azureedge.net/$EDGE_VERSION/edgedriver_linux64.zip" && \
+RUN EDGE_VERSION=$(microsoft-edge --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+") && \
+    echo "Браузер версии: $EDGE_VERSION" && \
+    curl -k -L -o edgedriver_linux64.zip "https://msedgedriver.azureedge.net/$EDGE_VERSION/edgedriver_linux64.zip" && \
     unzip edgedriver_linux64.zip && \
     mv msedgedriver /usr/local/bin/msedgedriver && \
     chmod +x /usr/local/bin/msedgedriver && \
