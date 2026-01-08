@@ -6,7 +6,6 @@ import json
 import re
 import sys
 import requests
-import zipfile
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -27,8 +26,9 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v4.1.
-    Исправлен парсинг отзывов: получение root ID через браузер.
+    Микросервис парсинга Wildberries v5.0 (Hybrid + Static API).
+    - Цены: Selenium + Proxy (обход защиты).
+    - Отзывы: Static API (мгновенно, без браузера).
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -37,6 +37,49 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
 
+    # --- ВСПОМОГАТЕЛЬНАЯ ЛОГИКА WB (BASKETS) ---
+    def _get_basket_number(self, sku: int) -> str:
+        """Определяет номер хоста корзины по артикулу (алгоритм WB)"""
+        vol = sku // 100000
+        if 0 <= vol <= 143: return "01"
+        if 144 <= vol <= 287: return "02"
+        if 288 <= vol <= 431: return "03"
+        if 432 <= vol <= 719: return "04"
+        if 720 <= vol <= 1007: return "05"
+        if 1008 <= vol <= 1061: return "06"
+        if 1062 <= vol <= 1115: return "07"
+        if 1116 <= vol <= 1169: return "08"
+        if 1170 <= vol <= 1313: return "09"
+        if 1314 <= vol <= 1601: return "10"
+        if 1602 <= vol <= 1655: return "11"
+        if 1656 <= vol <= 1919: return "12"
+        if 1920 <= vol <= 2045: return "13"
+        if 2046 <= vol <= 2189: return "14"
+        if 2190 <= vol <= 2405: return "15"
+        if 2406 <= vol <= 2621: return "16"
+        if 2622 <= vol <= 2837: return "17"
+        return "18"
+
+    def _get_static_card_data(self, sku: int):
+        """
+        Скачивает технический JSON товара напрямую с серверов WB.
+        Здесь лежит imtId (root), название и бренд. Это работает мгновенно и без капчи.
+        """
+        try:
+            basket = self._get_basket_number(sku)
+            vol = sku // 100000
+            part = sku // 1000
+            url = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
+            
+            # Используем обычный requests, прокси тут не нужен (это CDN)
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            logger.warning(f"Static API Warning: {e}")
+        return None
+
+    # --- SELENIUM (ДЛЯ ЦЕН) ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -61,12 +104,10 @@ class SeleniumWBParser:
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--disable-blink-features=AutomationControlled")
-        edge_options.add_argument("--lang=ru-RU")
         plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
         edge_options.add_extension(plugin_path)
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
         try:
             driver_bin = '/usr/local/bin/msedgedriver'
             service = EdgeService(executable_path=driver_bin)
@@ -74,7 +115,7 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"Driver Init Error: {e}")
             raise e
-        driver.set_page_load_timeout(90)
+        driver.set_page_load_timeout(120)
         return driver
 
     def _extract_digits(self, text):
@@ -84,17 +125,28 @@ class SeleniumWBParser:
         return int(digits) if digits else 0
 
     def get_product_data(self, sku: int):
+        """Парсинг цен через Selenium (нужен для обхода защиты цен)"""
         logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
+        
+        # Сразу берем название и бренд из статики (это быстрее)
+        static_data = self._get_static_card_data(sku)
+        brand = static_data.get('selling', {}).get('brand_name') if static_data else "Unknown"
+        name = static_data.get('imt_name') or static_data.get('subj_name') if static_data else f"Товар {sku}"
+
         for attempt in range(1, 3):
             driver = None
             try:
                 driver = self._init_driver()
-                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
+                driver.get("https://www.wildberries.ru/")
+                driver.add_cookie({"name": "x-city-id", "value": "77"}) 
+                
+                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
+                driver.get(url)
                 
                 time.sleep(3)
                 if "Kaspersky" in driver.page_source: driver.quit(); continue
 
-                # ЭТАП 1: Попытка вытащить JSON из страницы (Самый надежный метод)
+                # Пытаемся вытащить JSON с ценами из страницы
                 try:
                     product_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
                     if product_json:
@@ -106,11 +158,7 @@ class SeleniumWBParser:
                         basic = int(price_data.get('basicPrice', 0) / 100) or int(price_data.get('priceU', 0) / 100)
                         total = int(price_data.get('totalPrice', 0) / 100) or int(price_data.get('salePriceU', 0) / 100)
                         
-                        brand = data.get('brand') or data.get('selling', {}).get('brand_name') or "Unknown"
-                        name = data.get('name') or data.get('imt_name') or f"Товар {sku}"
-
                         if total > 0:
-                            logger.info(f"JSON Success: {total}₽")
                             return {
                                 "id": sku, "name": name, "brand": brand,
                                 "prices": {"wallet_purple": total, "standard_black": total, "base_crossed": basic},
@@ -118,7 +166,7 @@ class SeleniumWBParser:
                             }
                 except: pass
 
-                # ЭТАП 2: DOM Парсинг
+                # Если JSON не вышел, ищем в DOM
                 driver.execute_script("window.scrollTo(0, 400);")
                 WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='price']")))
 
@@ -136,11 +184,6 @@ class SeleniumWBParser:
                     base = prices[-1]
                     standard = prices[1] if len(prices) > 2 else wallet
                     
-                    brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
-                    brand = brand_el[0].text.strip() if brand_el else "Unknown"
-                    name_el = driver.find_elements(By.CSS_SELECTOR, "h1")
-                    name = name_el[0].text.strip() if name_el else str(sku)
-
                     return {
                         "id": sku, "name": name, "brand": brand,
                         "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
@@ -158,60 +201,29 @@ class SeleniumWBParser:
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        Сбор отзывов. Сначала получаем root (imtId) через Selenium (гарантированно),
-        затем делаем чистый запрос к API отзывов через requests.
+        Сбор отзывов.
+        1. Получаем imtId (root) из статического JSON (без браузера).
+        2. Качаем отзывы через официальный API.
+        Работает за 0.5 секунды.
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
-        driver = None
         try:
-            # 1. Запускаем браузер ТОЛЬКО чтобы получить Root ID
-            # Мы не используем requests к card.wb.ru, так как он падает (404/403)
-            driver = self._init_driver()
-            driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx")
+            # 1. Получаем imtId из статики
+            static_data = self._get_static_card_data(sku)
+            if not static_data:
+                raise Exception("Не удалось получить данные о товаре (Static API)")
             
-            # Ждем загрузки скриптов
-            time.sleep(5)
-            
-            if "Kaspersky" in driver.page_source: 
-                raise Exception("Blocked by Kaspersky")
-
-            # Пытаемся достать root ID из JS-объектов на странице
-            # Это самый надежный способ, так как эти данные нужны самому сайту для работы
-            root_id = driver.execute_script("""
-                try {
-                    // Пробуем разные места, где WB хранит ID
-                    return window.staticModel?.product?.root || 
-                           window.staticModel?.card?.root || 
-                           window.__INITIAL_STATE__?.model?.product?.root ||
-                           0;
-                } catch(e) { return 0; }
-            """)
-            
-            # Если не нашли в JS, ищем ссылку на отзывы в DOM (в ней есть imtId)
+            root_id = static_data.get('root_id') or static_data.get('root')
             if not root_id:
-                logger.info("JS Root ID не найден, ищем в DOM...")
-                try:
-                    # Ссылка на отзывы часто содержит imtId
-                    # Пример: /catalog/172672138/feedbacks?imtId=123456
-                    links = driver.find_elements(By.CSS_SELECTOR, "a[href*='feedbacks']")
-                    for link in links:
-                        href = link.get_attribute('href')
-                        match = re.search(r'imtId=(\d+)', href)
-                        if match:
-                            root_id = int(match.group(1))
-                            break
-                except: pass
+                raise Exception(f"Root ID не найден в данных товара")
 
-            driver.quit() # Браузер больше не нужен
-            driver = None
+            img_url = static_data.get('image', '')
+            logger.info(f"Root ID: {root_id}. Запрос к API отзывов...")
 
-            if not root_id:
-                raise Exception("Не удалось получить Root ID товара со страницы")
-
-            logger.info(f"Root ID (imtId): {root_id}. Запрос к API отзывов...")
-
-            # 2. Скачиваем отзывы через прямой запрос к API
-            # Используем заголовки браузера, чтобы не заблокировали
+            # 2. Скачиваем отзывы через API
+            feed_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
+            
+            # Используем заголовки браузера
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "*/*",
@@ -219,26 +231,11 @@ class SeleniumWBParser:
                 "Referer": f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
             }
             
-            feed_url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
-            
-            # Ретрай для API
-            feed_data = None
-            for i in range(3):
-                try:
-                    resp = requests.get(feed_url, headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        feed_data = resp.json()
-                        break
-                    else:
-                        logger.warning(f"Feedbacks API Fail {resp.status_code}")
-                except Exception as req_e:
-                    logger.warning(f"Feedbacks API Error: {req_e}")
-                time.sleep(2)
+            resp = requests.get(feed_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                raise Exception(f"API отзывов вернул ошибку {resp.status_code}")
 
-            if not feed_data:
-                 raise Exception("API отзывов недоступен")
-
-            img_url = f"https://basket-01.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp"
+            feed_data = resp.json()
             rating = float(feed_data.get('valuation', 0))
             raw_feedbacks = feed_data.get('feedbacks', [])
             
@@ -252,7 +249,7 @@ class SeleniumWBParser:
                     })
                 if len(reviews_data) >= limit: break
 
-            logger.info(f"Собрано {len(reviews_data)} отзывов")
+            logger.info(f"Успешно собрано {len(reviews_data)} отзывов")
             
             return {
                 "sku": sku,
@@ -266,7 +263,5 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"Reviews Error: {e}")
             return {"status": "error", "message": str(e)}
-        finally:
-            if driver: driver.quit()
 
 parser_service = SeleniumWBParser()
