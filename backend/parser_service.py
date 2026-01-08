@@ -11,8 +11,7 @@ from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 # Загрузка настроек из .env
 load_dotenv()
@@ -30,7 +29,8 @@ logger = logging.getLogger("WB-Parser")
 class SeleniumWBParser:
     """
     Микросервис парсинга Wildberries. 
-    Версия адаптирована для работы в Docker с детальным логированием и глубоким сканированием.
+    Версия с ротацией сессий, обходом Касперского и динамическим ожиданием.
+    Оптимизирована для работы внутри Docker с сохранением оригинальной логики.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -78,16 +78,17 @@ class SeleniumWBParser:
         return extension_path
 
     def _init_driver(self):
-        """Инициализация драйвера с использованием локального пути в Docker."""
+        """Инициализация драйвера с минимальными правками для Docker."""
         logger.info("Запуск инициализации Selenium драйвера...")
         edge_options = EdgeOptions()
         if self.headless:
             edge_options.add_argument("--headless=new")
         
-        # Обязательные флаги для стабильной работы в Docker
+        # --- КРИТИЧЕСКИЕ ПРАВКИ ДЛЯ DOCKER (не влияют на логику парсинга) ---
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
+        # -------------------------------------------------------------------
         
         plugin_path = self._create_proxy_auth_extension(
             self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port
@@ -101,13 +102,20 @@ class SeleniumWBParser:
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         try:
-            # Путь берется из Dockerfile
-            driver_bin = '/usr/local/bin/msedgedriver'
-            service = EdgeService(executable_path=driver_bin)
+            os.environ['WDM_LOG_LEVEL'] = '0'
+            # Проверяем наличие драйвера, установленного в Docker-образ
+            system_driver = '/usr/local/bin/msedgedriver'
+            if os.path.exists(system_driver):
+                logger.info("Использование локального драйвера сервера")
+                service = EdgeService(executable_path=system_driver)
+            else:
+                logger.info("Локальный драйвер не найден, запуск через WDM...")
+                service = EdgeService(EdgeChromiumDriverManager().install())
+            
             driver = webdriver.Edge(service=service, options=edge_options)
             logger.info("Драйвер Selenium успешно запущен")
         except Exception as e:
-            logger.error(f"Критическая ошибка инициализации драйвера: {e}")
+            logger.error(f"Ошибка инициализации драйвера: {e}")
             raise e
             
         driver.set_page_load_timeout(120)
@@ -123,8 +131,7 @@ class SeleniumWBParser:
                     txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
                 val = int(digits) if digits else 0
-                if val > 0:
-                    logger.info(f"Извлечена цена по селектору '{selector}': {val}")
+                logger.info(f"Извлечена цена по селектору '{selector}': {val}")
                 return val
         except Exception as e:
             logger.debug(f"Не удалось извлечь цену по селектору '{selector}': {e}")
@@ -132,95 +139,83 @@ class SeleniumWBParser:
         return 0
 
     def get_product_data(self, sku: int):
-        """Основной метод парсинга с ретраями и глубоким поиском."""
+        """Основной метод парсинга (логика полностью сохранена)."""
         logger.info(f"--- ЗАПРОС НА АНАЛИЗ SKU: {sku} ---")
         max_attempts = 3
         last_error = ""
 
-        # Актуальные селекторы WB
-        sel = {
-            "wallet": ".price-block__wallet-price, [class*='WalletPrice'], .product-line__price-wallet",
-            "final": "ins.price-block__final-price, .price-block__final-price, [class*='FinalPrice']",
-            "old": "del.price-block__old-price, .price-block__old-price, [class*='OldPrice']",
-            "brand": ".product-page__header-brand, .product-page__brand, span.brand, .product-page__brand-name",
-            "name": ".product-page__header-title, h1.product-page__title, .product-page__name"
-        }
+        price_selectors_list = [
+            "[class*='productLinePriceWallet']", "[class*='priceBlockWalletPrice']",
+            "[class*='productLinePriceNow']", "[class*='priceBlockFinalPrice']"
+        ]
 
         for attempt in range(1, max_attempts + 1):
             driver = None
             try:
                 logger.info(f"Попытка {attempt}/{max_attempts}...")
                 driver = self._init_driver()
+                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
                 
-                # Установка региона Москва (x-city-id: 77)
-                driver.get("https://www.wildberries.ru/")
-                driver.add_cookie({"name": "x-city-id", "value": "77"})
-                
-                # Параметр dest=-1257786 гарантирует московскую выдачу
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
                 logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
                 
-                # Ожидание загрузки (проверка блокировок)
-                if "Kaspersky" in driver.page_source or "Остановлен переход" in driver.title:
-                    logger.warning("Блокировка. Смена сессии...")
-                    driver.quit(); continue
+                # Проверка на блокировки
+                page_title = driver.title
+                if "Kaspersky" in driver.page_source or "Остановлен переход" in page_title:
+                    logger.warning(f"Попытка {attempt}: Обнаружена блокировка. Смена сессии...")
+                    driver.quit()
+                    continue
 
-                # Даем время на ленивую загрузку
-                time.sleep(3)
-                driver.execute_script("window.scrollTo(0, 500);")
+                logger.info("Ожидание появления цен...")
                 
-                # Ожидание появления контента
-                try:
-                    WebDriverWait(driver, 25).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, ".product-page__price-block, .price-block"))
-                    )
-                except:
-                    logger.warning("Контейнер цены не появился вовремя.")
+                # Ожидание загрузки цен
+                found = False
+                start_wait = time.time()
+                while time.time() - start_wait < 45:
+                    if any(driver.find_elements(By.CSS_SELECTOR, s) for s in price_selectors_list):
+                        found = True
+                        break
+                    time.sleep(2)
 
-                # Извлечение цен через селекторы
-                wallet = self._extract_price(driver, sel["wallet"])
-                standard = self._extract_price(driver, sel["final"])
-                base = self._extract_price(driver, sel["old"])
+                if found:
+                    logger.info(f"Цены обнаружены через {int(time.time() - start_wait)} сек.")
+                else:
+                    logger.warning("Цены не появились за отведенное время.")
 
-                # Глубокий JS-сканер, если селекторы не сработали
+                wallet = self._extract_price(driver, "[class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
+                standard = self._extract_price(driver, "[class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
+                base = self._extract_price(driver, "[class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
+
+                # Глубокий сканер (если стандартные классы не сработали)
                 if not standard and not wallet:
-                    logger.info("Стандартные селекторы не сработали. Запуск JS-сканера...")
-                    js_prices = driver.execute_script("""
-                        let res = [];
-                        document.querySelectorAll('.price-block__content, [class*="price"]').forEach(el => {
-                            let t = el.innerText || el.textContent;
-                            let m = t.match(/\\d[\\d\\s]{2,}/g);
-                            if (m) m.forEach(val => {
-                                let n = parseInt(val.replace(/\\s/g, ''));
-                                if (n > 100 && n < 1000000) res.push(n);
-                            });
-                        });
-                        return [...new Set(res)].sort((a,b) => a-b);
-                    """)
-                    if js_prices:
-                        logger.info(f"JS-сканер нашел: {js_prices}")
-                        wallet = js_prices[0]
-                        standard = js_prices[1] if len(js_prices) > 1 else js_prices[0]
-                        base = js_prices[-1] if len(js_prices) > 2 else 0
+                    logger.info("Стандартные классы цен не сработали. Запуск JS-сканера...")
+                    fallback_script = """
+                    let results = [];
+                    document.querySelectorAll('*').forEach(el => {
+                        let text = el.innerText || el.textContent;
+                        if (text && /\\d/.test(text) && text.length < 30) {
+                            let d = text.replace(/[^\\d]/g, '');
+                            if (d.length >= 3 && d.length <= 6) results.push(parseInt(d));
+                        }
+                    });
+                    return results;
+                    """
+                    all_nums = driver.execute_script(fallback_script)
+                    if all_nums:
+                        clean_nums = sorted(list(set([n for n in all_nums if n > 400])))
+                        logger.info(f"JS-сканер нашел числа: {clean_nums}")
+                        if clean_nums:
+                            wallet = clean_nums[0]
+                            base = clean_nums[-1]
+                            standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
 
-                # Если цен нет — ошибка
                 if not wallet and not standard:
-                    raise Exception("Цены не обнаружены на странице.")
+                    logger.error("Парсинг не удался: цены не обнаружены даже глубоким сканером.")
+                    raise Exception("Цены не обнаружены.")
 
-                # Безопасное извлечение бренда и названия
-                brand = "Не определен"
-                name = f"Товар {sku}"
-                
-                for b_sel in sel["brand"].split(','):
-                    els = driver.find_elements(By.CSS_SELECTOR, b_sel.strip())
-                    if els:
-                        brand = els[0].text.strip(); break
-                
-                for n_sel in sel["name"].split(','):
-                    els = driver.find_elements(By.CSS_SELECTOR, n_sel.strip())
-                    if els:
-                        name = els[0].text.strip(); break
+                logger.info("Извлечение информации о бренде и названии...")
+                brand = driver.find_element(By.CLASS_NAME, "product-page__header-brand").text
+                name = driver.find_element(By.CLASS_NAME, "product-page__header-title").text
 
                 logger.info(f"Успешно спарсено: {brand} | {name} | Wallet: {wallet}")
                 return {
@@ -231,12 +226,14 @@ class SeleniumWBParser:
 
             except Exception as e:
                 last_error = str(e)
-                logger.error(f"Ошибка на попытке {attempt}: {last_error}")
+                logger.error(f"Ошибка во время попытки {attempt}: {last_error}")
                 continue
             finally:
                 if driver: 
+                    logger.info("Закрытие драйвера")
                     driver.quit()
 
-        return {"id": sku, "status": "error", "message": f"Ошибка парсинга: {last_error}"}
+        logger.error(f"Все {max_attempts} попытки исчерпаны. Финальная ошибка: {last_error}")
+        return {"id": sku, "status": "error", "message": f"Ошибка на сервере: {last_error}"}
 
 parser_service = SeleniumWBParser()
