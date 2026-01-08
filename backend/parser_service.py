@@ -16,13 +16,8 @@ from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("WB-Parser")
-logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     def __init__(self):
@@ -55,7 +50,6 @@ class SeleniumWBParser:
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
-        edge_options.add_argument("--disable-blink-features=AutomationControlled")
         plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
         edge_options.add_extension(plugin_path)
         edge_options.add_argument("--window-size=1920,1080")
@@ -65,7 +59,7 @@ class SeleniumWBParser:
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
         except Exception as e:
-            logger.error(f"Driver Error: {e}")
+            logger.error(f"Driver Init Error: {e}")
             raise e
         driver.set_page_load_timeout(120)
         return driver
@@ -75,13 +69,15 @@ class SeleniumWBParser:
             elements = driver.find_elements(By.CSS_SELECTOR, selector)
             if elements:
                 txt = driver.execute_script("return arguments[0].textContent;", elements[0])
+                if not txt: txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
-                return int(digits) if digits else 0
+                val = int(digits) if digits else 0
+                return val
         except: return 0
         return 0
 
     def get_product_data(self, sku: int):
-        logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
+        logger.info(f"--- АНАЛИЗ SKU: {sku} ---")
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
             driver = None
@@ -93,32 +89,33 @@ class SeleniumWBParser:
                 
                 time.sleep(3)
                 driver.execute_script("window.scrollTo(0, 400);")
-                
                 if "Kaspersky" in driver.page_source: driver.quit(); continue
 
                 start = time.time()
                 found = False
-                while time.time() - start < 45:
+                while time.time() - start < 60:
                     if driver.find_elements(By.CSS_SELECTOR, "[class*='priceBlockFinalPrice']"): 
                         found = True; break
                     time.sleep(1)
 
-                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], [class*='productLinePriceWallet'], .price-block__wallet-price")
-                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], [class*='productLinePriceNow'], .price-block__final-price")
-                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], [class*='productLinePriceOld'], .price-block__old-price")
+                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], .price-block__wallet-price")
+                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], .price-block__final-price")
+                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], .price-block__old-price")
 
                 if not standard and not wallet:
                     js_prices = driver.execute_script("let r=[]; document.querySelectorAll('[class*=\"price\"]').forEach(e=>{let t=e.innerText; let m=t.match(/\\d[\\d\\s]{2,}/g); if(m) m.forEach(v=>{let n=parseInt(v.replace(/\\s/g,'')); if(n>100 && n<1000000) r.push(n)})}); return [...new Set(r)].sort((a,b)=>a-b);")
                     if js_prices:
-                        wallet = js_prices[0]
-                        standard = js_prices[1] if len(js_prices) > 1 else js_prices[0]
-                        base = js_prices[-1] if len(js_prices) > 2 else 0
+                        clean = sorted([n for n in js_prices if n > 400])
+                        if clean:
+                            wallet = clean[0]
+                            standard = clean[1] if len(clean) > 1 else clean[0]
+                            base = clean[-1] if len(clean) > 1 else 0
 
                 if wallet == 0: wallet = standard
                 if standard == 0: raise Exception("Price not found")
 
-                brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand, .product-page__brand, span.brand")
-                name_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-title, h1")
+                brand_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
+                name_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-title")
                 
                 return {
                     "id": sku, 
@@ -128,62 +125,73 @@ class SeleniumWBParser:
                     "status": "success"
                 }
             except Exception as e:
-                logger.error(f"Error: {e}")
+                logger.error(f"Error {attempt}: {e}")
                 continue
             finally:
                 if driver: driver.quit()
-        return {"id": sku, "status": "error", "message": "Failed to parse prices"}
+        return {"id": sku, "status": "error", "message": "Failed"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        НОВЫЙ МЕТОД: Парсинг отзывов для ИИ.
-        Использует расширенные селекторы.
+        Парсинг отзывов: Верстка + API Fallback
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         driver = None
         try:
             driver = self._init_driver()
-            url = f"https://www.wildberries.ru/catalog/{sku}/feedbacks?targetUrl=GP&dest=-1257786"
-            driver.get(url)
-            
+            # 1. Сначала пытаемся через UI
+            driver.get(f"https://www.wildberries.ru/catalog/{sku}/feedbacks?targetUrl=GP&dest=-1257786")
             time.sleep(5)
-            if "Kaspersky" in driver.page_source: raise Exception("Blocked by Kaspersky")
+            
+            img_url = ""
+            rating = 0.0
+            reviews_data = []
 
             # Скролл
-            for _ in range(3):
+            for _ in range(2):
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(2)
 
-            # Статика
-            img_url = ""
+            # Собираем статику
             try:
                 img = driver.find_elements(By.CSS_SELECTOR, ".photo-container__photo, .j-image-canvas, img[src*='images.wbstatic']")
                 if img: img_url = img[0].get_attribute("src")
-            except: pass
-
-            rating = 0.0
-            try:
-                rate = driver.find_elements(By.CSS_SELECTOR, ".product-review__rating, .rating-product__value, .user-activity__rating")
+                rate = driver.find_elements(By.CSS_SELECTOR, ".product-review__rating, .rating-product__value")
                 if rate: rating = float(rate[0].text.strip())
             except: pass
 
-            # Отзывы
-            reviews_data = []
-            # Обновленные селекторы для отзывов
-            review_cards = driver.find_elements(By.CSS_SELECTOR, ".comments__item, .feedback__item, .comments__item-wrap")
-            
-            for card in review_cards[:limit]:
+            # Собираем отзывы из HTML
+            cards = driver.find_elements(By.CSS_SELECTOR, ".comments__item, .feedback__item")
+            for card in cards[:limit]:
                 try:
-                    text_el = card.find_elements(By.CSS_SELECTOR, ".comments__text, .feedback__text, .j-feedback-text")
-                    if not text_el: continue
-                    text = text_el[0].text.strip()
-                    
-                    stars = len(card.find_elements(By.CSS_SELECTOR, ".star.star--active, .feedback__rating-star--active"))
-                    if stars == 0: stars = 5
-                    
-                    if text:
-                        reviews_data.append({"text": text, "rating": stars})
+                    txt = card.find_element(By.CSS_SELECTOR, ".comments__text, .feedback__text").text
+                    stars = len(card.find_elements(By.CSS_SELECTOR, ".star--active")) or 5
+                    if txt: reviews_data.append({"text": txt, "rating": stars})
                 except: continue
+
+            # 2. РЕЗЕРВНЫЙ ВАРИАНТ ЧЕРЕЗ API (если HTML пустой)
+            if not reviews_data:
+                logger.info("HTML пуст. Пробуем API injection...")
+                # Получаем rootId (imtId) товара
+                root_id_script = f"return fetch('https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}').then(r=>r.json()).then(d=>d.data.products[0].root)"
+                try:
+                    root_id = driver.execute_script(root_id_script)
+                    if root_id:
+                        # Качаем отзывы через внутренний API отзывов
+                        feed_script = f"return fetch('https://feedbacks1.wb.ru/feedbacks/v1/{root_id}').then(r=>r.json())"
+                        feed_data = driver.execute_script(feed_script)
+                        if feed_data and 'feedbacks' in feed_data:
+                            for f in feed_data['feedbacks'][:limit]:
+                                reviews_data.append({
+                                    "text": f.get('text', ''),
+                                    "rating": f.get('productValuation', 5)
+                                })
+                            if not rating: rating = float(feed_data.get('valuation', 0))
+                except Exception as api_e:
+                    logger.error(f"API Fallback failed: {api_e}")
+
+            if not reviews_data:
+                raise Exception("Не удалось получить отзывы ни одним способом")
 
             return {
                 "sku": sku,
