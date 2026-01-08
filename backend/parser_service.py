@@ -16,7 +16,6 @@ from selenium.webdriver.common.by import By
 load_dotenv()
 
 # Настройка расширенного логирования
-# Мы добавляем вывод в stdout, чтобы логи были видны в `docker logs`
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
@@ -83,8 +82,6 @@ class SeleniumWBParser:
         if self.headless:
             edge_options.add_argument("--headless=new")
         
-        # Обязательные флаги для стабильной работы в Docker
-        logger.info("Установка Docker-специфичных флагов для Edge")
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
@@ -101,11 +98,7 @@ class SeleniumWBParser:
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         try:
-            # Путь берется из Dockerfile: /usr/local/bin/msedgedriver
             driver_bin = '/usr/local/bin/msedgedriver'
-            if not os.path.exists(driver_bin):
-                logger.warning(f"Бинарный файл драйвера не найден по пути {driver_bin}. Selenium может попытаться найти его в PATH.")
-            
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
             logger.info("Драйвер Selenium успешно запущен")
@@ -139,9 +132,22 @@ class SeleniumWBParser:
         max_attempts = 3
         last_error = ""
 
+        # Список селекторов для цен
         price_selectors_list = [
             "[class*='productLinePriceWallet']", "[class*='priceBlockWalletPrice']",
             "[class*='productLinePriceNow']", "[class*='priceBlockFinalPrice']"
+        ]
+
+        # Список селекторов для бренда
+        brand_selectors = [
+            ".product-page__header-brand", ".product-page__brand", 
+            "span.brand", "[data-link*='brandName']"
+        ]
+
+        # Список селекторов для названия
+        name_selectors = [
+            ".product-page__header-title", "h1.product-page__title",
+            "h1", ".product-page__name"
         ]
 
         for attempt in range(1, max_attempts + 1):
@@ -154,16 +160,14 @@ class SeleniumWBParser:
                 logger.info(f"Загрузка страницы: {url}")
                 driver.get(url)
                 
-                # Проверка на блокировки
                 page_title = driver.title
                 if "Kaspersky" in driver.page_source or "Остановлен переход" in page_title:
-                    logger.warning(f"Попытка {attempt}: Обнаружена блокировка (Заголовок: {page_title}). Смена сессии...")
+                    logger.warning(f"Попытка {attempt}: Блокировка Касперским. Смена сессии...")
                     driver.quit()
                     continue
 
                 logger.info("Страница загружена. Ожидание появления цен...")
                 
-                # Ожидание загрузки цен
                 found = False
                 start_wait = time.time()
                 while time.time() - start_wait < 45:
@@ -205,12 +209,26 @@ class SeleniumWBParser:
                             standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
 
                 if not wallet and not standard:
-                    logger.error("Парсинг не удался: цены не обнаружены даже глубоким сканером.")
+                    logger.error("Парсинг не удался: цены не обнаружены.")
                     raise Exception("Цены не обнаружены.")
 
                 logger.info("Извлечение информации о бренде и названии...")
-                brand = driver.find_element(By.CLASS_NAME, "product-page__header-brand").text
-                name = driver.find_element(By.CLASS_NAME, "product-page__header-title").text
+                brand = "Не определен"
+                name = f"Товар {sku}"
+
+                # Безопасное извлечение бренда
+                for s in brand_selectors:
+                    els = driver.find_elements(By.CSS_SELECTOR, s)
+                    if els:
+                        brand = els[0].text.strip()
+                        break
+                
+                # Безопасное извлечение названия
+                for s in name_selectors:
+                    els = driver.find_elements(By.CSS_SELECTOR, s)
+                    if els:
+                        name = els[0].text.strip()
+                        break
 
                 logger.info(f"Успешно спарсено: {brand} | {name} | Wallet: {wallet}")
                 return {
@@ -228,7 +246,7 @@ class SeleniumWBParser:
                     logger.info("Закрытие драйвера")
                     driver.quit()
 
-        logger.error(f"Все {max_attempts} попытки исчерпаны. Финальная ошибка: {last_error}")
+        logger.error(f"Все попытки исчерпаны. Финальная ошибка: {last_error}")
         return {"id": sku, "status": "error", "message": f"Ошибка на сервере: {last_error}"}
 
 parser_service = SeleniumWBParser()
