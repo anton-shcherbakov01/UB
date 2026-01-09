@@ -79,7 +79,7 @@ async def create_payment(req: PaymentRequest, user: User = Depends(get_current_u
         "status": "created",
         "amount": prices[req.plan_id],
         "message": f"Для оплаты тарифа {req.plan_id.upper()} переведите {prices[req.plan_id]}₽ по реквизитам ИП...",
-        "manager_link": "https://t.me/AntonShch" # Ссылка на вас для ручной активации
+        "manager_link": "https://t.me/AAntonShch" # Ссылка на вас для ручной активации
     }
 
 @app.get("/api/user/tariffs")
