@@ -103,13 +103,13 @@ const HistoryDetailsModal = ({ item, onClose }) => {
                         <div className="space-y-2">
                              <h4 className="font-bold text-red-500 text-sm">Жалобы:</h4>
                              <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                 {data.ai_analysis.flaws?.map((f,i) => <li key={i}>{f}</li>)}
+                                 {data.ai_analysis.flaws?.length > 0 ? data.ai_analysis.flaws.map((f,i) => <li key={i}>{f}</li>) : <li>Нет явных жалоб</li>}
                              </ul>
                         </div>
                         <div className="space-y-2">
                              <h4 className="font-bold text-indigo-600 text-sm">Стратегия:</h4>
                              <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                 {data.ai_analysis.strategy?.map((s,i) => <li key={i}>{s}</li>)}
+                                 {data.ai_analysis.strategy?.length > 0 ? data.ai_analysis.strategy.map((s,i) => <li key={i}>{s}</li>) : <li>Мало данных для анализа</li>}
                              </ul>
                         </div>
                     </div>
@@ -210,13 +210,11 @@ const ScannerPage = ({ onNavigate }) => {
 
       let attempts = 0;
       while (attempts < 60) {
-        await new Promise(r => setTimeout(r, 3000));
-        // Removed explicit status update here to avoid overriding backend status with static text
+        await new Promise(r => setTimeout(r, 2000));
         
         const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
         const statusData = await statusRes.json();
         
-        // Update only if changed
         if (statusData.info && statusData.info !== status) {
             setStatus(statusData.info);
         }
@@ -275,6 +273,7 @@ const MonitorPage = () => {
   const [list, setList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   const fetchList = async () => {
       try {
@@ -308,9 +307,37 @@ const MonitorPage = () => {
   };
 
   const downloadReport = async (sku) => {
-      // Открываем в новом окне, чтобы браузер начал скачивание
-      const token = window.Telegram?.WebApp?.initData || "";
-      window.open(`${API_URL}/api/report/pdf/${sku}?x_tg_data=${encodeURIComponent(token)}`, '_blank');
+      setDownloading(true);
+      try {
+          const token = window.Telegram?.WebApp?.initData || "";
+          // Сначала делаем запрос через JS, чтобы поймать ошибку (403)
+          const response = await fetch(`${API_URL}/api/report/pdf/${sku}`, {
+              headers: { 'X-TG-Data': token }
+          });
+
+          if (response.status === 403) {
+              alert("Эта функция доступна только в тарифе PRO или Business");
+              setDownloading(false);
+              return;
+          }
+
+          if (!response.ok) throw new Error("Ошибка загрузки");
+
+          // Если ОК, скачиваем Blob
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `report_${sku}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+      } catch (e) {
+          alert("Не удалось скачать отчет");
+      } finally {
+          setDownloading(false);
+      }
   };
 
   return (
@@ -332,8 +359,12 @@ const MonitorPage = () => {
                 </div>
                 
                 <div className="flex gap-2 mb-4">
-                    <button onClick={() => downloadReport(historyData.sku)} className="flex-1 bg-slate-900 text-white py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform">
-                        <FileDown size={16} /> Скачать PDF
+                    <button 
+                        onClick={() => downloadReport(historyData.sku)} 
+                        disabled={downloading}
+                        className="flex-1 bg-slate-900 text-white py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-70"
+                    >
+                        {downloading ? <Loader2 size={16} className="animate-spin" /> : <><FileDown size={16} /> Скачать PDF</>}
                     </button>
                 </div>
 
@@ -684,7 +715,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none">
+    <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">
       {renderContent()}
       <TabNav active={activeTab} setTab={setActiveTab} isAdmin={user?.is_admin} />
     </div>
