@@ -28,8 +28,7 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
             parsed = dict(parse_qsl(x_tg_data))
             if 'user' in parsed: user_data_dict = json.loads(parsed['user'])
         except: pass
-    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True": 
-        user_data_dict = {"id": 111111, "username": "test", "first_name": "Tester"}
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True": user_data_dict = {"id": 111111, "username": "test", "first_name": "Tester"}
     
     if not user_data_dict: raise HTTPException(401, "Unauthorized")
     
@@ -54,161 +53,76 @@ async def get_profile(user: User = Depends(get_current_user)):
 
 @app.get("/api/user/history")
 async def get_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Получить историю запросов"""
     res = await db.execute(select(SearchHistory).where(SearchHistory.user_id == user.id).order_by(SearchHistory.created_at.desc()).limit(50))
     return res.scalars().all()
 
 @app.delete("/api/user/history")
 async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Очистить историю"""
     await db.execute(delete(SearchHistory).where(SearchHistory.user_id == user.id))
     await db.commit()
     return {"status": "cleared"}
 
 @app.get("/api/user/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
-    """Отдает список тарифов"""
     return [
-        {
-            "id": "free",
-            "name": "Старт",
-            "price": "0 ₽",
-            "features": ["3 товара в мониторинге", "AI Анализ (30 отзывов)", "История цен"],
-            "current": user.subscription_plan == "free",
-            "color": "slate"
-        },
-        {
-            "id": "pro",
-            "name": "PRO Seller",
-            "price": "990 ₽",
-            "features": ["50 товаров в мониторинге", "AI Анализ (100 отзывов)", "Приоритетная очередь", "Экспорт отчетов"],
-            "current": user.subscription_plan == "pro",
-            "color": "indigo",
-            "is_best": True
-        }
+        {"id": "free", "name": "Старт", "price": "0 ₽", "features": ["3 товара", "AI (30 отзывов)"], "current": user.subscription_plan == "free"},
+        {"id": "pro", "name": "PRO", "price": "990 ₽", "features": ["50 товаров", "AI (100 отзывов)"], "current": user.subscription_plan == "pro", "is_best": True}
     ]
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     limit = 3 if user.subscription_plan == "free" else 50
     if len(user.items) >= limit: raise HTTPException(403, f"Лимит тарифа исчерпан")
-    
     stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
     if (await db.execute(stmt)).scalars().first(): return {"status": "exists"}
-
     db.add(MonitoredItem(user_id=user.id, sku=sku, name="Загрузка..."))
     await db.commit()
-    
-    # Передаем user.id для истории
     task = parse_and_save_sku.delay(sku, user.id)
     return {"status": "accepted", "task_id": task.id}
 
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Получить список товаров текущего пользователя"""
-    # Здесь user.items уже загружен в память (благодаря selectinload в get_current_user),
-    # но если мы хотим сортировку или фильтрацию, лучше сделать отдельный запрос.
-    result = await db.execute(
-        select(MonitoredItem)
-        .where(MonitoredItem.user_id == user.id)
-        .order_by(MonitoredItem.id.desc())
-    )
+    result = await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id).order_by(MonitoredItem.id.desc()))
     return result.scalars().all()
 
 @app.delete("/api/monitor/delete/{sku}")
 async def delete_item(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Удалить товар"""
-    stmt = delete(MonitoredItem).where(
-        MonitoredItem.user_id == user.id,
-        MonitoredItem.sku == sku
-    )
-    await db.execute(stmt)
+    await db.execute(delete(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))
     await db.commit()
     return {"status": "deleted"}
 
 @app.get("/api/monitor/history/{sku}")
 async def get_history(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Получить историю цен"""
-    item_res = await db.execute(
-        select(MonitoredItem).where(
-            MonitoredItem.user_id == user.id,
-            MonitoredItem.sku == sku
-        )
-    )
-    item = item_res.scalars().first()
-    
-    if not item:
-        raise HTTPException(status_code=404, detail="Товар не найден в вашем списке")
-        
-    history_res = await db.execute(
-        select(PriceHistory)
-        .where(PriceHistory.item_id == item.id)
-        .order_by(PriceHistory.recorded_at.asc())
-    )
-    history = history_res.scalars().all()
-    
-    return {
-        "sku": sku,
-        "name": item.name,
-        "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price} for h in history]
-    }
-
-# --- AI ENDPOINTS ---
+    item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
+    if not item: raise HTTPException(404, "Not found")
+    history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.asc()))).scalars().all()
+    return {"sku": sku, "name": item.name, "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price} for h in history]}
 
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
-    # Передаем user.id для истории
     task = analyze_reviews_task.delay(sku, limit, user.id)
     return {"status": "accepted", "task_id": task.id}
 
 @app.get("/api/ai/result/{task_id}")
 async def get_ai_result(task_id: str):
-    """Получение результата ИИ"""
-    from celery.result import AsyncResult
-    from celery_app import celery_app
-    
-    task_result = AsyncResult(task_id, app=celery_app)
-    response = {"task_id": task_id, "status": task_result.status}
-    
-    if task_result.status == 'SUCCESS':
-        response["data"] = task_result.result
-    elif task_result.status == 'FAILURE':
-        response["error"] = str(task_result.result)
-    elif task_result.status == 'PROGRESS':
-        response["info"] = task_result.info.get('status', 'В процессе...')
-    
-    return response
-
-# --- SYSTEM & ADMIN ---
-from celery.result import AsyncResult
-from celery_app import celery_app
+    res = AsyncResult(task_id, app=celery_app)
+    resp = {"task_id": task_id, "status": res.status}
+    if res.status == 'SUCCESS': resp["data"] = res.result
+    elif res.status == 'FAILURE': resp["error"] = str(res.result)
+    elif res.status == 'PROGRESS': resp["info"] = res.info.get('status')
+    return resp
 
 @app.get("/api/monitor/status/{task_id}")
-async def get_task_status(task_id: str):
-    task_result = AsyncResult(task_id, app=celery_app)
-    response = {"task_id": task_id, "status": task_result.status}
-    if task_result.status == 'SUCCESS':
-        response["result"] = task_result.result
-    elif task_result.status == 'FAILURE':
-        response["error"] = str(task_result.result)
-    elif task_result.status == 'PROGRESS':
-         response["info"] = task_result.info.get('status', 'В процессе...')
-    return response
+async def get_status(task_id: str):
+    return await get_ai_result(task_id)
 
 @app.get("/api/admin/stats")
 async def admin_stats(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if not user.is_admin:
-        raise HTTPException(403, "Доступ запрещен")
-    
-    users_count = (await db.execute(select(User))).scalars().all()
-    items_count = (await db.execute(select(MonitoredItem))).scalars().all()
-    
-    return {
-        "total_users": len(users_count),
-        "total_items_monitored": len(items_count),
-        "server_status": "OK"
-    }
+    if not user.is_admin: raise HTTPException(403, "Forbidden")
+    users = (await db.execute(select(User))).scalars().all()
+    items = (await db.execute(select(MonitoredItem))).scalars().all()
+    return {"total_users": len(users), "total_items_monitored": len(items), "server_status": "OK"}
 
 if __name__ == "__main__":
     import uvicorn

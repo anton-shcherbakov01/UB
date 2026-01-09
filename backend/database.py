@@ -5,7 +5,9 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy import create_engine
 from datetime import datetime
 
+# URL для Async (FastAPI)
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor")
+# URL для Sync (Celery)
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
@@ -27,6 +29,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
+    # Связь с историей
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
 
 class MonitoredItem(Base):
@@ -50,14 +53,16 @@ class PriceHistory(Base):
     recorded_at = Column(DateTime, default=datetime.utcnow)
     item = relationship("MonitoredItem", back_populates="prices")
 
+# НОВАЯ ТАБЛИЦА: История запросов
 class SearchHistory(Base):
     __tablename__ = "search_history"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(Integer)
-    type = Column(String) # 'price' или 'ai'
-    title = Column(String) # Название товара или результат
+    request_type = Column(String) # 'price' или 'ai'
+    title = Column(String, nullable=True) # Краткий результат (цена или рейтинг)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
     user = relationship("User", back_populates="history")
 
 async def init_db():
