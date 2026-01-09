@@ -19,14 +19,15 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      # ВАЖНО: Указываем правильного юзера для проверки
       test: ["CMD-SHELL", "pg_isready -U wb_user -d wb_monitor"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   api:
-    build: ./backend
+    build:
+      context: ./backend      # Контекст сборки - папка backend
+      dockerfile: Dockerfile  # Имя Dockerfile внутри контекста
     container_name: wb_api
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes:
@@ -50,7 +51,9 @@ services:
         condition: service_started
 
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: wb_worker
     environment:
       - C_FORCE_ROOT=1
@@ -72,7 +75,9 @@ services:
         condition: service_started
 
   beat:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: wb_beat
     environment:
       - REDIS_URL=redis://redis:6379/0

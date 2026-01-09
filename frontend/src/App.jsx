@@ -13,14 +13,14 @@ const API_URL = "https://api.ulike-bot.ru";
 // --- КОМПОНЕНТЫ ---
 
 const TabNav = ({ active, setTab, isAdmin }) => (
-  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-4 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <LayoutGrid size={24} strokeWidth={active === 'home' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">Главная</span>
-    </button>
+  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
     <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={24} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[10px] font-bold">Цены</span>
+    </button>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
+      <span className="text-[10px] font-bold">ИИ</span>
     </button>
     
     <div className="relative -top-6 w-1/5 flex justify-center">
@@ -32,18 +32,20 @@ const TabNav = ({ active, setTab, isAdmin }) => (
         </button>
     </div>
 
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">ИИ</span>
-    </button>
-    
+    {/* КНОПКА ИСТОРИИ */}
     <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
        <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
        <span className="text-[10px] font-bold">История</span>
-     </button>
+    </button>
+    
+    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <User size={24} strokeWidth={active === 'profile' ? 2.5 : 2} />
+      <span className="text-[10px] font-bold">Профиль</span>
+    </button>
   </div>
 );
 
+// ... (TariffCard без изменений) ...
 const TariffCard = ({ plan }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
     {plan.is_best && (
@@ -53,7 +55,6 @@ const TariffCard = ({ plan }) => (
     )}
     <h3 className={`text-xl font-black uppercase ${plan.is_best ? 'text-indigo-700' : 'text-slate-800'}`}>{plan.name}</h3>
     <div className="text-3xl font-black mt-2 mb-4 text-slate-900">{plan.price}</div>
-    
     <ul className="space-y-3 mb-6">
       {plan.features.map((f, i) => (
         <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
@@ -62,14 +63,13 @@ const TariffCard = ({ plan }) => (
         </li>
       ))}
     </ul>
-    
     <button className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
       {plan.current ? 'Ваш текущий план' : 'Перейти'}
     </button>
   </div>
 );
 
-// --- СТРАНИЦЫ ---
+// ... (HomePage, ScannerPage, MonitorPage, AIAnalysisPage - оставляем как были) ...
 
 const HomePage = ({ onNavigate }) => (
   <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
@@ -80,16 +80,12 @@ const HomePage = ({ onNavigate }) => (
             <span className="text-xs font-bold uppercase tracking-widest">WB Analytics Pro</span>
         </div>
         <h1 className="text-3xl font-black mb-4 leading-tight">Управляйте продажами умно</h1>
-        <p className="opacity-90 text-sm mb-6 font-medium max-w-[80%]">Мониторинг цен, анализ конкурентов и стратегии от ИИ в одном приложении.</p>
         <button onClick={() => onNavigate('scanner')} className="bg-white text-indigo-600 px-6 py-3.5 rounded-2xl font-bold text-sm shadow-lg active:scale-95 transition-transform flex items-center gap-2">
           <Plus size={18} />
           Добавить товар
         </button>
       </div>
-      <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
-      <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
     </div>
-
     <h2 className="text-lg font-bold px-2 text-slate-800">Инструменты</h2>
     <div className="grid grid-cols-2 gap-4">
       <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -167,12 +163,8 @@ const ScannerPage = ({ onNavigate }) => {
     <div className="p-4 flex flex-col h-[80vh] justify-center animate-in zoom-in-95 duration-300">
       <div className="bg-white p-8 rounded-[40px] shadow-2xl shadow-indigo-100 border border-slate-100">
         <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Search size={32} />
-            </div>
             <h2 className="text-2xl font-black text-slate-800">Добавить товар</h2>
         </div>
-
         <div className="relative mb-4">
           <input
             type="number"
@@ -355,7 +347,6 @@ const AIAnalysisPage = () => {
                 <h1 className="text-2xl font-black flex items-center gap-2">
                     <Sparkles className="text-yellow-300" /> AI Стратег
                 </h1>
-                <p className="opacity-90 text-sm mt-2 font-medium">Я прочту тысячи отзывов за секунду и скажу, как победить конкурента.</p>
                 
                 <div className="mt-6 relative">
                     <input 
@@ -421,6 +412,61 @@ const AIAnalysisPage = () => {
     );
 };
 
+// --- КОМПОНЕНТ ИСТОРИИ ---
+const HistoryPage = () => {
+    const [history, setHistory] = useState([]);
+    
+    const loadHistory = () => {
+        fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
+            .then(r => r.json())
+            .then(setHistory)
+            .catch(console.error);
+    };
+
+    const clearHistory = async () => {
+        if(!confirm("Очистить историю?")) return;
+        await fetch(`${API_URL}/api/user/history`, { 
+            method: 'DELETE', 
+            headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} 
+        });
+        loadHistory();
+    };
+
+    useEffect(() => { loadHistory(); }, []);
+
+    return (
+        <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex justify-between items-center px-2">
+                <h2 className="text-xl font-bold text-slate-800">История запросов</h2>
+                {history.length > 0 && (
+                    <button onClick={clearHistory} className="text-red-500 text-xs font-bold uppercase active:scale-95 transition-transform">Очистить</button>
+                )}
+            </div>
+            
+            <div className="space-y-3">
+                {history.length === 0 ? (
+                    <div className="text-center p-12 bg-white rounded-3xl border border-dashed border-slate-200">
+                        <p className="text-slate-400 font-bold text-sm">История пуста</p>
+                    </div>
+                ) : (
+                    history.map((h) => (
+                        <div key={h.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.request_type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                {h.request_type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
+                            </div>
+                            <div>
+                                <div className="font-bold text-sm">SKU {h.sku}</div>
+                                <div className="text-xs text-slate-500 truncate max-w-[200px]">{h.title}</div>
+                                <div className="text-[10px] text-slate-300 mt-1">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
+
 const ProfilePage = () => {
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
@@ -440,6 +486,9 @@ const ProfilePage = () => {
                 <div>
                     <h2 className="text-xl font-bold">{user?.name || 'Гость'}</h2>
                     <p className="text-sm text-slate-400">@{user?.username}</p>
+                    <div className="mt-2 inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
+                        {user?.plan || 'Free'} Plan
+                    </div>
                 </div>
             </div>
 
@@ -451,63 +500,12 @@ const ProfilePage = () => {
             </div>
             
             {user?.is_admin && (
-                 <div className="bg-slate-900 text-white p-6 rounded-3xl cursor-pointer">
+                 <div className="bg-slate-900 text-white p-6 rounded-3xl cursor-pointer shadow-xl shadow-slate-200">
                      <h3 className="font-bold mb-2">Админ-панель</h3>
                      <p className="text-sm text-slate-400 mb-4">Управление пользователями и статистикой</p>
                      <button className="w-full bg-white text-black py-3 rounded-xl font-bold">Открыть статистику</button>
                  </div>
             )}
-        </div>
-    );
-};
-
-const HistoryPage = () => {
-    const [history, setHistory] = useState([]);
-    
-    const loadHistory = () => {
-        fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
-            .then(r => r.json())
-            .then(setHistory);
-    };
-
-    const clearHistory = async () => {
-        if(!confirm("Очистить историю?")) return;
-        await fetch(`${API_URL}/api/user/history`, { 
-            method: 'DELETE', 
-            headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} 
-        });
-        loadHistory();
-    };
-
-    useEffect(() => { loadHistory(); }, []);
-
-    return (
-        <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
-            <div className="flex justify-between items-center px-2">
-                <h2 className="text-xl font-bold text-slate-800">История запросов</h2>
-                {history.length > 0 && (
-                    <button onClick={clearHistory} className="text-red-500 text-xs font-bold uppercase">Очистить</button>
-                )}
-            </div>
-            
-            <div className="space-y-3">
-                {history.length === 0 ? (
-                    <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">История пуста</div>
-                ) : (
-                    history.map((h) => (
-                        <div key={h.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                {h.type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
-                            </div>
-                            <div>
-                                <div className="font-bold text-sm">SKU {h.sku}</div>
-                                <div className="text-xs text-slate-500 truncate max-w-[200px]">{h.title}</div>
-                                <div className="text-[10px] text-slate-300 mt-1">{new Date(h.created_at).toLocaleString()}</div>
-                            </div>
-                        </div>
-                    ))
-                )}
-            </div>
         </div>
     );
 };
