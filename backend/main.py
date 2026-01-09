@@ -35,7 +35,7 @@ app.add_middleware(
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN", ""))
 
-# Список ID супер-админов (Anton)
+# ID Супер-админа (Anton)
 SUPER_ADMIN_IDS = [901378787]
 
 async def get_current_user(
@@ -54,7 +54,7 @@ async def get_current_user(
         except Exception as e: 
             logger.error(f"Auth parse error: {e}")
 
-    # Fallback для тестов
+    # Fallback
     if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
          user_data_dict = {"id": 901378787, "username": "debug_user", "first_name": "Debug"}
 
@@ -62,12 +62,11 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     tg_id = user_data_dict.get('id')
-    
     stmt = select(User).where(User.telegram_id == tg_id)
     result = await db.execute(stmt)
     user = result.scalars().first()
 
-    # FORCE ADMIN FOR ANTON
+    # FORCE ADMIN RIGHTS
     is_super = tg_id in SUPER_ADMIN_IDS
 
     if not user:
@@ -82,10 +81,11 @@ async def get_current_user(
         await db.commit()
         await db.refresh(user)
     else:
-        # Если юзер уже есть, но это Антон - обновляем права
+        # Если юзер уже есть, обновляем права
         if is_super and (not user.is_admin or user.subscription_plan != "business"):
             user.is_admin = True
             user.subscription_plan = "business"
+            db.add(user)
             await db.commit()
             await db.refresh(user)
     
@@ -108,7 +108,7 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "items_count": count
     }
 
-# --- MONITORING ENDPOINTS ---
+# --- MONITORING ---
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     limits = {"free": 3, "pro": 50, "business": 500}
@@ -138,7 +138,6 @@ async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession 
     
     data = []
     for i in items:
-        # Оптимизированный запрос последней цены
         last_price_stmt = select(PriceHistory).where(PriceHistory.item_id == i.id).order_by(PriceHistory.recorded_at.desc()).limit(1)
         lp = (await db.execute(last_price_stmt)).scalars().first()
         
@@ -177,7 +176,7 @@ async def get_status(task_id: str):
     elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
     return resp
 
-# --- AI ENDPOINTS ---
+# --- AI ---
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
@@ -188,7 +187,7 @@ async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
 async def get_ai_result(task_id: str):
     return await get_status(task_id)
 
-# --- HISTORY ENDPOINTS ---
+# --- HISTORY ---
 @app.get("/api/user/history")
 async def get_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(SearchHistory).where(SearchHistory.user_id == user.id).order_by(SearchHistory.created_at.desc()).limit(50))
@@ -222,24 +221,17 @@ async def get_tariffs(user: User = Depends(get_current_user)):
         {"id": "business", "name": "Business", "price": "2990 ₽", "features": ["500 товаров", "Безлимит AI", "Приоритет", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
     ]
 
-# --- ADMIN STATS ---
+# --- ADMIN ---
 @app.get("/api/admin/stats")
 async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user.is_admin: raise HTTPException(403, "Forbidden")
-    
-    users_count = (await db.execute(select(func.count(User.id)))).scalar()
-    items_count = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
-    
-    return {
-        "total_users": users_count,
-        "total_items_monitored": items_count,
-        "server_status": "Online (v1.2)"
-    }
+    users = (await db.execute(select(func.count(User.id)))).scalar()
+    items = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
+    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.2)"}
 
-# --- PDF REPORT ---
+# --- PDF REPORT (FIXED) ---
 @app.get("/api/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    # Только PRO и BUSINESS
     if user.subscription_plan == "free":
         raise HTTPException(403, "Upgrade to PRO")
 
@@ -250,21 +242,20 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
 
     pdf = FPDF()
     pdf.add_page()
-    # Стандартный шрифт (Dejavu нужен для кириллицы, но если его нет в докере, юзаем Arial)
-    # В Dockerfile мы добавили fonts-dejavu, поэтому используем его
     try:
+        # Используем шрифт, который точно есть в контейнере
         pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
         pdf.set_font('DejaVu', '', 14)
     except:
         pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, txt=f"Otchet: {item.name[:40]} ({sku})", ln=1, align='C')
+    pdf.cell(0, 10, txt=f"Report: {item.name[:40]} ({sku})", ln=1, align='C')
     pdf.ln(5)
     
     pdf.set_font_size(10)
     pdf.cell(60, 10, "Date", 1)
-    pdf.cell(40, 10, "Wallet Price", 1)
-    pdf.cell(40, 10, "Regular Price", 1)
+    pdf.cell(40, 10, "Wallet", 1)
+    pdf.cell(40, 10, "Regular", 1)
     pdf.ln()
 
     for h in history:
@@ -273,8 +264,15 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         pdf.cell(40, 10, f"{h.standard_price}", 1)
         pdf.ln()
 
+    # FIX: FPDF2 output() returns bytes/bytearray in newer versions, no encode needed
+    pdf_content = pdf.output(dest='S')
+    if isinstance(pdf_content, str):
+        pdf_bytes = pdf_content.encode('latin-1') 
+    else:
+        pdf_bytes = pdf_content
+
     return StreamingResponse(
-        io.BytesIO(pdf.output(dest='S').encode('latin-1')), 
+        io.BytesIO(pdf_bytes), 
         media_type='application/pdf', 
         headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
     )

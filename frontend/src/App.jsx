@@ -211,6 +211,7 @@ const ScannerPage = ({ onNavigate }) => {
       let attempts = 0;
       while (attempts < 60) {
         await new Promise(r => setTimeout(r, 2000));
+        // Removed explicit setStatus here to prevent flickering
         
         const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
         const statusData = await statusRes.json();
@@ -310,7 +311,6 @@ const MonitorPage = () => {
       setDownloading(true);
       try {
           const token = window.Telegram?.WebApp?.initData || "";
-          // Сначала делаем запрос через JS, чтобы поймать ошибку (403)
           const response = await fetch(`${API_URL}/api/report/pdf/${sku}`, {
               headers: { 'X-TG-Data': token }
           });
@@ -323,7 +323,6 @@ const MonitorPage = () => {
 
           if (!response.ok) throw new Error("Ошибка загрузки");
 
-          // Если ОК, скачиваем Blob
           const blob = await response.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -704,14 +703,16 @@ export default function App() {
   }, []);
 
   const renderContent = () => {
-      if (activeTab === 'home') return <HomePage onNavigate={setActiveTab} />;
-      if (activeTab === 'scanner') return <ScannerPage onNavigate={setActiveTab} />;
-      if (activeTab === 'monitor') return <MonitorPage />;
-      if (activeTab === 'ai') return <AIAnalysisPage />;
-      if (activeTab === 'profile') return <ProfilePage onNavigate={setActiveTab} />;
-      if (activeTab === 'history') return <HistoryPage />;
-      if (activeTab === 'admin') return <AdminPage onBack={() => setActiveTab('profile')} />;
-      return null;
+      switch(activeTab) {
+          case 'home': return <HomePage onNavigate={setActiveTab} />;
+          case 'scanner': return <ScannerPage onNavigate={setActiveTab} />;
+          case 'monitor': return <MonitorPage />;
+          case 'ai': return <AIAnalysisPage />;
+          case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
+          case 'history': return <HistoryPage />;
+          case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;
+          default: return <HomePage onNavigate={setActiveTab} />;
+      }
   };
 
   return (
