@@ -1,7 +1,8 @@
 FROM python:3.9-slim
 
-# 1. Установка системных утилит, ШРИФТОВ и ключей Microsoft
-# Добавлен пакет fonts-dejavu — это те самые шрифты для PDF, но из официального репозитория
+# 1. Установка системных утилит, ШРИФТОВ (fonts-dejavu) и самого БРАУЗЕРА Edge
+# fonts-dejavu — решает проблему с квадратиками в PDF
+# microsoft-edge-stable — сам браузер, который нужен для Selenium
 RUN apt-get update && apt-get install -y \
     wget gnupg unzip curl fontconfig fonts-dejavu \
     && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft.gpg \
@@ -9,16 +10,12 @@ RUN apt-get update && apt-get install -y \
     && apt-get update && apt-get install -y microsoft-edge-stable \
     && apt-get clean
 
-# 2. Установка драйвера Edge
-# Используем curl -k -L для надежности (игнор SSL и следование редиректам)
-RUN EDGE_VERSION=$(microsoft-edge --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+") && \
-    echo "Browser Version: $EDGE_VERSION" && \
-    curl -k -L -o edgedriver_linux64.zip "https://msedgedriver.azureedge.net/$EDGE_VERSION/edgedriver_linux64.zip" && \
-    unzip edgedriver_linux64.zip && \
-    mv msedgedriver /usr/local/bin/msedgedriver && \
-    chmod +x /usr/local/bin/msedgedriver && \
-    rm edgedriver_linux64.zip
+# 2. Копируем ВАШ ЛОКАЛЬНЫЙ драйвер (который вы положили в папку backend)
+# Никаких скачиваний с Azure/Microsoft, берем файл с диска
+COPY msedgedriver /usr/local/bin/msedgedriver
+RUN chmod +x /usr/local/bin/msedgedriver
 
+# 3. Настройка приложения Python
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
