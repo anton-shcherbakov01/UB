@@ -29,7 +29,7 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v12.1 (Hybrid: API First + Selenium Fallback).
+    Микросервис парсинга Wildberries v12.0 (Resilient).
     - Исправлен поиск корзин (до 50).
     - Исправлен сбор отзывов (Fallback на старые API).
     - Гибридный парсинг цен (API -> Selenium).
@@ -102,52 +102,6 @@ class SeleniumWBParser:
         except: pass
         return None
 
-    # --- API PRICE FETCHING (NEW) ---
-    def _get_price_api(self, sku: int):
-        """
-        Получение цены через мобильное API (быстро и без Selenium).
-        Помогает избежать ошибок прокси (ERR_TUNNEL_CONNECTION_FAILED).
-        """
-        # dest=-1257786 (Москва)
-        url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}"
-        try:
-            # Используем requests, он легче проходит через сеть чем Selenium
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                products = data.get('data', {}).get('products', [])
-                if products:
-                    p = products[0]
-                    sizes = p.get('sizes', [{}])[0]
-                    price_data = sizes.get('price', {})
-                    
-                    # Цены в копейках
-                    price_u = price_data.get('total') or price_data.get('basic') or p.get('salePriceU') or p.get('priceU')
-                    basic_u = price_data.get('basic') or p.get('priceU')
-                    
-                    if not price_u: return None
-
-                    wallet = int(price_u / 100)
-                    base = int(basic_u / 100) if basic_u else wallet
-                    
-                    # Эмуляция стандартной цены (обычно чуть выше кошелька)
-                    standard = int(wallet * 1.03) if wallet == base else int(base * 0.4) 
-                    if 'extended' in p:
-                        base = int(p['extended'].get('basicPriceU', 0) / 100)
-                        wallet = int(p['extended'].get('clientPriceU', 0) / 100)
-                    
-                    if wallet == 0: wallet = int((p.get('salePriceU') or 0) / 100)
-
-                    if wallet > 0:
-                        return {
-                            "wallet_purple": wallet,
-                            "standard_black": wallet, 
-                            "base_crossed": base
-                        }
-        except Exception as e:
-            logger.warning(f"API Price warning: {e}")
-        return None
-
     # --- SELENIUM SETUP ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
@@ -188,7 +142,7 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"Driver Init Error: {e}")
             raise e
-        driver.set_page_load_timeout(90) # Уменьшил до 90, чтобы быстрее падал если завис
+        driver.set_page_load_timeout(90)
         return driver
 
     def _extract_price(self, driver, selector):
@@ -208,7 +162,6 @@ class SeleniumWBParser:
     def get_product_data(self, sku: int):
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
         
-        # 1. Статика
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         try:
             loop = asyncio.new_event_loop()
@@ -222,20 +175,7 @@ class SeleniumWBParser:
         except Exception as e:
             logger.warning(f"Static fail: {e}")
 
-        # 1.5. ПРИОРИТЕТ: Пробуем API (card.wb.ru)
-        # Это решает проблему с ERR_TUNNEL_CONNECTION_FAILED в Selenium
-        api_prices = self._get_price_api(sku)
-        if api_prices:
-            logger.info("Цена получена через API (Fast)")
-            return {
-                "id": sku,
-                "name": static_info["name"],
-                "brand": static_info["brand"],
-                "prices": api_prices,
-                "status": "success"
-            }
-
-        # 2. Парсим цены (Selenium Fallback)
+        # 2. Парсим цены (Selenium)
         for attempt in range(1, 3):
             driver = None
             try:
@@ -243,7 +183,7 @@ class SeleniumWBParser:
                 url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP"
                 driver.get(url)
                 
-                time.sleep(7) 
+                time.sleep(7) # Увеличенный sleep, чтобы прогрузился JS
                 driver.execute_script("window.scrollTo(0, 300);")
 
                 try:
@@ -281,7 +221,7 @@ class SeleniumWBParser:
             finally:
                 if driver: driver.quit()
         
-        return {"id": sku, "status": "error", "message": "Failed to parse prices (API & Selenium failed)"}
+        return {"id": sku, "status": "error", "message": "Failed to parse prices"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """Сбор отзывов с фоллбэками"""
@@ -296,7 +236,8 @@ class SeleniumWBParser:
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID not found"}
 
-            # Массив эндпоинтов для надежности
+            # Массив эндпоинтов. Основной API (feedbacks-api) требует куки, 
+            # поэтому ставим его последним или используем зеркала feedbacks1/2
             endpoints = [
                 f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
                 f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}",
@@ -317,7 +258,7 @@ class SeleniumWBParser:
             
             if not feed_data: return {"status": "error", "message": "API отзывов недоступен (401/404)"}
 
-            # Унификация ответа
+            # Унификация ответа (разные API возвращают разную структуру)
             raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
             valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
             
