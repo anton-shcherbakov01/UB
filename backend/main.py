@@ -3,7 +3,7 @@ import json
 import io
 import logging
 from urllib.parse import parse_qsl
-from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body
+from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,8 @@ from typing import List, Optional
 
 from parser_service import parser_service
 from analysis_service import analysis_service
-from wb_api_service import wb_api_service  # <-- НОВЫЙ ИМПОРТ
+from wb_api_service import wb_api_service
+from bot_service import bot_service # <-- Новый сервис
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory
 from celery_app import celery_app
@@ -36,10 +37,9 @@ app.add_middleware(
 )
 
 auth_manager = AuthService(os.getenv("BOT_TOKEN", ""))
-
-# ID Супер-админа (Anton)
 SUPER_ADMIN_IDS = [901378787]
 
+# ... (get_current_user и startup оставляем без изменений) ...
 async def get_current_user(
     x_tg_data: str = Header(None, alias="X-TG-Data"),
     x_tg_data_query: str = Query(None, alias="x_tg_data"),
@@ -56,7 +56,6 @@ async def get_current_user(
         except Exception as e: 
             logger.error(f"Auth parse error: {e}")
 
-    # Fallback для отладки
     if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
          user_data_dict = {"id": 901378787, "username": "debug_user", "first_name": "Debug"}
 
@@ -67,8 +66,6 @@ async def get_current_user(
     stmt = select(User).where(User.telegram_id == tg_id)
     result = await db.execute(stmt)
     user = result.scalars().first()
-
-    # FORCE ADMIN RIGHTS
     is_super = tg_id in SUPER_ADMIN_IDS
 
     if not user:
@@ -83,14 +80,12 @@ async def get_current_user(
         await db.commit()
         await db.refresh(user)
     else:
-        # Если юзер уже есть, обновляем права (для суперадмина)
         if is_super and (not user.is_admin or user.subscription_plan != "business"):
             user.is_admin = True
             user.subscription_plan = "business"
             db.add(user)
             await db.commit()
             await db.refresh(user)
-    
     return user
 
 @app.on_event("startup")
@@ -101,12 +96,9 @@ async def on_startup():
 async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
     count = (await db.execute(count_stmt)).scalar() or 0
-    
-    # Маскируем токен для безопасности
     masked_token = None
     if user.wb_api_token:
         masked_token = user.wb_api_token[:5] + "*" * 10 + user.wb_api_token[-5:]
-
     return {
         "id": user.telegram_id,
         "username": user.username,
@@ -118,33 +110,21 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "wb_token_preview": masked_token
     }
 
-# --- WB API TOKEN MANAGEMENT (NEW) ---
-
+# --- WB TOKEN ---
 class TokenRequest(BaseModel):
     token: str
 
 @app.post("/api/user/token")
-async def save_wb_token(
-    req: TokenRequest, 
-    user: User = Depends(get_current_user), 
-    db: AsyncSession = Depends(get_db)
-):
-    """Сохранение токена API Статистики WB"""
-    # Валидация токена через сервис
+async def save_wb_token(req: TokenRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     is_valid = await wb_api_service.check_token(req.token)
-    if not is_valid:
-        raise HTTPException(status_code=400, detail="Неверный токен или ошибка API WB")
-
+    if not is_valid: raise HTTPException(status_code=400, detail="Неверный токен")
     user.wb_api_token = req.token
     db.add(user)
     await db.commit()
-    return {"status": "saved", "message": "Токен успешно сохранен"}
+    return {"status": "saved"}
 
 @app.delete("/api/user/token")
-async def delete_wb_token(
-    user: User = Depends(get_current_user), 
-    db: AsyncSession = Depends(get_db)
-):
+async def delete_wb_token(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     user.wb_api_token = None
     db.add(user)
     await db.commit()
@@ -152,14 +132,10 @@ async def delete_wb_token(
 
 @app.get("/api/internal/stats")
 async def get_internal_stats(user: User = Depends(get_current_user)):
-    """Получение статистики (Заказы, Остатки) через официальный API"""
-    if not user.wb_api_token:
-        raise HTTPException(status_code=400, detail="Токен API не подключен")
-    
-    stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
-    return stats
+    if not user.wb_api_token: raise HTTPException(status_code=400, detail="Токен API не подключен")
+    return await wb_api_service.get_dashboard_stats(user.wb_api_token)
 
-# --- MONITORING ---
+# --- MONITORING & UNIT ECONOMICS ---
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     limits = {"free": 3, "pro": 50, "business": 500}
@@ -167,20 +143,31 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
     current = (await db.execute(count_stmt)).scalar() or 0
-    
-    if current >= limit:
-        raise HTTPException(403, f"Лимит тарифа исчерпан ({limit} шт)")
+    if current >= limit: raise HTTPException(403, f"Лимит тарифа исчерпан ({limit} шт)")
 
     stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
-    if (await db.execute(stmt)).scalars().first(): 
-        return {"status": "exists", "message": "Товар уже в списке"}
+    if (await db.execute(stmt)).scalars().first(): return {"status": "exists", "message": "Товар уже в списке"}
 
     new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
     db.add(new_item)
     await db.commit()
-    
     task = parse_and_save_sku.delay(sku, user.id)
     return {"status": "accepted", "task_id": task.id}
+
+class CostUpdateRequest(BaseModel):
+    cost_price: int
+
+@app.put("/api/monitor/cost/{sku}")
+async def update_cost_price(sku: int, req: CostUpdateRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Обновление себестоимости для расчета P&L"""
+    stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
+    item = (await db.execute(stmt)).scalars().first()
+    if not item: raise HTTPException(404, "Товар не найден")
+    
+    item.cost_price = req.cost_price
+    db.add(item)
+    await db.commit()
+    return {"status": "updated", "cost_price": req.cost_price}
 
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -192,9 +179,23 @@ async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession 
         last_price_stmt = select(PriceHistory).where(PriceHistory.item_id == i.id).order_by(PriceHistory.recorded_at.desc()).limit(1)
         lp = (await db.execute(last_price_stmt)).scalars().first()
         
+        # Расчет базовой P&L (MVP)
+        wallet = lp.wallet_price if lp else 0
+        cost = i.cost_price or 0
+        # Примерная логистика + комиссия (упрощенно для MVP, точнее - в отчетах)
+        commission = wallet * 0.23 # ~23% WB
+        logistics = 50 # ~50 руб
+        profit = wallet - commission - logistics - cost
+        roi = round((profit / cost * 100), 1) if cost > 0 else 0
+
         data.append({
             "id": i.id, "sku": i.sku, "name": i.name, "brand": i.brand,
-            "prices": [{"wallet_price": lp.wallet_price, "standard_price": lp.standard_price}] if lp else []
+            "cost_price": cost,
+            "prices": [{"wallet_price": wallet, "standard_price": lp.standard_price}] if lp else [],
+            "unit_economy": {
+                "profit": int(profit),
+                "roi": roi
+            }
         })
     return data
 
@@ -208,13 +209,10 @@ async def delete_item(sku: int, user: User = Depends(get_current_user), db: Asyn
 @app.get("/api/monitor/history/{sku}")
 async def get_history(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
-    if not item: raise HTTPException(404, "Item not found in your list")
-    
+    if not item: raise HTTPException(404, "Item not found")
     history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.asc()))).scalars().all()
-    
     return {
-        "sku": sku, 
-        "name": item.name, 
+        "sku": sku, "name": item.name, "cost_price": item.cost_price,
         "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price, "standard": h.standard_price, "base": h.base_price} for h in history]
     }
 
@@ -227,7 +225,7 @@ async def get_status(task_id: str):
     elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
     return resp
 
-# --- AI & SEO ---
+# --- AI & SEO (Standard endpoints) ---
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
@@ -240,20 +238,15 @@ async def get_ai_result(task_id: str):
 
 @app.get("/api/seo/parse/{sku}")
 async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
-    """Извлекаем ключевые слова (название + характеристики)"""
     res = await parser_service.get_seo_data(sku) 
-    if res.get("status") == "error":
-        raise HTTPException(400, res.get("message"))
+    if res.get("status") == "error": raise HTTPException(400, res.get("message"))
     return res
 
 class SeoGenRequest(BaseModel):
-    sku: int
-    keywords: List[str]
-    tone: str
+    sku: int; keywords: List[str]; tone: str
 
 @app.post("/api/seo/generate")
 async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
-    """Запуск задачи генерации текста"""
     task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id)
     return {"status": "accepted", "task_id": task.id}
 
@@ -275,21 +268,96 @@ async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSe
     await db.commit()
     return {"status": "cleared"}
 
-# --- PAYMENT ---
-class PaymentRequest(BaseModel):
-    plan_id: str
+# --- PAYMENT & STARS (NEW) ---
 
-@app.post("/api/payment/create")
-async def create_payment(req: PaymentRequest, user: User = Depends(get_current_user)):
-    return {"status": "created", "message": f"Оплата тарифа {req.plan_id.upper()}.", "manager_link": "https://t.me/AAntonShch"}
+class StarsPaymentRequest(BaseModel):
+    plan_id: str
+    amount: int # Stars
+
+@app.post("/api/payment/stars_link")
+async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_current_user)):
+    """Генерация инвойса для Telegram Stars"""
+    title = f"Подписка {req.plan_id.upper()}"
+    desc = f"Активация тарифа {req.plan_id} на 1 месяц"
+    payload = json.dumps({"user_id": user.id, "plan": req.plan_id})
+    
+    link = await bot_service.create_invoice_link(title, desc, payload, req.amount)
+    if not link:
+        raise HTTPException(500, "Ошибка создания ссылки")
+        
+    return {"invoice_link": link}
+
+# Webhook для обработки успешных платежей от Telegram
+# В реальном продакшене этот URL нужно добавить в настройки бота (setWebhook)
+@app.post("/api/webhook/telegram")
+async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    data = await request.json()
+    
+    if "pre_checkout_query" in data:
+        # Автоматическое подтверждение перед оплатой
+        pc_id = data["pre_checkout_query"]["id"]
+        # Тут можно вызвать bot answerPreCheckoutQuery(ok=True)
+        # Пока пропускаем, так как aiogram/bot logic сложнее
+        pass
+
+    if "message" in data and "successful_payment" in data["message"]:
+        pay = data["message"]["successful_payment"]
+        payload = json.loads(pay["invoice_payload"])
+        
+        user_id = payload.get("user_id")
+        plan = payload.get("plan")
+        
+        if user_id and plan:
+            user = await db.get(User, user_id)
+            if user:
+                user.subscription_plan = plan
+                db.add(user)
+                await db.commit()
+                logger.info(f"User {user.telegram_id} upgraded to {plan}")
+                
+    return {"ok": True}
 
 @app.get("/api/user/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
     return [
-        {"id": "free", "name": "Старт", "price": "0 ₽", "features": ["3 товара", "История 24ч", "AI (30 отзывов)"], "current": user.subscription_plan == "free", "color": "slate"},
-        {"id": "pro", "name": "PRO", "price": "990 ₽", "features": ["50 товаров", "История 30 дней", "AI (100 отзывов)", "PDF Отчеты"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
-        {"id": "business", "name": "Business", "price": "2990 ₽", "features": ["500 товаров", "Безлимит AI", "Приоритет", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
+        {"id": "free", "name": "Start", "price": "0 ₽", "stars": 0, "features": ["3 товара", "История 24ч", "P&L (7 дней)", "Ding! (1 раз/день)"], "current": user.subscription_plan == "free", "color": "slate"},
+        {"id": "pro", "name": "Pro", "price": "2990 ₽", "stars": 2500, "features": ["50 товаров", "Полный P&L (API)", "Unit-экономика", "Ding! (Безлимит)", "PDF"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
+        {"id": "business", "name": "Business", "price": "6990 ₽", "stars": 6000, "features": ["Автобиддер", "Конкуренты (Парсинг)", "Прогноз поставок", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
     ]
+
+# --- PDF REPORT ---
+@app.get("/api/report/pdf/{sku}")
+async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if user.subscription_plan == "free": raise HTTPException(403, "Upgrade to PRO")
+    item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
+    if not item: raise HTTPException(404, "Item not found")
+    history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.desc()).limit(100))).scalars().all()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    try:
+        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+        pdf.set_font('DejaVu', '', 14)
+    except:
+        pdf.set_font("Arial", size=12)
+        
+    pdf.cell(0, 10, txt=f"Report: {item.name[:40]} ({sku})", ln=1, align='C')
+    pdf.ln(5)
+    pdf.set_font_size(10)
+    pdf.cell(40, 10, "Date", 1); pdf.cell(30, 10, "Wallet", 1); pdf.cell(30, 10, "Profit", 1); pdf.ln()
+    
+    # Расчет в PDF
+    for h in history:
+        cost = item.cost_price or 0
+        profit = h.wallet_price - (h.wallet_price * 0.23) - 50 - cost
+        pdf.cell(40, 10, h.recorded_at.strftime("%Y-%m-%d"), 1)
+        pdf.cell(30, 10, f"{h.wallet_price}", 1)
+        pdf.cell(30, 10, f"{int(profit)}", 1)
+        pdf.ln()
+
+    pdf_content = pdf.output(dest='S')
+    pdf_bytes = pdf_content.encode('latin-1') if isinstance(pdf_content, str) else pdf_content
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type='application/pdf', headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'})
 
 # --- ADMIN ---
 @app.get("/api/admin/stats")
@@ -297,55 +365,7 @@ async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSessi
     if not user.is_admin: raise HTTPException(403, "Forbidden")
     users = (await db.execute(select(func.count(User.id)))).scalar()
     items = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
-    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.3)"}
-
-# --- PDF REPORT ---
-@app.get("/api/report/pdf/{sku}")
-async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Upgrade to PRO")
-
-    item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
-    if not item: raise HTTPException(404, "Item not found")
-
-    history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.desc()).limit(100))).scalars().all()
-
-    pdf = FPDF()
-    pdf.add_page()
-    try:
-        # Используем шрифт, который точно есть в контейнере
-        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-        pdf.set_font('DejaVu', '', 14)
-    except:
-        pdf.set_font("Arial", size=12)
-
-    pdf.cell(0, 10, txt=f"Report: {item.name[:40]} ({sku})", ln=1, align='C')
-    pdf.ln(5)
-    
-    pdf.set_font_size(10)
-    pdf.cell(60, 10, "Date", 1)
-    pdf.cell(40, 10, "Wallet", 1)
-    pdf.cell(40, 10, "Regular", 1)
-    pdf.ln()
-
-    for h in history:
-        pdf.cell(60, 10, h.recorded_at.strftime("%Y-%m-%d %H:%M"), 1)
-        pdf.cell(40, 10, f"{h.wallet_price}", 1)
-        pdf.cell(40, 10, f"{h.standard_price}", 1)
-        pdf.ln()
-
-    # FIX: FPDF2 output() returns bytes/bytearray in newer versions, no encode needed
-    pdf_content = pdf.output(dest='S')
-    if isinstance(pdf_content, str):
-        pdf_bytes = pdf_content.encode('latin-1') 
-    else:
-        pdf_bytes = pdf_content
-
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes), 
-        media_type='application/pdf', 
-        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
-    )
+    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.4 - Phase 2)"}
 
 if __name__ == "__main__":
     import uvicorn
