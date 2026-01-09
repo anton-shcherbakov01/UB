@@ -23,7 +23,9 @@ services:
       retries: 5
 
   api:
-    build: .
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: wb_api
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     volumes: [".:/app"]
@@ -41,7 +43,9 @@ services:
     depends_on: [db, redis]
 
   worker:
-    build: .
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: wb_worker
     environment:
       - C_FORCE_ROOT=1
@@ -58,7 +62,9 @@ services:
     depends_on: [db, redis]
 
   beat:
-    build: .
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: wb_beat
     environment:
       - REDIS_URL=redis://redis:6379/0
