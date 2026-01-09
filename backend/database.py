@@ -28,6 +28,10 @@ class User(Base):
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
+    
+    # НОВОЕ ПОЛЕ: Токен официального API Wildberries (Статистика)
+    wb_api_token = Column(String, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
@@ -68,6 +72,10 @@ class SearchHistory(Base):
 
 async def init_db():
     async with engine_async.begin() as conn:
+        # В продакшене лучше использовать Alembic для миграций.
+        # Здесь create_all создаст таблицы, только если их нет.
+        # Если таблица users уже есть, колонка wb_api_token НЕ добавится автоматически без миграции.
+        # Для dev-режима можно пересоздать контейнер базы данных (docker-compose down -v).
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db():

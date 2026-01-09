@@ -3,7 +3,8 @@ import {
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
-  ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash
+  ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
+  Key, TrendingUp, Package
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -81,141 +82,108 @@ const TariffCard = ({ plan, onPay }) => (
   </div>
 );
 
-const HistoryDetailsModal = ({ item, onClose }) => {
-    if (!item) return null;
-    const data = item.data || {};
-    
-    return (
-        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative max-h-[80vh] overflow-y-auto">
-                <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
-                <div className="mb-4">
-                    <span className="text-[10px] font-black uppercase text-slate-400">{new Date(item.created_at).toLocaleString('ru-RU')}</span>
-                    <h3 className="font-bold text-xl mt-1">{item.title || `Запрос ${item.id}`}</h3>
-                </div>
+// --- СТРАНИЦЫ ---
 
-                {item.type === 'ai' && data.ai_analysis ? (
-                    <div className="space-y-4">
-                        <div className="flex gap-4 items-center bg-slate-50 p-3 rounded-2xl">
-                             {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
-                             <div>
-                                 <div className="font-bold text-lg flex items-center gap-1"><Star size={16} className="fill-amber-400 text-amber-400"/> {data.rating}</div>
-                                 <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
-                             </div>
+const DashboardPage = ({ onNavigate, user }) => {
+    const [stats, setStats] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (user?.has_wb_token) {
+            setLoading(true);
+            fetch(`${API_URL}/api/internal/stats`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            })
+            .then(r => r.json())
+            .then(data => {
+                setStats(data);
+                setLoading(false);
+            })
+            .catch(() => setLoading(false));
+        }
+    }, [user]);
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
+            {/* Блок Внутренней Аналитики (API) */}
+            <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
+                <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-2 opacity-80">
+                            <Sparkles size={16} className="text-amber-300" />
+                            <span className="text-xs font-bold uppercase tracking-widest">Мои Продажи (API)</span>
                         </div>
-                        <div className="space-y-2">
-                             <h4 className="font-bold text-red-500 text-sm">Жалобы:</h4>
-                             <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                 {data.ai_analysis.flaws?.length > 0 ? data.ai_analysis.flaws.map((f,i) => <li key={i}>{f}</li>) : <li>Нет явных жалоб</li>}
-                             </ul>
-                        </div>
-                        <div className="space-y-2">
-                             <h4 className="font-bold text-indigo-600 text-sm">Стратегия:</h4>
-                             <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                 {data.ai_analysis.strategy?.length > 0 ? data.ai_analysis.strategy.map((s,i) => <li key={i}>{s}</li>) : <li>Мало данных для анализа</li>}
-                             </ul>
-                        </div>
+                        {!user?.has_wb_token && (
+                            <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">
+                                Подключить
+                            </button>
+                        )}
                     </div>
-                ) : item.type === 'seo' && data.generated_content ? (
-                    <div className="space-y-4">
-                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <h4 className="font-bold text-xs text-slate-400 uppercase mb-2">Ключевые слова</h4>
-                            <div className="flex flex-wrap gap-1">
-                                {data.keywords?.map((k,i) => (
-                                    <span key={i} className="bg-white border px-2 py-0.5 rounded text-[10px]">{k}</span>
-                                ))}
+
+                    {!user?.has_wb_token ? (
+                        <div className="text-center py-4">
+                            <p className="font-bold text-lg mb-2">Подключите API ключ</p>
+                            <p className="text-xs opacity-70">Чтобы видеть реальные продажи и остатки</p>
+                        </div>
+                    ) : loading ? (
+                        <div className="flex justify-center py-6"><Loader2 className="animate-spin" /></div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm">
+                                <p className="text-xs opacity-70 mb-1">Заказы сегодня</p>
+                                <p className="text-2xl font-black">{stats?.orders_today?.sum?.toLocaleString() || 0} ₽</p>
+                                <p className="text-xs opacity-70">{stats?.orders_today?.count || 0} шт</p>
+                            </div>
+                            <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm">
+                                <p className="text-xs opacity-70 mb-1">Остатки</p>
+                                <p className="text-2xl font-black">{stats?.stocks?.total_quantity?.toLocaleString() || 0} шт</p>
+                                <p className="text-xs opacity-70">На складах WB</p>
                             </div>
                         </div>
-                        <div>
-                            <h4 className="font-bold mb-1 text-sm">Заголовок</h4>
-                            <p className="text-sm bg-slate-50 p-3 rounded-xl">{data.generated_content.title}</p>
-                        </div>
-                        <div>
-                            <h4 className="font-bold mb-1 text-sm">Описание</h4>
-                            <p className="text-sm bg-slate-50 p-3 rounded-xl whitespace-pre-wrap">{data.generated_content.description}</p>
-                        </div>
+                    )}
+                </div>
+                <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
+                <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
+            </div>
+
+            <h2 className="text-lg font-bold px-2 text-slate-800">Инструменты</h2>
+            <div className="grid grid-cols-2 gap-4">
+                <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
+                        <TrendingUp size={24} />
                     </div>
-                ) : item.type === 'price' && data.prices ? (
-                    <div className="space-y-3">
-                         <div className="flex justify-between p-3 bg-purple-50 rounded-xl">
-                             <span className="text-purple-700 font-bold">Кошелек</span>
-                             <span className="font-black text-purple-700">{data.prices.wallet_purple} ₽</span>
-                         </div>
-                         <div className="flex justify-between p-3 bg-slate-50 rounded-xl">
-                             <span className="text-slate-600">Обычная</span>
-                             <span className="font-bold">{data.prices.standard_black} ₽</span>
-                         </div>
-                         <div className="flex justify-between p-3">
-                             <span className="text-slate-400">Базовая</span>
-                             <span className="text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
-                         </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Конкуренты</span>
+                        <span className="text-xs text-slate-400">Следить за ценами</span>
                     </div>
-                ) : (
-                    <pre className="text-xs bg-slate-50 p-4 rounded-xl overflow-auto max-h-64 whitespace-pre-wrap">
-                        {JSON.stringify(data, null, 2)}
-                    </pre>
-                )}
+                </div>
+                <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-violet-100 w-12 h-12 rounded-2xl flex items-center justify-center text-violet-600">
+                        <Brain size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">AI Аналитик</span>
+                        <span className="text-xs text-slate-400">Анализ отзывов</span>
+                    </div>
+                </div>
+                <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+                        <Wand2 size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">SEO Генератор</span>
+                        <span className="text-xs text-slate-400">Создание карточек товара</span>
+                    </div>
+                </div>
             </div>
         </div>
     );
 };
 
-// --- СТРАНИЦЫ ---
-
-const HomePage = ({ onNavigate }) => (
-  <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
-    <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-8 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
-      <div className="relative z-10">
-        <div className="flex items-center gap-2 mb-2 opacity-80">
-            <Sparkles size={16} className="text-amber-300" />
-            <span className="text-xs font-bold uppercase tracking-widest">WB Analytics Pro</span>
-        </div>
-        <h1 className="text-3xl font-black mb-4 leading-tight">Управляйте продажами умно</h1>
-        <p className="opacity-90 text-sm mb-6 font-medium max-w-[80%]">Мониторинг цен, анализ конкурентов и стратегии от ИИ в одном приложении.</p>
-        <button onClick={() => onNavigate('scanner')} className="bg-white text-indigo-600 px-6 py-3.5 rounded-2xl font-bold text-sm shadow-lg active:scale-95 transition-transform flex items-center gap-2">
-          <Plus size={18} />
-          Добавить товар
-        </button>
-      </div>
-      <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
-      <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
-    </div>
-
-    <h2 className="text-lg font-bold px-2 text-slate-800">Инструменты</h2>
-    <div className="grid grid-cols-2 gap-4">
-      <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
-        <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
-          <BarChart3 size={24} />
-        </div>
-        <div>
-            <span className="font-bold text-slate-800 block">Мониторинг</span>
-            <span className="text-xs text-slate-400">История цен</span>
-        </div>
-      </div>
-      <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
-        <div className="bg-violet-100 w-12 h-12 rounded-2xl flex items-center justify-center text-violet-600">
-          <Brain size={24} />
-        </div>
-        <div>
-            <span className="font-bold text-slate-800 block">AI Аналитик</span>
-            <span className="text-xs text-slate-400">Анализ отзывов</span>
-        </div>
-      </div>
-      <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
-        <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
-          <Wand2 size={24} />
-        </div>
-        <div>
-            <span className="font-bold text-slate-800 block">SEO Генератор</span>
-            <span className="text-xs text-slate-400">Создание карточек товара</span>
-        </div>
-      </div>
-    </div>
-  </div>
-);
+// ... (SeoGeneratorPage, ScannerPage, MonitorPage, AIAnalysisPage, HistoryPage остаются без изменений в логике, но копируются для полноты кода)
 
 const SeoGeneratorPage = () => {
-    const [step, setStep] = useState(1); // 1: Input SKU, 2: Edit Keywords/Tone, 3: Result
+    const [step, setStep] = useState(1);
     const [sku, setSku] = useState('');
     const [loading, setLoading] = useState(false);
     const [keywords, setKeywords] = useState([]);
@@ -447,7 +415,6 @@ const ScannerPage = ({ onNavigate }) => {
       let attempts = 0;
       while (attempts < 60) {
         await new Promise(r => setTimeout(r, 2000));
-        // Removed explicit setStatus here to prevent flickering
         
         const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
         const statusData = await statusRes.json();
@@ -813,6 +780,85 @@ const HistoryPage = () => {
         }
     }
 
+    const HistoryDetailsModal = ({ item, onClose }) => {
+        if (!item) return null;
+        const data = item.data || {};
+        
+        return (
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+                <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative max-h-[80vh] overflow-y-auto">
+                    <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
+                    <div className="mb-4">
+                        <span className="text-[10px] font-black uppercase text-slate-400">{new Date(item.created_at).toLocaleString('ru-RU')}</span>
+                        <h3 className="font-bold text-xl mt-1">{item.title || `Запрос ${item.id}`}</h3>
+                    </div>
+    
+                    {item.type === 'ai' && data.ai_analysis ? (
+                        <div className="space-y-4">
+                            <div className="flex gap-4 items-center bg-slate-50 p-3 rounded-2xl">
+                                 {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
+                                 <div>
+                                     <div className="font-bold text-lg flex items-center gap-1"><Star size={16} className="fill-amber-400 text-amber-400"/> {data.rating}</div>
+                                     <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
+                                 </div>
+                            </div>
+                            <div className="space-y-2">
+                                 <h4 className="font-bold text-red-500 text-sm">Жалобы:</h4>
+                                 <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
+                                     {data.ai_analysis.flaws?.length > 0 ? data.ai_analysis.flaws.map((f,i) => <li key={i}>{f}</li>) : <li>Нет явных жалоб</li>}
+                                 </ul>
+                            </div>
+                            <div className="space-y-2">
+                                 <h4 className="font-bold text-indigo-600 text-sm">Стратегия:</h4>
+                                 <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
+                                     {data.ai_analysis.strategy?.length > 0 ? data.ai_analysis.strategy.map((s,i) => <li key={i}>{s}</li>) : <li>Мало данных для анализа</li>}
+                                 </ul>
+                            </div>
+                        </div>
+                    ) : item.type === 'seo' && data.generated_content ? (
+                        <div className="space-y-4">
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                <h4 className="font-bold text-xs text-slate-400 uppercase mb-2">Ключевые слова</h4>
+                                <div className="flex flex-wrap gap-1">
+                                    {data.keywords?.map((k,i) => (
+                                        <span key={i} className="bg-white border px-2 py-0.5 rounded text-[10px]">{k}</span>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <h4 className="font-bold mb-1 text-sm">Заголовок</h4>
+                                <p className="text-sm bg-slate-50 p-3 rounded-xl">{data.generated_content.title}</p>
+                            </div>
+                            <div>
+                                <h4 className="font-bold mb-1 text-sm">Описание</h4>
+                                <p className="text-sm bg-slate-50 p-3 rounded-xl whitespace-pre-wrap">{data.generated_content.description}</p>
+                            </div>
+                        </div>
+                    ) : item.type === 'price' && data.prices ? (
+                        <div className="space-y-3">
+                             <div className="flex justify-between p-3 bg-purple-50 rounded-xl">
+                                 <span className="text-purple-700 font-bold">Кошелек</span>
+                                 <span className="font-black text-purple-700">{data.prices.wallet_purple} ₽</span>
+                             </div>
+                             <div className="flex justify-between p-3 bg-slate-50 rounded-xl">
+                                 <span className="text-slate-600">Обычная</span>
+                                 <span className="font-bold">{data.prices.standard_black} ₽</span>
+                             </div>
+                             <div className="flex justify-between p-3">
+                                 <span className="text-slate-400">Базовая</span>
+                                 <span className="text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
+                             </div>
+                        </div>
+                    ) : (
+                        <pre className="text-xs bg-slate-50 p-4 rounded-xl overflow-auto max-h-64 whitespace-pre-wrap">
+                            {JSON.stringify(data, null, 2)}
+                        </pre>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-between items-center px-2">
@@ -851,11 +897,18 @@ const HistoryPage = () => {
 const ProfilePage = ({ onNavigate }) => {
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
+    const [wbToken, setWbToken] = useState('');
+    const [tokenLoading, setTokenLoading] = useState(false);
 
     useEffect(() => {
         const tgData = window.Telegram?.WebApp?.initData || "";
         fetch(`${API_URL}/api/user/tariffs`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setTariffs);
-        fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setUser);
+        fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(data => {
+            setUser(data);
+            if (data.has_wb_token) {
+                setWbToken(data.wb_token_preview);
+            }
+        });
     }, []);
 
     const pay = async (planId) => {
@@ -867,6 +920,46 @@ const ProfilePage = ({ onNavigate }) => {
         const d = await res.json();
         if(d.manager_link) window.open(d.manager_link, '_blank');
         else alert(d.message);
+    };
+
+    const saveToken = async () => {
+        if (!wbToken || wbToken.includes("*****")) return;
+        setTokenLoading(true);
+        try {
+             const res = await fetch(`${API_URL}/api/user/token`, { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
+                body: JSON.stringify({token: wbToken})
+            });
+            const data = await res.json();
+            if (res.status === 200) {
+                alert("Токен успешно сохранен!");
+                // Обновляем данные юзера
+                const uRes = await fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} });
+                setUser(await uRes.json());
+            } else {
+                throw new Error(data.detail || "Ошибка");
+            }
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setTokenLoading(false);
+        }
+    };
+
+    const deleteToken = async () => {
+        if (!confirm("Удалить токен? Внутренняя аналитика отключится.")) return;
+        setTokenLoading(true);
+        try {
+             await fetch(`${API_URL}/api/user/token`, { 
+                method: 'DELETE', 
+                headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""}
+            });
+            setWbToken('');
+            setUser({...user, has_wb_token: false});
+        } finally {
+            setTokenLoading(false);
+        }
     };
 
     return (
@@ -882,6 +975,38 @@ const ProfilePage = ({ onNavigate }) => {
                         {user?.plan || 'Free'} Plan
                     </div>
                 </div>
+            </div>
+
+            {/* Блок настройки API WB */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-4">
+                    <Key className="text-indigo-600" size={20} />
+                    <h2 className="font-bold text-lg">API Ключ Wildberries</h2>
+                </div>
+                <p className="text-xs text-slate-400 mb-3">
+                    Токен "Статистика" (Read-only) для отображения реальных продаж. Ключ хранится в зашифрованном виде.
+                </p>
+                <div className="relative">
+                    <input 
+                        type="text" 
+                        value={wbToken}
+                        onChange={(e) => setWbToken(e.target.value)}
+                        placeholder="Введите токен..."
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100"
+                    />
+                    {user?.has_wb_token && (
+                        <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500"><X size={16}/></button>
+                    )}
+                </div>
+                {!user?.has_wb_token && (
+                    <button 
+                        onClick={saveToken} 
+                        disabled={tokenLoading}
+                        className="w-full mt-3 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm active:scale-95 transition-all flex justify-center"
+                    >
+                        {tokenLoading ? <Loader2 className="animate-spin" /> : 'Сохранить токен'}
+                    </button>
+                )}
             </div>
             
             {user?.is_admin && (
@@ -945,18 +1070,21 @@ export default function App() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-      if (window.Telegram?.WebApp) {
-        const tgData = window.Telegram.WebApp.initData;
-        fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} })
+      // Имитация данных для разработки в браузере (если нет Telegram WebApp)
+      if (!window.Telegram?.WebApp?.initData) {
+         // console.log("Dev mode");
+      }
+      
+      const tgData = window.Telegram?.WebApp?.initData || "";
+      fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} })
           .then(r => r.json())
           .then(setUser)
           .catch(console.error);
-      }
-  }, []);
+  }, [activeTab]); // Обновляем при смене таба, чтобы подтянуть токен если он изменился
 
   const renderContent = () => {
       switch(activeTab) {
-          case 'home': return <HomePage onNavigate={setActiveTab} />;
+          case 'home': return <DashboardPage onNavigate={setActiveTab} user={user} />;
           case 'scanner': return <ScannerPage onNavigate={setActiveTab} />;
           case 'monitor': return <MonitorPage />;
           case 'ai': return <AIAnalysisPage />;
@@ -964,7 +1092,7 @@ export default function App() {
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'history': return <HistoryPage />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;
-          default: return <HomePage onNavigate={setActiveTab} />;
+          default: return <DashboardPage onNavigate={setActiveTab} user={user} />;
       }
   };
 

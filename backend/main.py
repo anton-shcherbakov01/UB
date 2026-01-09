@@ -3,17 +3,18 @@ import json
 import io
 import logging
 from urllib.parse import parse_qsl
-from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 from parser_service import parser_service
 from analysis_service import analysis_service
+from wb_api_service import wb_api_service  # <-- НОВЫЙ ИМПОРТ
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory
 from celery_app import celery_app
@@ -55,7 +56,7 @@ async def get_current_user(
         except Exception as e: 
             logger.error(f"Auth parse error: {e}")
 
-    # Fallback
+    # Fallback для отладки
     if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
          user_data_dict = {"id": 901378787, "username": "debug_user", "first_name": "Debug"}
 
@@ -82,7 +83,7 @@ async def get_current_user(
         await db.commit()
         await db.refresh(user)
     else:
-        # Если юзер уже есть, обновляем права
+        # Если юзер уже есть, обновляем права (для суперадмина)
         if is_super and (not user.is_admin or user.subscription_plan != "business"):
             user.is_admin = True
             user.subscription_plan = "business"
@@ -100,14 +101,63 @@ async def on_startup():
 async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
     count = (await db.execute(count_stmt)).scalar() or 0
+    
+    # Маскируем токен для безопасности
+    masked_token = None
+    if user.wb_api_token:
+        masked_token = user.wb_api_token[:5] + "*" * 10 + user.wb_api_token[-5:]
+
     return {
         "id": user.telegram_id,
         "username": user.username,
         "name": user.first_name,
         "plan": user.subscription_plan,
         "is_admin": user.is_admin,
-        "items_count": count
+        "items_count": count,
+        "has_wb_token": bool(user.wb_api_token),
+        "wb_token_preview": masked_token
     }
+
+# --- WB API TOKEN MANAGEMENT (NEW) ---
+
+class TokenRequest(BaseModel):
+    token: str
+
+@app.post("/api/user/token")
+async def save_wb_token(
+    req: TokenRequest, 
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Сохранение токена API Статистики WB"""
+    # Валидация токена через сервис
+    is_valid = await wb_api_service.check_token(req.token)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="Неверный токен или ошибка API WB")
+
+    user.wb_api_token = req.token
+    db.add(user)
+    await db.commit()
+    return {"status": "saved", "message": "Токен успешно сохранен"}
+
+@app.delete("/api/user/token")
+async def delete_wb_token(
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    user.wb_api_token = None
+    db.add(user)
+    await db.commit()
+    return {"status": "deleted"}
+
+@app.get("/api/internal/stats")
+async def get_internal_stats(user: User = Depends(get_current_user)):
+    """Получение статистики (Заказы, Остатки) через официальный API"""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="Токен API не подключен")
+    
+    stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
+    return stats
 
 # --- MONITORING ---
 @app.post("/api/monitor/add/{sku}")
@@ -191,7 +241,7 @@ async def get_ai_result(task_id: str):
 @app.get("/api/seo/parse/{sku}")
 async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
     """Извлекаем ключевые слова (название + характеристики)"""
-    res = await parser_service.get_seo_data(sku) # <-- ДОБАВЛЕН AWAIT
+    res = await parser_service.get_seo_data(sku) 
     if res.get("status") == "error":
         raise HTTPException(400, res.get("message"))
     return res
@@ -204,10 +254,6 @@ class SeoGenRequest(BaseModel):
 @app.post("/api/seo/generate")
 async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
     """Запуск задачи генерации текста"""
-    if user.subscription_plan == "free":
-        # Можно добавить ограничение, но пока оставим всем
-        pass
-        
     task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id)
     return {"status": "accepted", "task_id": task.id}
 
@@ -251,9 +297,9 @@ async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSessi
     if not user.is_admin: raise HTTPException(403, "Forbidden")
     users = (await db.execute(select(func.count(User.id)))).scalar()
     items = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
-    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.2)"}
+    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.3)"}
 
-# --- PDF REPORT (FIXED) ---
+# --- PDF REPORT ---
 @app.get("/api/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if user.subscription_plan == "free":
