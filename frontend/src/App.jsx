@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
-  Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon 
+  Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, ChevronLeft 
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -12,15 +12,15 @@ const API_URL = "https://api.ulike-bot.ru";
 
 // --- КОМПОНЕНТЫ ---
 
-const TabNav = ({ active, setTab, isAdmin }) => (
-  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
+const TabNav = ({ active, setTab }) => (
+  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-4 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
+    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <LayoutGrid size={24} strokeWidth={active === 'home' ? 2.5 : 2} />
+      <span className="text-[10px] font-bold">Главная</span>
+    </button>
     <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={24} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[10px] font-bold">Цены</span>
-    </button>
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">ИИ</span>
     </button>
     
     <div className="relative -top-6 w-1/5 flex justify-center">
@@ -32,10 +32,9 @@ const TabNav = ({ active, setTab, isAdmin }) => (
         </button>
     </div>
 
-    {/* КНОПКА ИСТОРИИ */}
-    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
-       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
-       <span className="text-[10px] font-bold">История</span>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
+      <span className="text-[10px] font-bold">ИИ</span>
     </button>
     
     <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
@@ -45,7 +44,6 @@ const TabNav = ({ active, setTab, isAdmin }) => (
   </div>
 );
 
-// ... (TariffCard без изменений) ...
 const TariffCard = ({ plan }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
     {plan.is_best && (
@@ -55,6 +53,7 @@ const TariffCard = ({ plan }) => (
     )}
     <h3 className={`text-xl font-black uppercase ${plan.is_best ? 'text-indigo-700' : 'text-slate-800'}`}>{plan.name}</h3>
     <div className="text-3xl font-black mt-2 mb-4 text-slate-900">{plan.price}</div>
+    
     <ul className="space-y-3 mb-6">
       {plan.features.map((f, i) => (
         <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
@@ -63,13 +62,14 @@ const TariffCard = ({ plan }) => (
         </li>
       ))}
     </ul>
+    
     <button className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
       {plan.current ? 'Ваш текущий план' : 'Перейти'}
     </button>
   </div>
 );
 
-// ... (HomePage, ScannerPage, MonitorPage, AIAnalysisPage - оставляем как были) ...
+// --- СТРАНИЦЫ ---
 
 const HomePage = ({ onNavigate }) => (
   <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
@@ -80,12 +80,16 @@ const HomePage = ({ onNavigate }) => (
             <span className="text-xs font-bold uppercase tracking-widest">WB Analytics Pro</span>
         </div>
         <h1 className="text-3xl font-black mb-4 leading-tight">Управляйте продажами умно</h1>
+        <p className="opacity-90 text-sm mb-6 font-medium max-w-[80%]">Мониторинг цен, анализ конкурентов и стратегии от ИИ в одном приложении.</p>
         <button onClick={() => onNavigate('scanner')} className="bg-white text-indigo-600 px-6 py-3.5 rounded-2xl font-bold text-sm shadow-lg active:scale-95 transition-transform flex items-center gap-2">
           <Plus size={18} />
           Добавить товар
         </button>
       </div>
+      <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
+      <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
     </div>
+
     <h2 className="text-lg font-bold px-2 text-slate-800">Инструменты</h2>
     <div className="grid grid-cols-2 gap-4">
       <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -163,8 +167,12 @@ const ScannerPage = ({ onNavigate }) => {
     <div className="p-4 flex flex-col h-[80vh] justify-center animate-in zoom-in-95 duration-300">
       <div className="bg-white p-8 rounded-[40px] shadow-2xl shadow-indigo-100 border border-slate-100">
         <div className="text-center mb-6">
+            <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Search size={32} />
+            </div>
             <h2 className="text-2xl font-black text-slate-800">Добавить товар</h2>
         </div>
+
         <div className="relative mb-4">
           <input
             type="number"
@@ -412,7 +420,6 @@ const AIAnalysisPage = () => {
     );
 };
 
-// --- КОМПОНЕНТ ИСТОРИИ ---
 const HistoryPage = () => {
     const [history, setHistory] = useState([]);
     
@@ -467,7 +474,7 @@ const HistoryPage = () => {
     );
 };
 
-const ProfilePage = () => {
+const ProfilePage = ({ onNavigate }) => {
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
 
@@ -491,26 +498,32 @@ const ProfilePage = () => {
                     </div>
                 </div>
             </div>
+            
+            {/* Кнопки меню профиля */}
+            <div className="grid grid-cols-2 gap-3">
+                 <button onClick={() => onNavigate('history')} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center gap-2 active:scale-95 transition-transform">
+                     <div className="bg-indigo-50 p-2 rounded-xl text-indigo-600"><HistoryIcon size={20}/></div>
+                     <span className="text-xs font-bold text-slate-700">История</span>
+                 </button>
+                 {user?.is_admin && (
+                     <button onClick={() => onNavigate('admin')} className="bg-slate-900 p-4 rounded-2xl shadow-lg flex flex-col items-center gap-2 active:scale-95 transition-transform">
+                         <div className="bg-white/20 p-2 rounded-xl text-white"><Shield size={20}/></div>
+                         <span className="text-xs font-bold text-white">Админка</span>
+                     </button>
+                 )}
+            </div>
 
-            <h2 className="font-bold text-lg px-2">Ваш тариф</h2>
+            <h2 className="font-bold text-lg px-2 mt-4">Ваш тариф</h2>
             <div className="space-y-4">
                 {tariffs.map(plan => (
                     <TariffCard key={plan.id} plan={plan} />
                 ))}
             </div>
-            
-            {user?.is_admin && (
-                 <div className="bg-slate-900 text-white p-6 rounded-3xl cursor-pointer shadow-xl shadow-slate-200">
-                     <h3 className="font-bold mb-2">Админ-панель</h3>
-                     <p className="text-sm text-slate-400 mb-4">Управление пользователями и статистикой</p>
-                     <button className="w-full bg-white text-black py-3 rounded-xl font-bold">Открыть статистику</button>
-                 </div>
-            )}
         </div>
     );
 };
 
-const AdminPage = () => {
+const AdminPage = ({ onBack }) => {
   const [stats, setStats] = useState(null);
   
   useEffect(() => {
@@ -520,16 +533,24 @@ const AdminPage = () => {
   }, []);
 
   return (
-    <div className="p-4 space-y-4 pb-24">
-      <h2 className="text-xl font-bold px-2">Статистика платформы</h2>
+    <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-right-4">
+      <div className="flex items-center gap-4 mb-4">
+          <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm"><ArrowUpRight className="rotate-180" size={20}/></button>
+          <h2 className="text-xl font-bold">Панель администратора</h2>
+      </div>
+      
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
           <p className="text-xs text-slate-400 font-bold uppercase">Пользователей</p>
-          <p className="text-2xl font-black text-indigo-600">{stats?.total_users || '-'}</p>
+          <p className="text-3xl font-black text-indigo-600 mt-1">{stats?.total_users || '-'}</p>
         </div>
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
           <p className="text-xs text-slate-400 font-bold uppercase">Товаров в базе</p>
-          <p className="text-2xl font-black text-green-600">{stats?.total_items_monitored || '-'}</p>
+          <p className="text-3xl font-black text-green-600 mt-1">{stats?.total_items_monitored || '-'}</p>
+        </div>
+        <div className="col-span-2 bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
+           <span className="text-emerald-800 font-bold text-sm">Статус сервера</span>
+           <span className="bg-emerald-200 text-emerald-800 text-xs font-bold px-2 py-1 rounded-md">{stats?.server_status || 'Checking...'}</span>
         </div>
       </div>
     </div>
@@ -557,9 +578,9 @@ export default function App() {
       if (activeTab === 'scanner') return <ScannerPage onNavigate={setActiveTab} />;
       if (activeTab === 'monitor') return <MonitorPage />;
       if (activeTab === 'ai') return <AIAnalysisPage />;
-      if (activeTab === 'profile') return <ProfilePage />;
+      if (activeTab === 'profile') return <ProfilePage onNavigate={setActiveTab} />;
       if (activeTab === 'history') return <HistoryPage />;
-      if (activeTab === 'admin') return <AdminPage />;
+      if (activeTab === 'admin') return <AdminPage onBack={() => setActiveTab('profile')} />;
       return null;
   };
 
