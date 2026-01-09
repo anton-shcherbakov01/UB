@@ -1,20 +1,16 @@
 import os
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy import create_engine
 from datetime import datetime
 
-# URL для Async (FastAPI)
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor")
-# URL для Sync (Celery) - просто меняем драйвер в строке
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
-# 1. Асинхронный движок (для API)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=engine_async, class_=AsyncSession, expire_on_commit=False)
 
-# 2. Синхронный движок (для Celery Tasks)
 engine_sync = create_engine(DATABASE_URL_SYNC, echo=False)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_sync)
 
@@ -28,9 +24,10 @@ class User(Base):
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
-    subscription_end_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
+    history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
 
 class MonitoredItem(Base):
     __tablename__ = "monitored_items"
@@ -53,12 +50,20 @@ class PriceHistory(Base):
     recorded_at = Column(DateTime, default=datetime.utcnow)
     item = relationship("MonitoredItem", back_populates="prices")
 
-# Инициализация таблиц (асинхронно)
+class SearchHistory(Base):
+    __tablename__ = "search_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    sku = Column(Integer)
+    type = Column(String) # 'price' или 'ai'
+    title = Column(String) # Название товара или результат
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user = relationship("User", back_populates="history")
+
 async def init_db():
     async with engine_async.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-# Зависимость для FastAPI
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session

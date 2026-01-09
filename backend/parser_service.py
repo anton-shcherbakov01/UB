@@ -6,28 +6,21 @@ import json
 import re
 import sys
 import requests
-import zipfile
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger("WB-Parser")
 logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
-    """
-    Микросервис парсинга Wildberries.
-    Цены: Selenium (Старая надежная версия).
-    Отзывы: API (Вдохновлено WBClient).
-    """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
         self.proxy_user = os.getenv("PROXY_USER")
@@ -35,46 +28,52 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
 
-    # --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ (API) ---
-    def _get_basket_number(self, sku: int) -> str:
+    # --- ЛОГИКА ПОИСКА КОРЗИН (BRUTE FORCE) ---
+    async def _find_working_basket(self, sku: int) -> dict:
+        """
+        Перебирает сервера корзин, чтобы найти рабочий card.json.
+        """
         vol = sku // 100000
-        if 0 <= vol <= 143: return "01"
-        if 144 <= vol <= 287: return "02"
-        if 288 <= vol <= 431: return "03"
-        if 432 <= vol <= 719: return "04"
-        if 720 <= vol <= 1007: return "05"
-        if 1008 <= vol <= 1061: return "06"
-        if 1062 <= vol <= 1115: return "07"
-        if 1116 <= vol <= 1169: return "08"
-        if 1170 <= vol <= 1313: return "09"
-        if 1314 <= vol <= 1601: return "10"
-        if 1602 <= vol <= 1655: return "11"
-        if 1656 <= vol <= 1919: return "12"
-        if 1920 <= vol <= 2045: return "13"
-        if 2046 <= vol <= 2189: return "14"
-        if 2190 <= vol <= 2405: return "15"
-        if 2406 <= vol <= 2621: return "16"
-        if 2622 <= vol <= 2837: return "17"
-        return "18"
+        part = sku // 1000
+        
+        # Список хостов для проверки (приоритетные + остальные)
+        # Стандартный расчет
+        t = vol
+        if 0 <= t <= 143: default = "01"
+        elif 144 <= t <= 287: default = "02"
+        elif 288 <= t <= 431: default = "03"
+        elif 432 <= t <= 719: default = "04"
+        elif 720 <= t <= 1007: default = "05"
+        elif 1008 <= t <= 1061: default = "06"
+        elif 1062 <= t <= 1115: default = "07"
+        elif 1116 <= t <= 1169: default = "08"
+        elif 1170 <= t <= 1313: default = "09"
+        elif 1314 <= t <= 1601: default = "10"
+        elif 1602 <= t <= 1655: default = "11"
+        elif 1656 <= t <= 1919: default = "12"
+        elif 1920 <= t <= 2045: default = "13"
+        elif 2046 <= t <= 2189: default = "14"
+        elif 2190 <= t <= 2405: default = "15"
+        elif 2406 <= t <= 2621: default = "16"
+        elif 2622 <= t <= 2837: default = "17"
+        else: default = "18"
 
-    def _get_static_card_data(self, sku: int):
-        """Получение данных из card.json (нужен для rootId и бренда)"""
-        try:
-            basket = self._get_basket_number(sku)
-            vol = sku // 100000
-            part = sku // 1000
-            url = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
-            
-            resp = requests.get(url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                data['image_url'] = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
-                return data
-        except Exception as e:
-            logger.warning(f"Static API Warning: {e}")
+        hosts = [default] + [f"{i:02d}" for i in range(1, 21) if f"{i:02d}" != default]
+
+        async with aiohttp.ClientSession() as session:
+            for host in hosts:
+                url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
+                try:
+                    async with session.get(url, timeout=2) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
+                            return data
+                except:
+                    continue
         return None
 
-    # --- SELENIUM SETUP ---
+    # --- SELENIUM ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -95,29 +94,20 @@ class SeleniumWBParser:
     def _init_driver(self):
         edge_options = EdgeOptions()
         if self.headless: edge_options.add_argument("--headless=new")
-        
-        # --- ФЛАГИ ДЛЯ DOCKER (ОБЯЗАТЕЛЬНО) ---
         edge_options.add_argument("--no-sandbox")
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
-        # -------------------------------------
-
+        edge_options.add_argument("--disable-blink-features=AutomationControlled")
         plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
         edge_options.add_extension(plugin_path)
-        
-        edge_options.add_argument("--log-level=3")
-        edge_options.add_argument("--disable-blink-features=AutomationControlled")
-        edge_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        
         try:
             driver_bin = '/usr/local/bin/msedgedriver'
             service = EdgeService(executable_path=driver_bin)
             driver = webdriver.Edge(service=service, options=edge_options)
-        except Exception as e:
-            logger.error(f"Driver Init Error: {e}")
-            raise e
+        except:
+            raise Exception("Driver init failed")
         driver.set_page_load_timeout(120)
         return driver
 
@@ -128,118 +118,99 @@ class SeleniumWBParser:
                 txt = driver.execute_script("return arguments[0].textContent;", elements[0])
                 if not txt: txt = driver.execute_script("return arguments[0].innerText;", elements[0])
                 digits = re.sub(r'[^\d]', '', txt)
-                val = int(digits) if digits else 0
-                if val > 0: logger.info(f"Price found ({selector}): {val}")
-                return val
+                return int(digits) if digits else 0
         except: return 0
         return 0
 
     def get_product_data(self, sku: int):
-        """
-        Парсинг цен (Твой старый рабочий код + фиксы для Docker).
-        """
         logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
-        max_attempts = 2
         
-        # Получаем бренд/название из статики (чтобы не падать, если селекторы сломались)
-        static_data = self._get_static_card_data(sku)
-        brand = static_data.get('selling', {}).get('brand_name') if static_data else "Unknown"
-        name = static_data.get('imt_name') or static_data.get('subj_name') if static_data else f"Товар {sku}"
+        # 1. СТАТИКА (Быстрое имя и бренд)
+        static_info = {"name": f"Товар {sku}", "brand": "Unknown"}
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            data = loop.run_until_complete(self._find_working_basket(sku))
+            if data:
+                static_info["name"] = data.get('imt_name') or data.get('subj_name')
+                static_info["brand"] = data.get('selling', {}).get('brand_name')
+            loop.close()
+        except: pass
 
-        for attempt in range(1, max_attempts + 1):
+        # 2. SELENIUM (Цены)
+        for attempt in range(1, 3):
             driver = None
             try:
                 driver = self._init_driver()
-                
-                # Заходим на главную для куки (Москва)
                 driver.get("https://www.wildberries.ru/")
                 driver.add_cookie({"name": "x-city-id", "value": "77"}) 
+                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
                 
-                # Открываем карточку
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
-                logger.info(f"Load: {url}")
-                driver.get(url)
-                
-                # Проверка Касперского
-                if "Kaspersky" in driver.page_source or "Остановлен переход" in driver.title:
-                    logger.warning("Kaspersky Block. Retry...")
-                    driver.quit(); continue
+                time.sleep(3)
+                if "Kaspersky" in driver.page_source: driver.quit(); continue
 
-                # Ожидание (твоя старая логика)
-                start_wait = time.time()
-                found = False
-                while time.time() - start_wait < 60:
-                    if driver.find_elements(By.CSS_SELECTOR, "[class*='priceBlockFinalPrice']"): 
-                        found = True; break
-                    time.sleep(2)
+                # JSON injection check
+                try:
+                    p_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
+                    if p_json:
+                        d = json.loads(p_json)
+                        price = d.get('price') or (d['products'][0] if 'products' in d else {})
+                        wallet = int(price.get('clientPriceU', 0)/100) or int(price.get('totalPrice', 0)/100)
+                        if wallet > 0:
+                            return {
+                                "id": sku, 
+                                "name": static_info["name"], "brand": static_info["brand"],
+                                "prices": {"wallet_purple": wallet, "standard_black": int(price.get('salePriceU',0)/100), "base_crossed": int(price.get('priceU',0)/100)},
+                                "status": "success"
+                            }
+                except: pass
 
-                # Селекторы из твоего старого кода
-                wallet = self._extract_price(driver, "[class*='productLinePriceWallet'], [class*='priceBlockWalletPrice']")
-                standard = self._extract_price(driver, "[class*='productLinePriceNow'], [class*='priceBlockFinalPrice']")
-                base = self._extract_price(driver, "[class*='productLinePriceOld'], [class*='priceBlockOldPrice']")
+                # DOM check
+                start = time.time()
+                while time.time() - start < 60:
+                    if driver.find_elements(By.CSS_SELECTOR, "[class*='price']"): break
+                    time.sleep(1)
 
-                # Твой JS-сканер (Fallback)
-                if not standard and not wallet:
-                    logger.info("Selenium selectors failed. Running JS Scanner...")
-                    fallback_script = """
-                    let results = [];
-                    document.querySelectorAll('*').forEach(el => {
-                        let text = el.innerText || el.textContent;
-                        if (text && /\\d/.test(text) && text.length < 30) {
-                            let d = text.replace(/[^\\d]/g, '');
-                            if (d.length >= 3 && d.length <= 6) results.push(parseInt(d));
-                        }
-                    });
-                    return results;
-                    """
-                    all_nums = driver.execute_script(fallback_script)
-                    if all_nums:
-                        clean_nums = sorted(list(set([n for n in all_nums if n > 400])))
-                        logger.info(f"JS Found: {clean_nums}")
-                        if clean_nums:
-                            wallet = clean_nums[0]
-                            base = clean_nums[-1]
-                            standard = clean_nums[1] if len(clean_nums) > 2 else clean_nums[0]
+                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], .price-block__wallet-price")
+                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], .price-block__final-price")
+                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], .price-block__old-price")
 
-                if not wallet and not standard:
-                    raise Exception("Prices not found")
+                if wallet == 0 and standard > 0: wallet = standard
+                if wallet == 0: raise Exception("Price not found")
 
-                logger.info(f"Success: {wallet}₽")
                 return {
-                    "id": sku, "name": name, "brand": brand,
+                    "id": sku, 
+                    "name": static_info["name"], "brand": static_info["brand"],
                     "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
                     "status": "success"
                 }
 
             except Exception as e:
-                logger.error(f"Attempt {attempt} Error: {e}")
+                logger.error(f"Try {attempt} error: {e}")
                 continue
             finally:
                 if driver: driver.quit()
-
         return {"id": sku, "status": "error", "message": "Failed to parse prices"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
-        Сбор отзывов.
-        1. Берем rootId из статического card.json (без браузера).
-        2. Качаем отзывы через официальный feedbacks-api (requests).
+        Сбор отзывов: Static JSON (Brute Force) -> API
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         try:
-            # 1. Получаем rootId и картинку
-            static_data = self._get_static_card_data(sku)
-            if not static_data: 
-                raise Exception("Не удалось получить данные о товаре (card.json)")
-            
-            root_id = static_data.get('root_id') or static_data.get('root') or static_data.get('imt_id')
-            if not root_id: raise Exception("Root ID не найден")
-            
-            img_url = static_data.get('image_url', '')
+            # 1. Ищем корзину перебором
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            static_data = loop.run_until_complete(self._find_working_basket(sku))
+            loop.close()
 
-            # 2. Качаем отзывы через API (как в WBClient)
-            logger.info(f"Root ID: {root_id}. Запрос к API...")
-            
+            if not static_data:
+                raise Exception("Не удалось найти card.json (товар удален или сбой WB)")
+
+            root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
+            if not root_id: raise Exception("Root ID не найден")
+
+            # 2. Качаем отзывы
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "*/*",
@@ -247,41 +218,26 @@ class SeleniumWBParser:
                 "Referer": f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
             }
             
-            # Используем тот же endpoint, что и в твоем примере
-            url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={limit}&skip=0&nmId={sku}&imtId={root_id}"
+            feed_data = None
+            for domain in ["feedbacks1", "feedbacks2"]:
+                try:
+                    resp = requests.get(f"https://{domain}.wb.ru/feedbacks/v1/{root_id}", headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        feed_data = resp.json()
+                        break
+                except: pass
             
-            resp = requests.get(url, headers=headers, timeout=15)
-            
-            # Если основной API не сработал, пробуем зеркала
-            if resp.status_code != 200:
-                logger.warning(f"Feedbacks API Error {resp.status_code}. Trying backup...")
-                url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
-                resp = requests.get(url, headers=headers, timeout=15)
+            if not feed_data: raise Exception("API отзывов не отвечает")
 
-            if resp.status_code != 200:
-                raise Exception(f"API отзывов недоступен (Код {resp.status_code})")
+            rating = float(feed_data.get('valuation', 0))
+            reviews = []
+            for f in feed_data.get('feedbacks', [])[:limit]:
+                if f.get('text'):
+                    reviews.append({"text": f['text'], "rating": f.get('productValuation', 5)})
 
-            data = resp.json()
-            feedbacks = data.get('feedbacks') or data.get('data', {}).get('feedbacks', [])
-            
-            reviews_data = []
-            for f in feedbacks:
-                txt = f.get('text', '').strip()
-                rating = f.get('productValuation', 5)
-                if txt:
-                    reviews_data.append({"text": txt, "rating": rating})
-
-            rating_val = float(data.get('valuation', 0))
-
-            logger.info(f"Собрано {len(reviews_data)} отзывов")
-            
             return {
-                "sku": sku,
-                "image": img_url,
-                "rating": rating_val,
-                "reviews": reviews_data,
-                "reviews_count": len(reviews_data),
-                "status": "success"
+                "sku": sku, "image": static_data['image_url'], "rating": rating,
+                "reviews": reviews, "reviews_count": len(reviews), "status": "success"
             }
 
         except Exception as e:

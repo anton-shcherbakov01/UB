@@ -6,103 +6,64 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.orm import selectinload
-from typing import List, Optional
-
 from parser_service import parser_service
 from analysis_service import analysis_service
 from auth_service import AuthService
-from database import init_db, get_db, User, MonitoredItem, PriceHistory
+from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory
 from tasks import parse_and_save_sku, analyze_reviews_task
 from dotenv import load_dotenv
+from celery.result import AsyncResult
+from celery_app import celery_app
 
-# Инициализация окружения
 load_dotenv()
-
 app = FastAPI(title="WB Analytics Platform")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
 ADMIN_USERNAME = "AntonShch" 
 
-# --- ЗАВИСИМОСТИ ---
-
 async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Depends(get_db)):
-    """Определяет пользователя по данным из Telegram"""
-    
     user_data_dict = None
-
-    # 1. Попытка авторизации через Telegram
-    if x_tg_data:
-        # Проверяем валидность подписи
-        is_valid = auth_manager.validate_init_data(x_tg_data)
-        
-        if is_valid:
-            # Парсим данные вручную, так как validate возвращает bool
-            try:
-                parsed = dict(parse_qsl(x_tg_data))
-                if 'user' in parsed:
-                    user_data_dict = json.loads(parsed['user'])
-            except Exception as e:
-                print(f"Auth parse error: {e}")
-
-    # 2. Режим отладки
-    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
-         user_data_dict = {"id": 111111, "username": "test_user", "first_name": "Tester"}
-
-    if not user_data_dict:
-        # Возвращаем 401, чтобы фронтенд мог обработать это (хотя для первого запуска можно игнорировать)
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    if x_tg_data and auth_manager.validate_init_data(x_tg_data):
+        try:
+            parsed = dict(parse_qsl(x_tg_data))
+            if 'user' in parsed: user_data_dict = json.loads(parsed['user'])
+        except: pass
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True": 
+        user_data_dict = {"id": 111111, "username": "test", "first_name": "Tester"}
+    
+    if not user_data_dict: raise HTTPException(401, "Unauthorized")
+    
     tg_id = user_data_dict.get('id')
-    username = user_data_dict.get('username')
-    first_name = user_data_dict.get('first_name')
-
-    # Ищем пользователя в БД с ЖАДНОЙ загрузкой (чтобы избежать MissingGreenlet)
     stmt = select(User).options(selectinload(User.items)).where(User.telegram_id == tg_id)
-    result = await db.execute(stmt)
-    user = result.scalars().first()
-
+    user = (await db.execute(stmt)).scalars().first()
+    
     if not user:
-        is_admin = (username == ADMIN_USERNAME)
-        user = User(
-            telegram_id=tg_id,
-            username=username,
-            first_name=first_name,
-            is_admin=is_admin,
-            subscription_plan="free"
-        )
+        is_admin = (user_data_dict.get('username') == ADMIN_USERNAME)
+        user = User(telegram_id=tg_id, username=user_data_dict.get('username'), first_name=user_data_dict.get('first_name'), is_admin=is_admin)
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        # После refresh связь items может сброситься, для надежности можно перезагрузить
-        # Но для нового юзера items пуст, так что не критично.
-    
     return user
 
 @app.on_event("startup")
-async def on_startup():
-    await init_db()
-
-# --- ПОЛЬЗОВАТЕЛЬСКИЕ ЭНДПОИНТЫ ---
+async def on_startup(): await init_db()
 
 @app.get("/api/user/me")
 async def get_profile(user: User = Depends(get_current_user)):
-    """Получить профиль текущего пользователя"""
-    return {
-        "id": user.telegram_id,
-        "username": user.username,
-        "name": user.first_name,
-        "plan": user.subscription_plan,
-        "is_admin": user.is_admin,
-        "items_count": len(user.items) if user.items else 0
-    }
+    return {"id": user.telegram_id, "username": user.username, "plan": user.subscription_plan, "is_admin": user.is_admin, "items_count": len(user.items) if user.items else 0}
+
+@app.get("/api/user/history")
+async def get_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Получить историю запросов"""
+    res = await db.execute(select(SearchHistory).where(SearchHistory.user_id == user.id).order_by(SearchHistory.created_at.desc()).limit(50))
+    return res.scalars().all()
+
+@app.delete("/api/user/history")
+async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Очистить историю"""
+    await db.execute(delete(SearchHistory).where(SearchHistory.user_id == user.id))
+    await db.commit()
+    return {"status": "cleared"}
 
 @app.get("/api/user/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
@@ -129,29 +90,18 @@ async def get_tariffs(user: User = Depends(get_current_user)):
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Добавить товар в ЛИЧНЫЙ список мониторинга"""
-    
-    current_items = len(user.items) if user.items else 0
     limit = 3 if user.subscription_plan == "free" else 50
+    if len(user.items) >= limit: raise HTTPException(403, f"Лимит тарифа исчерпан")
     
-    if current_items >= limit:
-        raise HTTPException(status_code=403, detail=f"Лимит тарифа исчерпан ({limit} товаров).")
+    stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
+    if (await db.execute(stmt)).scalars().first(): return {"status": "exists"}
 
-    stmt = select(MonitoredItem).where(
-        MonitoredItem.user_id == user.id,
-        MonitoredItem.sku == sku
-    )
-    existing = (await db.execute(stmt)).scalars().first()
-    
-    if existing:
-        return {"status": "exists", "message": "Товар уже в списке"}
-
-    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
-    db.add(new_item)
+    db.add(MonitoredItem(user_id=user.id, sku=sku, name="Загрузка..."))
     await db.commit()
-
-    task = parse_and_save_sku.delay(sku)
-    return {"status": "accepted", "task_id": task.id, "message": "Добавлено в очередь"}
+    
+    # Передаем user.id для истории
+    task = parse_and_save_sku.delay(sku, user.id)
+    return {"status": "accepted", "task_id": task.id}
 
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -207,10 +157,10 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
 
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
-    """Запуск ИИ анализа"""
     limit = 30 if user.subscription_plan == "free" else 100
-    task = analyze_reviews_task.delay(sku, limit)
-    return {"status": "accepted", "task_id": task.id, "message": "Анализ запущен"}
+    # Передаем user.id для истории
+    task = analyze_reviews_task.delay(sku, limit, user.id)
+    return {"status": "accepted", "task_id": task.id}
 
 @app.get("/api/ai/result/{task_id}")
 async def get_ai_result(task_id: str):

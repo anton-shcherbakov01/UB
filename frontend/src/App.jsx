@@ -2,18 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
-  Crown, LayoutGrid, Trash2, RefreshCw, X
+  Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon 
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
 } from 'recharts';
 
-// Адрес твоего сервера. Если меняешь домен, меняй и тут.
 const API_URL = "https://api.ulike-bot.ru"; 
 
-// --- ВСПОМОГАТЕЛЬНЫЕ КОМПОНЕНТЫ ---
+// --- КОМПОНЕНТЫ ---
 
-// Нижняя навигация
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-4 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
     <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
@@ -39,14 +37,13 @@ const TabNav = ({ active, setTab, isAdmin }) => (
       <span className="text-[10px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <User size={24} strokeWidth={active === 'profile' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">Профиль</span>
-    </button>
+    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
+       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
+       <span className="text-[10px] font-bold">История</span>
+     </button>
   </div>
 );
 
-// Карточка тарифа
 const TariffCard = ({ plan }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
     {plan.is_best && (
@@ -76,7 +73,6 @@ const TariffCard = ({ plan }) => (
 
 const HomePage = ({ onNavigate }) => (
   <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
-    {/* Баннер */}
     <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-8 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
       <div className="relative z-10">
         <div className="flex items-center gap-2 mb-2 opacity-80">
@@ -90,12 +86,10 @@ const HomePage = ({ onNavigate }) => (
           Добавить товар
         </button>
       </div>
-      {/* Декор */}
       <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
       <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
     </div>
 
-    {/* Быстрые действия */}
     <h2 className="text-lg font-bold px-2 text-slate-800">Инструменты</h2>
     <div className="grid grid-cols-2 gap-4">
       <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -104,7 +98,7 @@ const HomePage = ({ onNavigate }) => (
         </div>
         <div>
             <span className="font-bold text-slate-800 block">Мониторинг</span>
-            <span className="text-xs text-slate-400">История цен и скидок</span>
+            <span className="text-xs text-slate-400">История цен</span>
         </div>
       </div>
       <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -131,7 +125,6 @@ const ScannerPage = ({ onNavigate }) => {
     setStatus('Запуск задачи...');
 
     try {
-      // 1. Ставим задачу
       const res = await fetch(`${API_URL}/api/monitor/add/${sku}`, { 
         method: 'POST',
         headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
@@ -146,9 +139,8 @@ const ScannerPage = ({ onNavigate }) => {
       const data = await res.json();
       const taskId = data.task_id;
 
-      // 2. Полллинг
       let attempts = 0;
-      while (attempts < 60) { // 3 минуты
+      while (attempts < 60) {
         await new Promise(r => setTimeout(r, 3000));
         setStatus('Парсинг WB...');
         
@@ -158,7 +150,7 @@ const ScannerPage = ({ onNavigate }) => {
         if (statusData.info) setStatus(statusData.info);
 
         if (statusData.status === 'SUCCESS') {
-           onNavigate('monitor'); // Перекидываем на список
+           onNavigate('monitor');
            return;
         }
         if (statusData.status === 'FAILURE') throw new Error(statusData.error);
@@ -179,14 +171,13 @@ const ScannerPage = ({ onNavigate }) => {
                 <Search size={32} />
             </div>
             <h2 className="text-2xl font-black text-slate-800">Добавить товар</h2>
-            <p className="text-sm text-slate-400 mt-2">Введите артикул Wildberries для начала отслеживания</p>
         </div>
 
         <div className="relative mb-4">
           <input
             type="number"
             placeholder="Артикул (SKU)"
-            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-500 rounded-2xl p-5 pl-4 text-center text-2xl font-black outline-none transition-all placeholder:text-slate-300 text-slate-800"
+            className="w-full bg-slate-50 border-none rounded-2xl p-5 pl-4 text-center text-2xl font-black outline-none transition-all placeholder:text-slate-300 text-slate-800"
             value={sku}
             onChange={(e) => setSku(e.target.value)}
           />
@@ -194,7 +185,7 @@ const ScannerPage = ({ onNavigate }) => {
         <button
           onClick={handleScan}
           disabled={loading}
-          className="w-full bg-black text-white p-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl disabled:opacity-70 disabled:scale-100"
+          className="w-full bg-black text-white p-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl disabled:opacity-70"
         >
           {loading ? <><Loader2 className="animate-spin" /> {status}</> : 'Начать отслеживание'}
         </button>
@@ -230,7 +221,7 @@ const MonitorPage = () => {
   };
 
   const loadHistory = async (sku) => {
-    setHistoryData(null); // Clear prev
+    setHistoryData(null);
     try {
         const res = await fetch(`${API_URL}/api/monitor/history/${sku}`, {
             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
@@ -248,7 +239,6 @@ const MonitorPage = () => {
         </button>
       </div>
       
-      {/* График (Модальное окно или развернутая карточка) */}
       {historyData && (
         <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative">
@@ -320,48 +310,44 @@ const MonitorPage = () => {
 };
 
 const AIAnalysisPage = () => {
-  const [sku, setSku] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState('');
-  const [result, setResult] = useState(null);
+    const [sku, setSku] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [status, setStatus] = useState('');
+    const [result, setResult] = useState(null);
 
-  const runAnalysis = async () => {
-      if(!sku) return;
-      setLoading(true);
-      setResult(null);
-      try {
-          const res = await fetch(`${API_URL}/api/ai/analyze/${sku}`, { 
-              method: 'POST',
-              headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-          });
-          const data = await res.json();
-          
-          // Polling с таймаутом 3 минуты
-          let attempts = 0;
-          while(attempts < 45) { // 45 * 4 сек = 3 мин
-              await new Promise(r => setTimeout(r, 4000));
-              
-              const sRes = await fetch(`${API_URL}/api/ai/result/${data.task_id}`);
-              const sData = await sRes.json();
-              
-              if (sData.status === 'SUCCESS') {
-                  setResult(sData.data);
-                  break;
-              }
-              if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
-              
-              // Показываем реальный статус от воркера
-              if (sData.info) setStatus(sData.info);
-              else setStatus('Обработка...');
-              
-              attempts++;
-          }
-      } catch(e) {
-          alert(e.message);
-      } finally {
-          setLoading(false);
-      }
-  };
+    const runAnalysis = async () => {
+        if(!sku) return;
+        setLoading(true);
+        setResult(null);
+        try {
+            const res = await fetch(`${API_URL}/api/ai/analyze/${sku}`, { 
+                method: 'POST',
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            });
+            const data = await res.json();
+            const taskId = data.task_id;
+            
+            let attempts = 0;
+            while(attempts < 60) {
+                setStatus('Анализ отзывов...');
+                await new Promise(r => setTimeout(r, 4000));
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
+                const sData = await sRes.json();
+                
+                if (sData.status === 'SUCCESS') {
+                    setResult(sData.data);
+                    break;
+                }
+                if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
+                if (sData.info) setStatus(sData.info);
+                attempts++;
+            }
+        } catch(e) {
+            alert(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -393,7 +379,6 @@ const AIAnalysisPage = () => {
 
             {result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
-                    {/* Товар */}
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" />}
                         <div>
@@ -405,10 +390,9 @@ const AIAnalysisPage = () => {
                         </div>
                     </div>
 
-                    {/* Жалобы */}
                     <div className="bg-red-50 p-6 rounded-3xl border border-red-100">
                         <h3 className="text-red-600 font-black text-lg flex items-center gap-2 mb-4">
-                            <ThumbsDown size={20} /> Жалобы клиентов
+                            <ThumbsDown size={20} /> ТОП Жалоб
                         </h3>
                         <ul className="space-y-3">
                             {result.ai_analysis.flaws?.map((f, i) => (
@@ -419,7 +403,6 @@ const AIAnalysisPage = () => {
                         </ul>
                     </div>
 
-                    {/* Стратегия */}
                     <div className="bg-indigo-50 p-6 rounded-3xl border border-indigo-100">
                         <h3 className="text-indigo-600 font-black text-lg flex items-center gap-2 mb-4">
                             <Crown size={20} /> Стратегия победы
@@ -455,11 +438,8 @@ const ProfilePage = () => {
                     <User size={32} />
                 </div>
                 <div>
-                    <h2 className="text-xl font-bold">{user?.name || 'Пользователь'}</h2>
+                    <h2 className="text-xl font-bold">{user?.name || 'Гость'}</h2>
                     <p className="text-sm text-slate-400">@{user?.username}</p>
-                    <div className="mt-2 inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
-                        {user?.plan || 'Free'} Plan
-                    </div>
                 </div>
             </div>
 
@@ -471,12 +451,63 @@ const ProfilePage = () => {
             </div>
             
             {user?.is_admin && (
-                 <div className="bg-slate-900 text-white p-6 rounded-3xl">
+                 <div className="bg-slate-900 text-white p-6 rounded-3xl cursor-pointer">
                      <h3 className="font-bold mb-2">Админ-панель</h3>
                      <p className="text-sm text-slate-400 mb-4">Управление пользователями и статистикой</p>
                      <button className="w-full bg-white text-black py-3 rounded-xl font-bold">Открыть статистику</button>
                  </div>
             )}
+        </div>
+    );
+};
+
+const HistoryPage = () => {
+    const [history, setHistory] = useState([]);
+    
+    const loadHistory = () => {
+        fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
+            .then(r => r.json())
+            .then(setHistory);
+    };
+
+    const clearHistory = async () => {
+        if(!confirm("Очистить историю?")) return;
+        await fetch(`${API_URL}/api/user/history`, { 
+            method: 'DELETE', 
+            headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} 
+        });
+        loadHistory();
+    };
+
+    useEffect(() => { loadHistory(); }, []);
+
+    return (
+        <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex justify-between items-center px-2">
+                <h2 className="text-xl font-bold text-slate-800">История запросов</h2>
+                {history.length > 0 && (
+                    <button onClick={clearHistory} className="text-red-500 text-xs font-bold uppercase">Очистить</button>
+                )}
+            </div>
+            
+            <div className="space-y-3">
+                {history.length === 0 ? (
+                    <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">История пуста</div>
+                ) : (
+                    history.map((h) => (
+                        <div key={h.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                {h.type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
+                            </div>
+                            <div>
+                                <div className="font-bold text-sm">SKU {h.sku}</div>
+                                <div className="text-xs text-slate-500 truncate max-w-[200px]">{h.title}</div>
+                                <div className="text-[10px] text-slate-300 mt-1">{new Date(h.created_at).toLocaleString()}</div>
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
         </div>
     );
 };
@@ -513,7 +544,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [user, setUser] = useState(null);
 
-  // Получаем инфо о юзере при старте
   useEffect(() => {
       if (window.Telegram?.WebApp) {
         const tgData = window.Telegram.WebApp.initData;
@@ -530,6 +560,7 @@ export default function App() {
       if (activeTab === 'monitor') return <MonitorPage />;
       if (activeTab === 'ai') return <AIAnalysisPage />;
       if (activeTab === 'profile') return <ProfilePage />;
+      if (activeTab === 'history') return <HistoryPage />;
       if (activeTab === 'admin') return <AdminPage />;
       return null;
   };
