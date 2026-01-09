@@ -19,7 +19,7 @@ load_dotenv()
 app = FastAPI(title="WB Analytics Platform")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 auth_manager = AuthService(os.getenv("BOT_TOKEN"))
-ADMIN_USERNAME = "AntonShch" 
+ADMIN_USERNAME = "AAntonShch" 
 
 async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Depends(get_db)):
     user_data_dict = None
