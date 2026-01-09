@@ -62,14 +62,27 @@ def analyze_reviews_task(self, sku: int, limit: int = 50):
     
     self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
     
-    # 2. Отправляем в ИИ (теперь синхронно, просто и надежно)
+    # 2. Отправляем в ИИ
+    # Если метод в analysis_service.py синхронный (на requests), просто вызываем его
+    # Если асинхронный (aiohttp), нужен loop
+    
     ai_result = {}
     reviews = product_data.get('reviews', [])
     
     if reviews:
         try:
-            # Прямой вызов без asyncio
-            ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+            # Проверяем, является ли метод корутиной (async)
+            if asyncio.iscoroutinefunction(analysis_service.analyze_reviews_with_ai):
+                 loop = asyncio.new_event_loop()
+                 asyncio.set_event_loop(loop)
+                 ai_result = loop.run_until_complete(
+                     analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+                 )
+                 loop.close()
+            else:
+                 # Синхронный вызов (если мы переписали на requests)
+                 ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+
         except Exception as e:
             logger.error(f"AI Task Error: {e}")
             ai_result = {"flaws": ["Ошибка анализа"], "strategy": [str(e)]}
