@@ -1,11 +1,10 @@
 import os
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
 
-# Используем postgres по умолчанию
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
@@ -24,7 +23,7 @@ class User(Base):
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
-    subscription_plan = Column(String, default="free")
+    subscription_plan = Column(String, default="free") 
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
@@ -38,7 +37,6 @@ class MonitoredItem(Base):
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
     owner = relationship("User", back_populates="items")
     prices = relationship("PriceHistory", back_populates="item", cascade="all, delete-orphan")
 
@@ -59,6 +57,8 @@ class SearchHistory(Base):
     sku = Column(Integer)
     request_type = Column(String) 
     title = Column(String)
+    # Храним полный результат анализа в JSON-строке
+    result_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="history")
 

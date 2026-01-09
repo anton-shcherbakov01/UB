@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
-  Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, ChevronLeft 
+  Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
+  ChevronLeft, FileDown, LogOut, Receipt
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -10,42 +11,46 @@ import {
 
 const API_URL = "https://api.ulike-bot.ru"; 
 
-// --- КОМПОНЕНТЫ ---
+// --- КОМПОНЕНТЫ НАВИГАЦИИ И UI ---
 
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <LayoutGrid size={24} strokeWidth={active === 'home' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">Главная</span>
+      <span className="text-[9px] font-bold">Главная</span>
     </button>
-    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={24} strokeWidth={active === 'monitor' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">Цены</span>
+      <span className="text-[9px] font-bold">Цены</span>
     </button>
     
-    <div className="relative -top-6 w-1/5 flex justify-center">
+    <div className="relative -top-5 w-1/6 flex justify-center">
         <button 
             onClick={() => setTab('scanner')} 
-            className="bg-indigo-600 text-white w-14 h-14 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
+            className="bg-indigo-600 text-white w-12 h-12 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
         >
-            <Plus size={28} strokeWidth={3} />
+            <Plus size={24} strokeWidth={3} />
         </button>
     </div>
 
-    {/* КНОПКА ИСТОРИИ */}
-    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
-       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
-       <span className="text-[10px] font-bold">История</span>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
+      <span className="text-[9px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
+       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
+       <span className="text-[9px] font-bold">История</span>
+    </button>
+    
+    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <User size={24} strokeWidth={active === 'profile' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">Профиль</span>
+      <span className="text-[9px] font-bold">Профиль</span>
     </button>
   </div>
 );
 
-const TariffCard = ({ plan }) => (
+const TariffCard = ({ plan, onPay }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
     {plan.is_best && (
       <div className="absolute top-0 right-0 bg-indigo-600 text-white px-3 py-1 rounded-bl-xl text-[10px] font-black uppercase">
@@ -64,11 +69,74 @@ const TariffCard = ({ plan }) => (
       ))}
     </ul>
     
-    <button className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
+    <button 
+        onClick={() => !plan.current && onPay(plan.id)}
+        className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}
+    >
       {plan.current ? 'Ваш текущий план' : 'Перейти'}
     </button>
   </div>
 );
+
+const HistoryDetailsModal = ({ item, onClose }) => {
+    if (!item) return null;
+    const data = item.data || {};
+    
+    return (
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative max-h-[80vh] overflow-y-auto">
+                <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
+                <div className="mb-4">
+                    <span className="text-[10px] font-black uppercase text-slate-400">{new Date(item.created_at).toLocaleString('ru-RU')}</span>
+                    <h3 className="font-bold text-xl mt-1">{item.title || `Запрос ${item.id}`}</h3>
+                </div>
+
+                {item.type === 'ai' && data.ai_analysis ? (
+                    <div className="space-y-4">
+                        <div className="flex gap-4 items-center bg-slate-50 p-3 rounded-2xl">
+                             {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
+                             <div>
+                                 <div className="font-bold text-lg flex items-center gap-1"><Star size={16} className="fill-amber-400 text-amber-400"/> {data.rating}</div>
+                                 <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
+                             </div>
+                        </div>
+                        <div className="space-y-2">
+                             <h4 className="font-bold text-red-500 text-sm">Жалобы:</h4>
+                             <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
+                                 {data.ai_analysis.flaws?.map((f,i) => <li key={i}>{f}</li>)}
+                             </ul>
+                        </div>
+                        <div className="space-y-2">
+                             <h4 className="font-bold text-indigo-600 text-sm">Стратегия:</h4>
+                             <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
+                                 {data.ai_analysis.strategy?.map((s,i) => <li key={i}>{s}</li>)}
+                             </ul>
+                        </div>
+                    </div>
+                ) : item.type === 'price' && data.prices ? (
+                    <div className="space-y-3">
+                         <div className="flex justify-between p-3 bg-purple-50 rounded-xl">
+                             <span className="text-purple-700 font-bold">Кошелек</span>
+                             <span className="font-black text-purple-700">{data.prices.wallet_purple} ₽</span>
+                         </div>
+                         <div className="flex justify-between p-3 bg-slate-50 rounded-xl">
+                             <span className="text-slate-600">Обычная</span>
+                             <span className="font-bold">{data.prices.standard_black} ₽</span>
+                         </div>
+                         <div className="flex justify-between p-3">
+                             <span className="text-slate-400">Базовая</span>
+                             <span className="text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
+                         </div>
+                    </div>
+                ) : (
+                    <pre className="text-xs bg-slate-50 p-4 rounded-xl overflow-auto max-h-64 whitespace-pre-wrap">
+                        {JSON.stringify(data, null, 2)}
+                    </pre>
+                )}
+            </div>
+        </div>
+    );
+};
 
 // --- СТРАНИЦЫ ---
 
@@ -231,6 +299,12 @@ const MonitorPage = () => {
     } catch(e) { console.error(e); }
   };
 
+  const downloadReport = async (sku) => {
+      // Открываем в новом окне, чтобы браузер начал скачивание
+      const token = window.Telegram?.WebApp?.initData || "";
+      window.open(`${API_URL}/api/report/pdf/${sku}?x_tg_data=${encodeURIComponent(token)}`, '_blank');
+  };
+
   return (
     <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
       <div className="flex justify-between items-center px-2">
@@ -241,15 +315,20 @@ const MonitorPage = () => {
       </div>
       
       {historyData && (
-        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative">
-                <button onClick={() => setHistoryData(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500">
-                    <X size={20} />
-                </button>
+                <button onClick={() => setHistoryData(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
                 <div className="mb-6">
                     <span className="text-[10px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-lg">{historyData.sku}</span>
                     <h3 className="font-bold text-xl leading-tight mt-2 line-clamp-2">{historyData.name}</h3>
                 </div>
+                
+                <div className="flex gap-2 mb-4">
+                    <button onClick={() => downloadReport(historyData.sku)} className="flex-1 bg-slate-900 text-white py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform">
+                        <FileDown size={16} /> Скачать PDF
+                    </button>
+                </div>
+
                 <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={historyData.history}>
@@ -380,7 +459,7 @@ const AIAnalysisPage = () => {
             {result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                        {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" />}
+                        {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
                         <div>
                             <div className="flex items-center gap-1 text-amber-500 font-black mb-1">
                                 <Star size={16} fill="currentColor" /> {result.rating}
@@ -424,6 +503,7 @@ const AIAnalysisPage = () => {
 const HistoryPage = () => {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [selectedItem, setSelectedItem] = useState(null);
 
     const loadHistory = () => {
         fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
@@ -460,19 +540,20 @@ const HistoryPage = () => {
                     </div>
                 ) : (
                     history.map((h) => (
-                        <div key={h.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.request_type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                {h.request_type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
+                        <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100 active:scale-[0.98] transition-all cursor-pointer">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                {h.type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
                             </div>
-                            <div>
+                            <div className="flex-1 min-w-0">
                                 <div className="font-bold text-sm">SKU {h.sku}</div>
-                                <div className="text-xs text-slate-500 truncate max-w-[200px]">{h.title}</div>
+                                <div className="text-xs text-slate-500 truncate">{h.title}</div>
                                 <div className="text-[10px] text-slate-300 mt-1">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
                             </div>
                         </div>
                     ))
                 )}
             </div>
+            {selectedItem && <HistoryDetailsModal item={selectedItem} onClose={() => setSelectedItem(null)} />}
         </div>
     );
 };
@@ -486,6 +567,17 @@ const ProfilePage = ({ onNavigate }) => {
         fetch(`${API_URL}/api/user/tariffs`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setTariffs);
         fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setUser);
     }, []);
+
+    const pay = async (planId) => {
+        const res = await fetch(`${API_URL}/api/payment/create`, { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
+            body: JSON.stringify({plan_id: planId})
+        });
+        const d = await res.json();
+        if(d.manager_link) window.open(d.manager_link, '_blank');
+        else alert(d.message);
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -502,24 +594,20 @@ const ProfilePage = ({ onNavigate }) => {
                 </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-3">
-                 <button onClick={() => onNavigate('history')} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center gap-2 active:scale-95 transition-transform">
-                     <div className="bg-indigo-50 p-2 rounded-xl text-indigo-600"><HistoryIcon size={20}/></div>
-                     <span className="text-xs font-bold text-slate-700">История</span>
+            {user?.is_admin && (
+                 <button onClick={() => onNavigate('admin')} className="w-full bg-slate-900 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between active:scale-95 transition-transform">
+                     <div className="flex items-center gap-3">
+                         <Shield size={20} className="text-emerald-400"/>
+                         <span className="font-bold text-sm">Админ-панель</span>
+                     </div>
+                     <ArrowUpRight size={18}/>
                  </button>
-                 {/* Кнопка Админка РЕАГИРУЕТ на нажатие */}
-                 {user?.is_admin && (
-                     <button onClick={() => onNavigate('admin')} className="bg-slate-900 p-4 rounded-2xl shadow-lg flex flex-col items-center gap-2 active:scale-95 transition-transform">
-                         <div className="bg-white/20 p-2 rounded-xl text-white"><Shield size={20}/></div>
-                         <span className="text-xs font-bold text-white">Админка</span>
-                     </button>
-                 )}
-            </div>
+            )}
 
             <h2 className="font-bold text-lg px-2 mt-4">Ваш тариф</h2>
             <div className="space-y-4">
                 {tariffs.map(plan => (
-                    <TariffCard key={plan.id} plan={plan} />
+                    <TariffCard key={plan.id} plan={plan} onPay={pay} />
                 ))}
             </div>
         </div>
@@ -551,10 +639,16 @@ const AdminPage = ({ onBack }) => {
           <p className="text-xs text-slate-400 font-bold uppercase">Товаров в базе</p>
           <p className="text-3xl font-black text-green-600 mt-1">{stats?.total_items_monitored || '-'}</p>
         </div>
+        <div className="col-span-2 bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
+           <span className="text-emerald-800 font-bold text-sm">Статус сервера</span>
+           <span className="bg-emerald-200 text-emerald-800 text-xs font-bold px-2 py-1 rounded-md">{stats?.server_status || 'Checking...'}</span>
+        </div>
       </div>
     </div>
   );
 };
+
+// --- ОСНОВНОЙ КОМПОНЕНТ ---
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
