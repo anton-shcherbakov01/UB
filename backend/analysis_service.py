@@ -1,8 +1,8 @@
 import os
 import re
-import aiohttp
 import json
 import logging
+import requests  # Используем синхронный requests
 
 logger = logging.getLogger("AI-Service")
 
@@ -31,7 +31,10 @@ class AnalysisService:
         text = re.sub(r'#+\s?', '', text)
         return text.replace("`", "").strip()
 
-    async def analyze_reviews_with_ai(self, reviews: list, product_name: str):
+    def analyze_reviews_with_ai(self, reviews: list, product_name: str):
+        """
+        Синхронный метод анализа отзывов.
+        """
         if not reviews: return {"error": "Нет отзывов"}
 
         reviews_text = "\n".join([f"- {r['text'][:200]} ({r['rating']}*)" for r in reviews[:25]])
@@ -53,33 +56,38 @@ class AnalysisService:
         """
 
         try:
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "model": "deepseek-chat", 
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.5
-                }
-                headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
-                
-                async with session.post(self.ai_url, json=payload, headers=headers) as resp:
-                    if resp.status != 200:
-                        return {"flaws": ["Ошибка ИИ"], "strategy": ["Попробуйте позже"]}
-                    
-                    result = await resp.json()
-                    content = result['choices'][0]['message']['content']
-                    
-                    try:
-                        json_match = re.search(r'\{[\s\S]*\}', content)
-                        if json_match:
-                            parsed = json.loads(json_match.group(0))
-                            parsed['flaws'] = [self.clean_ai_text(str(f)) for f in parsed.get('flaws', [])]
-                            parsed['strategy'] = [self.clean_ai_text(str(s)) for s in parsed.get('strategy', [])]
-                            return parsed
-                        else:
-                             return {"flaws": ["Формат ответа неверен"], "strategy": [self.clean_ai_text(content[:300])]}
-                    except: return {"flaws": ["Ошибка JSON"], "strategy": ["Не удалось прочитать ответ"]}
+            payload = {
+                "model": "deepseek-chat", 
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5
+            }
+            headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
+            
+            # Синхронный запрос
+            resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=60)
+            
+            if resp.status_code != 200:
+                logger.error(f"AI API Error: {resp.text}")
+                return {"flaws": ["Ошибка ИИ"], "strategy": ["Попробуйте позже"]}
+            
+            result = resp.json()
+            content = result['choices'][0]['message']['content']
+            
+            try:
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    parsed = json.loads(json_match.group(0))
+                    parsed['flaws'] = [self.clean_ai_text(str(f)) for f in parsed.get('flaws', [])]
+                    parsed['strategy'] = [self.clean_ai_text(str(s)) for s in parsed.get('strategy', [])]
+                    return parsed
+                else:
+                        return {"flaws": ["Формат ответа неверен"], "strategy": [self.clean_ai_text(content[:300])]}
+            except Exception as e:
+                logger.error(f"JSON Parse Error: {e}")
+                return {"flaws": ["Ошибка обработки"], "strategy": ["Не удалось прочитать ответ ИИ"]}
 
         except Exception as e:
+            logger.error(f"Connection Error: {e}")
             return {"flaws": ["Сбой сети"], "strategy": ["Ошибка подключения"]}
 
 analysis_service = AnalysisService()
