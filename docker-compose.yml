@@ -19,8 +19,9 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
+      # ВАЖНО: Указываем правильного юзера для проверки
       test: ["CMD-SHELL", "pg_isready -U wb_user -d wb_monitor"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 
@@ -34,7 +35,6 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      # ВАЖНО: Пароль должен совпадать с db
       - DATABASE_URL=postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
