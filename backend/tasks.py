@@ -1,36 +1,31 @@
-import asyncio
 import logging
 import json
+import asyncio
 from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
+# Используем ТОЛЬКО синхронную сессию
 from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User
-from sqlalchemy import select
 
 logger = logging.getLogger("CeleryWorker")
 
 def save_history_sync(user_id, sku, type, title, result_data):
-    """Сохраняем историю с полным JSON результатом"""
+    """Синхронное сохранение истории"""
     if not user_id: return
     session = SyncSessionLocal()
     try:
-        # Сериализуем результат в строку
         json_str = json.dumps(result_data, ensure_ascii=False)
-        h = SearchHistory(
-            user_id=user_id, 
-            sku=sku, 
-            request_type=type, 
-            title=title,
-            result_json=json_str
-        )
+        h = SearchHistory(user_id=user_id, sku=sku, request_type=type, title=title, result_json=json_str)
         session.add(h)
         session.commit()
     except Exception as e:
         logger.error(f"History error: {e}")
+        session.rollback()
     finally:
         session.close()
 
 def save_price_sync(sku, data):
+    """Синхронное сохранение цен"""
     if data.get("status") == "error": return
     session = SyncSessionLocal()
     try:
@@ -38,6 +33,7 @@ def save_price_sync(sku, data):
         if item:
             item.name = data.get("name")
             item.brand = data.get("brand")
+            
             p = data.get("prices", {})
             ph = PriceHistory(
                 item_id=item.id,
@@ -50,26 +46,29 @@ def save_price_sync(sku, data):
             logger.info(f"DB: Updated price for {sku}")
     except Exception as e:
         logger.error(f"DB Error: {e}")
+        session.rollback()
     finally:
         session.close()
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
 def parse_and_save_sku(self, sku: int, user_id: int = None):
-    self.update_state(state='PROGRESS', meta={'status': 'Запуск браузера...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Запуск парсера...'})
     
-    # 1. Парсинг цен (Selenium)
+    # 1. Парсинг
     raw_result = parser_service.get_product_data(sku)
     
     if raw_result.get("status") == "error": 
         return {"status": "error", "error": raw_result.get("message")}
     
-    # Сохраняем в мониторинг
+    self.update_state(state='PROGRESS', meta={'status': 'Сохранение...'})
+    
+    # 2. Сохранение (Синхронно)
     save_price_sync(sku, raw_result)
     
-    # Считаем метрики
+    # 3. Аналитика
     final_result = analysis_service.calculate_metrics(raw_result)
 
-    # Сохраняем в историю (если это ручной запрос)
+    # 4. История (Синхронно)
     if user_id:
         p = raw_result.get('prices', {})
         title = f"{p.get('wallet_purple')}₽ | {raw_result.get('brand')}"
@@ -79,21 +78,34 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
 
 @celery_app.task(bind=True, name="analyze_reviews_task")
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
-    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов (API)...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов...'})
     
+    # 1. Парсинг (API)
     product_data = parser_service.get_full_product_info(sku, limit)
+    
     if product_data.get("status") == "error":
         return {"status": "error", "error": product_data.get("message")}
     
     self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
     
+    # 2. ИИ Анализ
     ai_result = {}
     reviews = product_data.get('reviews', [])
+    
     if reviews:
         try:
-            # Синхронный вызов ИИ
-            ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+            # Если метод в analysis_service написан на requests (синхронно), вызываем прямо
+            if hasattr(analysis_service, 'analyze_reviews_with_ai'):
+                # Проверка на всякий случай, если там все же async
+                if asyncio.iscoroutinefunction(analysis_service.analyze_reviews_with_ai):
+                     loop = asyncio.new_event_loop()
+                     asyncio.set_event_loop(loop)
+                     ai_result = loop.run_until_complete(analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}"))
+                     loop.close()
+                else:
+                     ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
         except Exception as e:
+            logger.error(f"AI Error: {e}")
             ai_result = {"flaws": ["Ошибка"], "strategy": [str(e)]}
     else:
         ai_result = {"flaws": ["Отзывы не найдены"], "strategy": ["-"]}
@@ -115,12 +127,11 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
 
 @celery_app.task(name="update_all_monitored_items")
 def update_all_monitored_items():
-    logger.info("Beat: Часовое обновление цен запущено...")
     session = SyncSessionLocal()
     try:
-        items = session.query(MonitoredItem).all()
-        logger.info(f"Beat: Найдено {len(items)} товаров для обновления.")
-        for item in items:
-            parse_and_save_sku.delay(item.sku)
+        skus = [i.sku for i in session.query(MonitoredItem).all()]
+        logger.info(f"Beat: Обновление {len(skus)} товаров")
+        for sku in skus:
+            parse_and_save_sku.delay(sku)
     finally:
         session.close()

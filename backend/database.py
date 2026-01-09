@@ -5,12 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
 
+# Настройки подключения
+# Для API используем асинхронный драйвер
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
+# Для Воркера (Celery) используем синхронный драйвер (убираем +asyncpg)
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
+# 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=engine_async, class_=AsyncSession, expire_on_commit=False)
 
+# 2. Синхронный движок (Celery)
 engine_sync = create_engine(DATABASE_URL_SYNC, echo=False)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_sync)
 
@@ -23,7 +28,7 @@ class User(Base):
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
-    subscription_plan = Column(String, default="free") 
+    subscription_plan = Column(String, default="free")
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
@@ -37,6 +42,7 @@ class MonitoredItem(Base):
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
     owner = relationship("User", back_populates="items")
     prices = relationship("PriceHistory", back_populates="item", cascade="all, delete-orphan")
 
@@ -57,7 +63,6 @@ class SearchHistory(Base):
     sku = Column(Integer)
     request_type = Column(String) 
     title = Column(String)
-    # Храним полный результат анализа в JSON-строке
     result_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="history")

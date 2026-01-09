@@ -1,5 +1,4 @@
 version: '3.8'
-
 services:
   redis:
     image: redis:alpine
@@ -16,28 +15,21 @@ services:
       - POSTGRES_DB=wb_monitor
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    ports: ["5432:5432"]
     healthcheck:
-      # Проверка здоровья под юзером postgres
       test: ["CMD-SHELL", "pg_isready -U postgres -d wb_monitor"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 
   api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: .
     container_name: wb_api
     command: uvicorn main:app --host 0.0.0.0 --port 8000
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8000:8000"
+    volumes: [".:/app"]
+    ports: ["8000:8000"]
     environment:
       - REDIS_URL=redis://redis:6379/0
-      # Явно используем postgres пользователя
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
@@ -46,16 +38,10 @@ services:
       - HEADLESS=True
       - BOT_TOKEN=${BOT_TOKEN}
       - AI_API_KEY=${AI_API_KEY}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
+    depends_on: [db, redis]
 
   worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: .
     container_name: wb_worker
     environment:
       - C_FORCE_ROOT=1
@@ -68,27 +54,18 @@ services:
       - HEADLESS=True
       - AI_API_KEY=${AI_API_KEY}
     command: celery -A celery_app worker --loglevel=info --concurrency=2
-    volumes:
-      - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
+    volumes: [".:/app"]
+    depends_on: [db, redis]
 
   beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: .
     container_name: wb_beat
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
     command: celery -A celery_app beat --loglevel=info
-    volumes:
-      - ./backend:/app
-    depends_on:
-      - redis
+    volumes: [".:/app"]
+    depends_on: [redis]
 
 volumes:
   postgres_data:
