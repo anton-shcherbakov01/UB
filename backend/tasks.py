@@ -113,6 +113,27 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
 
     return final_result
 
+@celery_app.task(bind=True, name="generate_seo_task")
+def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: int = None):
+    self.update_state(state='PROGRESS', meta={'status': 'Генерация контента...'})
+    
+    # ИИ Генерация
+    content = analysis_service.generate_product_content(keywords, tone)
+    
+    final_result = {
+        "status": "success",
+        "sku": sku,
+        "keywords": keywords,
+        "tone": tone,
+        "generated_content": content
+    }
+    
+    if user_id and sku > 0:
+        title = f"SEO: {content.get('title', 'Без заголовка')[:20]}..."
+        save_history_sync(user_id, sku, 'seo', title, final_result)
+        
+    return final_result
+
 @celery_app.task(name="update_all_monitored_items")
 def update_all_monitored_items():
     session = SyncSessionLocal()

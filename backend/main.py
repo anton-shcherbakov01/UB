@@ -10,13 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
+from typing import List
 
 from parser_service import parser_service
 from analysis_service import analysis_service
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory
 from celery_app import celery_app
-from tasks import parse_and_save_sku, analyze_reviews_task
+from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 
@@ -176,7 +177,7 @@ async def get_status(task_id: str):
     elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
     return resp
 
-# --- AI ---
+# --- AI & SEO ---
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
@@ -186,6 +187,29 @@ async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
 @app.get("/api/ai/result/{task_id}")
 async def get_ai_result(task_id: str):
     return await get_status(task_id)
+
+@app.get("/api/seo/parse/{sku}")
+async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
+    """Извлекаем ключевые слова (название + характеристики)"""
+    res = parser_service.get_seo_data(sku)
+    if res.get("status") == "error":
+        raise HTTPException(400, res.get("message"))
+    return res
+
+class SeoGenRequest(BaseModel):
+    sku: int
+    keywords: List[str]
+    tone: str
+
+@app.post("/api/seo/generate")
+async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
+    """Запуск задачи генерации текста"""
+    if user.subscription_plan == "free":
+        # Можно добавить ограничение, но пока оставим всем
+        pass
+        
+    task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id)
+    return {"status": "accepted", "task_id": task.id}
 
 # --- HISTORY ---
 @app.get("/api/user/history")

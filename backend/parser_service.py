@@ -33,6 +33,7 @@ class SeleniumWBParser:
     - Исправлен поиск корзин (до 50).
     - Оптимизированное ожидание загрузки цен (WebDriverWait).
     - 3 попытки парсинга с увеличенными таймаутами.
+    - Добавлен сбор SEO данных (v13.1).
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -289,6 +290,61 @@ class SeleniumWBParser:
             }
 
         except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def get_seo_data(self, sku: int):
+        """
+        Извлечение данных для SEO: Название, Категория, Опции (Характеристики).
+        Работает только с card.json (быстро).
+        """
+        logger.info(f"--- SEO PARSE SKU: {sku} ---")
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            card_data = loop.run_until_complete(self._find_card_json(sku))
+            loop.close()
+
+            if not card_data:
+                return {"status": "error", "message": "Card not found"}
+
+            # Извлечение базовых слов
+            keywords = []
+            
+            # 1. Название
+            name = card_data.get('imt_name') or card_data.get('subj_name')
+            if name: keywords.append(name)
+            
+            # 2. Категория
+            subj = card_data.get('subj_name')
+            if subj and subj not in keywords: keywords.append(subj)
+            
+            # 3. Характеристики (options)
+            options = card_data.get('options', [])
+            if not options:
+                # Иногда опции лежат внутри grouped_options
+                grouped = card_data.get('grouped_options', [])
+                if grouped:
+                    options = grouped[0].get('options', []) if len(grouped) > 0 else []
+
+            for opt in options:
+                val = opt.get('value', '')
+                if val:
+                    # Чистим от лишних символов, если нужно, но пока берем как есть
+                    keywords.append(val)
+            
+            # Убираем дубликаты сохраняя порядок
+            clean_keywords = list(dict.fromkeys(keywords))
+
+            return {
+                "sku": sku,
+                "name": name,
+                "image": card_data.get('image_url'),
+                "keywords": clean_keywords,
+                "status": "success"
+            }
+
+        except Exception as e:
+            logger.error(f"SEO Parse Error: {e}")
             return {"status": "error", "message": str(e)}
 
 parser_service = SeleniumWBParser()

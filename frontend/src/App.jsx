@@ -3,7 +3,7 @@ import {
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
-  ChevronLeft, FileDown, LogOut, Receipt
+  ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -15,16 +15,20 @@ const API_URL = "https://api.ulike-bot.ru";
 
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <LayoutGrid size={24} strokeWidth={active === 'home' ? 2.5 : 2} />
+    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <LayoutGrid size={22} strokeWidth={active === 'home' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Главная</span>
     </button>
-    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <BarChart3 size={24} strokeWidth={active === 'monitor' ? 2.5 : 2} />
+    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <BarChart3 size={22} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Цены</span>
     </button>
+    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
+       <HistoryIcon size={22} strokeWidth={active === 'history' ? 2.5 : 2} />
+       <span className="text-[9px] font-bold">История</span>
+    </button>
     
-    <div className="relative -top-5 w-1/6 flex justify-center">
+    <div className="relative -top-5 w-[14%] flex justify-center">
         <button 
             onClick={() => setTab('scanner')} 
             className="bg-indigo-600 text-white w-12 h-12 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
@@ -33,18 +37,17 @@ const TabNav = ({ active, setTab, isAdmin }) => (
         </button>
     </div>
 
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
+    <button onClick={() => setTab('seo')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'seo' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <Wand2 size={22} strokeWidth={active === 'seo' ? 2.5 : 2} />
+      <span className="text-[9px] font-bold">SEO</span>
+    </button>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <Brain size={22} strokeWidth={active === 'ai' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
-       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
-       <span className="text-[9px] font-bold">История</span>
-    </button>
-    
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/6 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <User size={24} strokeWidth={active === 'profile' ? 2.5 : 2} />
+    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+      <User size={22} strokeWidth={active === 'profile' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Профиль</span>
     </button>
   </div>
@@ -113,6 +116,25 @@ const HistoryDetailsModal = ({ item, onClose }) => {
                              </ul>
                         </div>
                     </div>
+                ) : item.type === 'seo' && data.generated_content ? (
+                    <div className="space-y-4">
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <h4 className="font-bold text-xs text-slate-400 uppercase mb-2">Ключевые слова</h4>
+                            <div className="flex flex-wrap gap-1">
+                                {data.keywords?.map((k,i) => (
+                                    <span key={i} className="bg-white border px-2 py-0.5 rounded text-[10px]">{k}</span>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <h4 className="font-bold mb-1 text-sm">Заголовок</h4>
+                            <p className="text-sm bg-slate-50 p-3 rounded-xl">{data.generated_content.title}</p>
+                        </div>
+                        <div>
+                            <h4 className="font-bold mb-1 text-sm">Описание</h4>
+                            <p className="text-sm bg-slate-50 p-3 rounded-xl whitespace-pre-wrap">{data.generated_content.description}</p>
+                        </div>
+                    </div>
                 ) : item.type === 'price' && data.prices ? (
                     <div className="space-y-3">
                          <div className="flex justify-between p-3 bg-purple-50 rounded-xl">
@@ -179,9 +201,223 @@ const HomePage = ({ onNavigate }) => (
             <span className="text-xs text-slate-400">Анализ отзывов</span>
         </div>
       </div>
+      <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+        <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+          <Wand2 size={24} />
+        </div>
+        <div>
+            <span className="font-bold text-slate-800 block">SEO Генератор</span>
+            <span className="text-xs text-slate-400">Создание карточек товара</span>
+        </div>
+      </div>
     </div>
   </div>
 );
+
+const SeoGeneratorPage = () => {
+    const [step, setStep] = useState(1); // 1: Input SKU, 2: Edit Keywords/Tone, 3: Result
+    const [sku, setSku] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [keywords, setKeywords] = useState([]);
+    const [newKeyword, setNewKeyword] = useState('');
+    const [tone, setTone] = useState('Продающий');
+    const [result, setResult] = useState(null);
+    const [error, setError] = useState('');
+
+    const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
+
+    const fetchKeywords = async () => {
+        if (!sku) return;
+        setLoading(true);
+        setError('');
+        try {
+            const res = await fetch(`${API_URL}/api/seo/parse/${sku}`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            });
+            const data = await res.json();
+            if (res.status !== 200) throw new Error(data.detail || data.message);
+            
+            setKeywords(data.keywords || []);
+            setStep(2);
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const addKeyword = () => {
+        if (newKeyword.trim() && !keywords.includes(newKeyword.trim())) {
+            setKeywords([...keywords, newKeyword.trim()]);
+            setNewKeyword('');
+        }
+    };
+
+    const removeKeyword = (k) => {
+        setKeywords(keywords.filter(w => w !== k));
+    };
+
+    const copyKeywords = () => {
+        const text = keywords.join(', ');
+        navigator.clipboard.writeText(text);
+        alert("Ключевые слова скопированы!");
+    };
+
+    const generateContent = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/seo/generate`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
+                },
+                body: JSON.stringify({ sku: Number(sku), keywords, tone })
+            });
+            const data = await res.json();
+            const taskId = data.task_id;
+
+            let attempts = 0;
+            while(attempts < 60) {
+                await new Promise(r => setTimeout(r, 3000));
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
+                const sData = await sRes.json();
+                
+                if (sData.status === 'SUCCESS') {
+                    setResult(sData.data.generated_content);
+                    setStep(3);
+                    break;
+                }
+                if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка генерации");
+                attempts++;
+            }
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const CopyButton = ({ text }) => (
+        <button onClick={() => {navigator.clipboard.writeText(text); alert("Скопировано!");}} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors">
+            <Copy size={18} />
+        </button>
+    );
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
+                <h1 className="text-2xl font-black flex items-center gap-2">
+                    <Wand2 className="text-yellow-200" /> SEO Генератор
+                </h1>
+                <p className="text-sm opacity-90 mt-2">Создавайте идеальные описания товаров с помощью ИИ за секунды.</p>
+            </div>
+
+            {step === 1 && (
+                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <h3 className="font-bold text-lg mb-4">Шаг 1. Импорт данных</h3>
+                    <div className="relative mb-4">
+                        <input
+                            type="number"
+                            placeholder="Артикул WB (SKU)"
+                            className="w-full bg-slate-50 border-none rounded-2xl p-4 pl-4 font-bold outline-none focus:ring-2 ring-orange-200 transition-all text-slate-800"
+                            value={sku}
+                            onChange={(e) => setSku(e.target.value)}
+                        />
+                    </div>
+                    {error && <p className="text-red-500 text-sm mb-4 bg-red-50 p-3 rounded-xl">{error}</p>}
+                    <button onClick={fetchKeywords} disabled={loading} className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold active:scale-95 transition-all flex justify-center">
+                        {loading ? <Loader2 className="animate-spin" /> : 'Получить ключевые слова'}
+                    </button>
+                 </div>
+            )}
+
+            {step === 2 && (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg">Шаг 2. Ключевые слова</h3>
+                            <button onClick={copyKeywords} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg active:scale-95">
+                                Копировать всё
+                            </button>
+                        </div>
+                        
+                        <div className="flex flex-wrap gap-2 mb-4">
+                            {keywords.map((k, i) => (
+                                <div key={i} className="bg-slate-100 text-slate-700 px-3 py-1.5 rounded-xl text-sm font-medium flex items-center gap-2">
+                                    {k}
+                                    <button onClick={() => removeKeyword(k)} className="text-slate-400 hover:text-red-500"><X size={14} /></button>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2 mb-6">
+                            <input 
+                                value={newKeyword}
+                                onChange={e => setNewKeyword(e.target.value)}
+                                placeholder="Добавить свой ключ..."
+                                className="flex-1 bg-slate-50 rounded-xl px-4 py-2 text-sm outline-none"
+                            />
+                            <button onClick={addKeyword} className="bg-slate-900 text-white px-4 rounded-xl font-bold text-xl">+</button>
+                        </div>
+
+                        <h3 className="font-bold text-lg mb-3">Настроение текста</h3>
+                        <div className="grid grid-cols-2 gap-2 mb-6">
+                            {toneOptions.map(t => (
+                                <button 
+                                    key={t}
+                                    onClick={() => setTone(t)}
+                                    className={`p-3 rounded-xl text-sm font-bold border transition-all ${tone === t ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-100 bg-white text-slate-500'}`}
+                                >
+                                    {t}
+                                </button>
+                            ))}
+                        </div>
+
+                        {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+
+                        <div className="flex gap-3">
+                            <button onClick={() => setStep(1)} className="flex-1 bg-slate-100 text-slate-600 p-4 rounded-xl font-bold">Назад</button>
+                            <button onClick={generateContent} disabled={loading} className="flex-[2] bg-gradient-to-r from-orange-500 to-pink-500 text-white p-4 rounded-xl font-bold shadow-lg shadow-orange-200 active:scale-95 transition-all flex justify-center gap-2">
+                                {loading ? <Loader2 className="animate-spin" /> : <><Sparkles size={18} /> Генерировать</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {step === 3 && result && (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="font-bold text-slate-400 text-xs uppercase">Заголовок</h3>
+                            <CopyButton text={result.title} />
+                        </div>
+                        <textarea 
+                            className="w-full bg-slate-50 p-3 rounded-xl text-sm font-bold text-slate-800 outline-none focus:ring-2 ring-indigo-100 min-h-[60px]"
+                            value={result.title}
+                            onChange={(e) => setResult({...result, title: e.target.value})}
+                        />
+                    </div>
+
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="font-bold text-slate-400 text-xs uppercase">Описание</h3>
+                            <CopyButton text={result.description} />
+                        </div>
+                        <textarea 
+                            className="w-full bg-slate-50 p-3 rounded-xl text-sm text-slate-700 outline-none focus:ring-2 ring-indigo-100 min-h-[300px] leading-relaxed"
+                            value={result.description}
+                            onChange={(e) => setResult({...result, description: e.target.value})}
+                        />
+                    </div>
+
+                    <button onClick={() => setStep(1)} className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold">Новый поиск</button>
+                </div>
+            )}
+        </div>
+    );
+};
 
 const ScannerPage = ({ onNavigate }) => {
   const [sku, setSku] = useState('');
@@ -561,6 +797,22 @@ const HistoryPage = () => {
 
     useEffect(() => { loadHistory(); }, []);
 
+    const getTypeIcon = (type) => {
+        switch(type) {
+            case 'ai': return <Brain size={18}/>;
+            case 'seo': return <Wand2 size={18}/>;
+            default: return <Search size={18}/>;
+        }
+    };
+
+    const getTypeColor = (type) => {
+         switch(type) {
+            case 'ai': return 'bg-violet-100 text-violet-600';
+            case 'seo': return 'bg-orange-100 text-orange-600';
+            default: return 'bg-emerald-100 text-emerald-600';
+        }
+    }
+
     return (
         <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-between items-center px-2">
@@ -579,8 +831,8 @@ const HistoryPage = () => {
                 ) : (
                     history.map((h) => (
                         <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100 active:scale-[0.98] transition-all cursor-pointer">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${h.type === 'ai' ? 'bg-violet-100 text-violet-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                {h.type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${getTypeColor(h.type)}`}>
+                                {getTypeIcon(h.type)}
                             </div>
                             <div className="flex-1 min-w-0">
                                 <div className="font-bold text-sm">SKU {h.sku}</div>
@@ -708,6 +960,7 @@ export default function App() {
           case 'scanner': return <ScannerPage onNavigate={setActiveTab} />;
           case 'monitor': return <MonitorPage />;
           case 'ai': return <AIAnalysisPage />;
+          case 'seo': return <SeoGeneratorPage />;
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'history': return <HistoryPage />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;
