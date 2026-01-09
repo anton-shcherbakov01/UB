@@ -191,7 +191,7 @@ async def get_ai_result(task_id: str):
 @app.get("/api/seo/parse/{sku}")
 async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
     """Извлекаем ключевые слова (название + характеристики)"""
-    res = parser_service.get_seo_data(sku)
+    res = await parser_service.get_seo_data(sku) # <-- ДОБАВЛЕН AWAIT
     if res.get("status") == "error":
         raise HTTPException(400, res.get("message"))
     return res

@@ -292,17 +292,15 @@ class SeleniumWBParser:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def get_seo_data(self, sku: int):
+    async def get_seo_data(self, sku: int):
         """
         Извлечение данных для SEO: Название, Категория, Опции (Характеристики).
-        Работает только с card.json (быстро).
+        Асинхронный метод для работы внутри FastAPI.
         """
         logger.info(f"--- SEO PARSE SKU: {sku} ---")
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            card_data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
+            # Используем прямой await, так как метод вызывается в async контексте FastAPI
+            card_data = await self._find_card_json(sku)
 
             if not card_data:
                 return {"status": "error", "message": "Card not found"}
