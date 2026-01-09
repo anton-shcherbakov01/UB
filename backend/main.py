@@ -1,300 +1,284 @@
 import os
-import time
-import random
-import logging
 import json
-import re
-import sys
-import requests
-import asyncio
-import aiohttp
-import zipfile
+import io
+import logging
+from urllib.parse import parse_qsl
+from fastapi import FastAPI, HTTPException, Header, Depends, Query
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, func, update
+from fpdf import FPDF
+from pydantic import BaseModel
+
+from parser_service import parser_service
+from analysis_service import analysis_service
+from auth_service import AuthService
+from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory
+from celery_app import celery_app
+from tasks import parse_and_save_sku, analyze_reviews_task
+from celery.result import AsyncResult
 from dotenv import load_dotenv
-from selenium import webdriver
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
+logger = logging.getLogger("API")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | [%(name)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+app = FastAPI(title="WB Analytics Platform")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-logger = logging.getLogger("WB-Parser")
-logging.getLogger('WDM').setLevel(logging.ERROR)
 
-class SeleniumWBParser:
-    """
-    Микросервис парсинга Wildberries v11.2 (Hybrid API + Selenium).
-    """
-    def __init__(self):
-        self.headless = os.getenv("HEADLESS", "True").lower() == "true"
-        self.proxy_user = os.getenv("PROXY_USER")
-        self.proxy_pass = os.getenv("PROXY_PASS")
-        self.proxy_host = os.getenv("PROXY_HOST")
-        self.proxy_port = os.getenv("PROXY_PORT")
+auth_manager = AuthService(os.getenv("BOT_TOKEN", ""))
 
-    # --- ЛОГИКА ПОИСКА КОРЗИН И JSON (STATIC) ---
+# Список ID супер-админов (Anton)
+SUPER_ADMIN_IDS = [901378787]
 
-    async def _check_basket_url(self, session, host, vol, part, sku):
-        """Проверка одного хоста корзины"""
-        url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
+async def get_current_user(
+    x_tg_data: str = Header(None, alias="X-TG-Data"),
+    x_tg_data_query: str = Query(None, alias="x_tg_data"),
+    db: AsyncSession = Depends(get_db)
+):
+    token = x_tg_data if x_tg_data else x_tg_data_query
+    user_data_dict = None
+
+    if token and auth_manager.validate_init_data(token):
         try:
-            async with session.get(url, timeout=3.0) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # Формируем URL картинки сразу
-                    data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
-                    data['host'] = host 
-                    return data
-        except:
-            return None
-        return None
+            parsed = dict(parse_qsl(token))
+            if 'user' in parsed: 
+                user_data_dict = json.loads(parsed['user'])
+        except Exception as e: 
+            logger.error(f"Auth parse error: {e}")
 
-    async def _find_card_json(self, sku: int):
-        """
-        Ищет card.json brute-force методом по корзинам.
-        """
-        vol = sku // 100000
-        part = sku // 1000
-        
-        # Диапазон серверов (на 2025 год их уже больше 40)
-        hosts = [f"{i:02d}" for i in range(1, 45)]
-        
-        # Оптимизация: новые товары (большой vol) чаще на новых серверах
-        if vol > 3000:
-            hosts.reverse()
+    # Fallback для тестов
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
+         user_data_dict = {"id": 901378787, "username": "debug_user", "first_name": "Debug"}
 
-        async with aiohttp.ClientSession() as session:
-            batch_size = 15
-            for i in range(0, len(hosts), batch_size):
-                batch_hosts = hosts[i:i + batch_size]
-                tasks = [self._check_basket_url(session, host, vol, part, sku) for host in batch_hosts]
-                results = await asyncio.gather(*tasks)
-                
-                for res in results:
-                    if res: return res
-            return None
+    if not user_data_dict:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # --- ЛОГИКА ПОЛУЧЕНИЯ ЦЕН (API) ---
-
-    def _get_price_api(self, sku: int):
-        """
-        Прямой запрос к API цен WB (card.wb.ru).
-        Работает быстрее и стабильнее Selenium.
-        """
-        # dest coordinates (Москва)
-        url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                products = data.get('data', {}).get('products', [])
-                if products:
-                    p = products[0]
-                    
-                    # Цены приходят в копейках
-                    sizes = p.get('sizes', [{}])[0]
-                    price_data = sizes.get('price', {})
-                    
-                    # Пытаемся достать цены из разных структур API (WB их меняет)
-                    price_u = price_data.get('total') or price_data.get('basic') or p.get('salePriceU') or p.get('priceU')
-                    basic_u = price_data.get('basic') or p.get('priceU')
-                    
-                    if not price_u:
-                        return None
-
-                    # Конвертация в рубли
-                    wallet = int(price_u / 100)
-                    base = int(basic_u / 100) if basic_u else wallet
-                    
-                    # Эмуляция логики WB (стандартная цена чуть выше кошелька или равна)
-                    standard = int(wallet * 1.03) if wallet == base else int(base * 0.4) # Грубая эвристика, если данных нет
-                    
-                    # Точная логика если есть extended данные
-                    if 'extended' in p:
-                        base = int(p['extended'].get('basicPriceU', 0) / 100)
-                        wallet = int(p['extended'].get('clientPriceU', 0) / 100)
-                    
-                    # Если кошелек 0, берем обычную
-                    if wallet == 0: wallet = int((p.get('salePriceU') or 0) / 100)
-
-                    return {
-                        "wallet_purple": wallet,
-                        "standard_black": wallet, # Часто API отдает одну цену
-                        "base_crossed": base
-                    }
-        except Exception as e:
-            logger.warning(f"API Price Error: {e}")
-        return None
-
-    # --- SELENIUM FALLBACK ---
+    tg_id = user_data_dict.get('id')
     
-    def _init_driver(self):
-        edge_options = EdgeOptions()
-        if self.headless: 
-            edge_options.add_argument("--headless=new")
+    stmt = select(User).where(User.telegram_id == tg_id)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    # FORCE ADMIN FOR ANTON
+    is_super = tg_id in SUPER_ADMIN_IDS
+
+    if not user:
+        user = User(
+            telegram_id=tg_id, 
+            username=user_data_dict.get('username'), 
+            first_name=user_data_dict.get('first_name'), 
+            is_admin=is_super,
+            subscription_plan="business" if is_super else "free"
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    else:
+        # Если юзер уже есть, но это Антон - обновляем права
+        if is_super and (not user.is_admin or user.subscription_plan != "business"):
+            user.is_admin = True
+            user.subscription_plan = "business"
+            await db.commit()
+            await db.refresh(user)
+    
+    return user
+
+@app.on_event("startup")
+async def on_startup(): 
+    await init_db()
+
+@app.get("/api/user/me")
+async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
+    count = (await db.execute(count_stmt)).scalar() or 0
+    return {
+        "id": user.telegram_id,
+        "username": user.username,
+        "name": user.first_name,
+        "plan": user.subscription_plan,
+        "is_admin": user.is_admin,
+        "items_count": count
+    }
+
+# --- MONITORING ENDPOINTS ---
+@app.post("/api/monitor/add/{sku}")
+async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    limits = {"free": 3, "pro": 50, "business": 500}
+    limit = limits.get(user.subscription_plan, 3)
+    
+    count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
+    current = (await db.execute(count_stmt)).scalar() or 0
+    
+    if current >= limit:
+        raise HTTPException(403, f"Лимит тарифа исчерпан ({limit} шт)")
+
+    stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
+    if (await db.execute(stmt)).scalars().first(): 
+        return {"status": "exists", "message": "Товар уже в списке"}
+
+    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
+    db.add(new_item)
+    await db.commit()
+    
+    task = parse_and_save_sku.delay(sku, user.id)
+    return {"status": "accepted", "task_id": task.id}
+
+@app.get("/api/monitor/list")
+async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id).order_by(MonitoredItem.id.desc())
+    items = (await db.execute(stmt)).scalars().all()
+    
+    data = []
+    for i in items:
+        # Оптимизированный запрос последней цены
+        last_price_stmt = select(PriceHistory).where(PriceHistory.item_id == i.id).order_by(PriceHistory.recorded_at.desc()).limit(1)
+        lp = (await db.execute(last_price_stmt)).scalars().first()
         
-        edge_options.add_argument("--no-sandbox")
-        edge_options.add_argument("--disable-dev-shm-usage")
-        edge_options.add_argument("--disable-gpu")
-        edge_options.add_argument("--disable-images")
-        
-        # Proxy (если есть)
-        if self.proxy_host and self.proxy_user:
-            # Тут код плагина, сокращен для краткости, он есть в прошлой версии
-            pass 
-            
-        driver_bin = '/usr/local/bin/msedgedriver'
-        service = EdgeService(executable_path=driver_bin)
-        driver = webdriver.Edge(service=service, options=edge_options)
-        driver.set_page_load_timeout(60)
-        return driver
+        data.append({
+            "id": i.id, "sku": i.sku, "name": i.name, "brand": i.brand,
+            "prices": [{"wallet_price": lp.wallet_price, "standard_price": lp.standard_price}] if lp else []
+        })
+    return data
 
-    # --- MAIN METHODS ---
+@app.delete("/api/monitor/delete/{sku}")
+async def delete_item(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    stmt = delete(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku)
+    await db.execute(stmt)
+    await db.commit()
+    return {"status": "deleted"}
 
-    def get_product_data(self, sku: int):
-        logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
-        
-        # 1. Получаем статику (название, бренд, фото, root_id)
-        # Это нужно и для базы, и для последующего поиска
-        static_data = None
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            static_data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
-        except Exception as e:
-            logger.error(f"Static Async Error: {e}")
+@app.get("/api/monitor/history/{sku}")
+async def get_history(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
+    if not item: raise HTTPException(404, "Item not found in your list")
+    
+    history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.asc()))).scalars().all()
+    
+    return {
+        "sku": sku, 
+        "name": item.name, 
+        "history": [{"date": h.recorded_at.strftime("%d.%m %H:%M"), "wallet": h.wallet_price, "standard": h.standard_price, "base": h.base_price} for h in history]
+    }
 
-        # Дефолтные значения
-        result = {
-            "id": sku,
-            "name": f"Товар {sku}",
-            "brand": "WB",
-            "image": "",
-            "prices": {},
-            "status": "error"
-        }
+@app.get("/api/monitor/status/{task_id}")
+async def get_status(task_id: str): 
+    res = AsyncResult(task_id, app=celery_app)
+    resp = {"task_id": task_id, "status": res.status}
+    if res.status == 'SUCCESS': resp["data"] = res.result
+    elif res.status == 'FAILURE': resp["error"] = str(res.result)
+    elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
+    return resp
 
-        if static_data:
-            result["name"] = static_data.get('imt_name') or static_data.get('subj_name') or result["name"]
-            result["brand"] = static_data.get('selling', {}).get('brand_name') or result["brand"]
-            result["image"] = static_data.get('image_url')
+# --- AI ENDPOINTS ---
+@app.post("/api/ai/analyze/{sku}")
+async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
+    limit = 30 if user.subscription_plan == "free" else 100
+    task = analyze_reviews_task.delay(sku, limit, user.id)
+    return {"status": "accepted", "task_id": task.id}
 
-        # 2. Пытаемся получить цены через быстрое API
-        api_prices = self._get_price_api(sku)
-        if api_prices and api_prices.get('wallet_purple', 0) > 0:
-            logger.info("Цена получена через Mobile API (Fast)")
-            result["prices"] = api_prices
-            result["status"] = "success"
-            return result
+@app.get("/api/ai/result/{task_id}")
+async def get_ai_result(task_id: str):
+    return await get_status(task_id)
 
-        # 3. Fallback: Selenium (если API не вернуло цену или заблочило)
-        logger.info("API цены недоступно, запуск Selenium...")
-        driver = None
-        try:
-            driver = self._init_driver()
-            driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx")
-            time.sleep(5)
-            
-            # Простой поиск по селекторам
-            try:
-                price_el = driver.find_element(By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price")
-                price_text = price_el.text.replace('\xa0', '').replace(' ', '').replace('₽', '')
-                price = int(re.sub(r'[^\d]', '', price_text))
-                
-                if price > 0:
-                    result["prices"] = {
-                        "wallet_purple": price,
-                        "standard_black": price,
-                        "base_crossed": int(price * 1.5)
-                    }
-                    result["status"] = "success"
-            except:
-                logger.error("Selenium selector failed")
-                result["message"] = "Selenium failed to find price element"
+# --- HISTORY ENDPOINTS ---
+@app.get("/api/user/history")
+async def get_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(SearchHistory).where(SearchHistory.user_id == user.id).order_by(SearchHistory.created_at.desc()).limit(50))
+    history = res.scalars().all()
+    result = []
+    for h in history:
+        try: data = json.loads(h.result_json) if h.result_json else {}
+        except: data = {}
+        result.append({"id": h.id, "sku": h.sku, "type": h.request_type, "title": h.title, "created_at": h.created_at, "data": data})
+    return result
 
-        except Exception as e:
-            logger.error(f"Selenium critical: {e}")
-            result["message"] = str(e)
-        finally:
-            if driver: driver.quit()
+@app.delete("/api/user/history")
+async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(SearchHistory).where(SearchHistory.user_id == user.id))
+    await db.commit()
+    return {"status": "cleared"}
 
-        return result
+# --- PAYMENT ---
+class PaymentRequest(BaseModel):
+    plan_id: str
 
-    def get_full_product_info(self, sku: int, limit: int = 50):
-        """
-        Сбор отзывов.
-        """
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
-        
-        # 1. Ищем root_id (imt_id)
-        # Сначала через card.wb.ru (так надежнее)
-        root_id = None
-        
-        try:
-            api_url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}"
-            resp = requests.get(api_url, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                root_id = data.get('data', {}).get('products', [{}])[0].get('root')
-        except: pass
+@app.post("/api/payment/create")
+async def create_payment(req: PaymentRequest, user: User = Depends(get_current_user)):
+    return {"status": "created", "message": f"Оплата тарифа {req.plan_id.upper()}.", "manager_link": "https://t.me/AAntonShch"}
 
-        # Если API не дало root_id, пробуем через статический JSON
-        if not root_id:
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                static_data = loop.run_until_complete(self._find_card_json(sku))
-                loop.close()
-                if static_data:
-                    root_id = static_data.get('imt_id') or static_data.get('root')
-            except: pass
+@app.get("/api/user/tariffs")
+async def get_tariffs(user: User = Depends(get_current_user)):
+    return [
+        {"id": "free", "name": "Старт", "price": "0 ₽", "features": ["3 товара", "История 24ч", "AI (30 отзывов)"], "current": user.subscription_plan == "free", "color": "slate"},
+        {"id": "pro", "name": "PRO", "price": "990 ₽", "features": ["50 товаров", "История 30 дней", "AI (100 отзывов)", "PDF Отчеты"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
+        {"id": "business", "name": "Business", "price": "2990 ₽", "features": ["500 товаров", "Безлимит AI", "Приоритет", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
+    ]
 
-        if not root_id:
-            return {"status": "error", "message": "Не удалось найти ID товара (root_id)"}
+# --- ADMIN STATS ---
+@app.get("/api/admin/stats")
+async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not user.is_admin: raise HTTPException(403, "Forbidden")
+    
+    users_count = (await db.execute(select(func.count(User.id)))).scalar()
+    items_count = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
+    
+    return {
+        "total_users": users_count,
+        "total_items_monitored": items_count,
+        "server_status": "Online (v1.2)"
+    }
 
-        # 2. Грузим отзывы
-        try:
-            url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={limit}&skip=0&nmId={sku}&imtId={root_id}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                "Accept": "*/*",
-                "Origin": "https://www.wildberries.ru"
-            }
-            resp = requests.get(url, headers=headers, timeout=10)
-            
-            if resp.status_code == 200:
-                json_data = resp.json()
-                feedbacks = json_data.get('feedbacks') or []
-                
-                # Если отзывов нет в поле feedbacks, иногда они скрыты или формат другой
-                if not feedbacks and json_data.get('feedbackCount', 0) > 0:
-                    logger.warning("Отзывы есть, но API их не вернуло (возможно, нужны куки)")
-                
-                reviews = []
-                for f in feedbacks:
-                    txt = f.get('text', '')
-                    if txt:
-                        reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
-                
-                return {
-                    "sku": sku,
-                    "rating": json_data.get('valuation', 0),
-                    "reviews_count": json_data.get('feedbackCount', 0),
-                    "reviews": reviews,
-                    "status": "success",
-                    "image": f"https://basket-01.wbbasket.ru/vol{sku//100000}/part{sku//1000}/{sku}/images/c246x328/1.webp" # Fallback image
-                }
-            else:
-                return {"status": "error", "message": f"Feedback API {resp.status_code}"}
+# --- PDF REPORT ---
+@app.get("/api/report/pdf/{sku}")
+async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Только PRO и BUSINESS
+    if user.subscription_plan == "free":
+        raise HTTPException(403, "Upgrade to PRO")
 
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+    item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
+    if not item: raise HTTPException(404, "Item not found")
 
-parser_service = SeleniumWBParser()
+    history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.desc()).limit(100))).scalars().all()
+
+    pdf = FPDF()
+    pdf.add_page()
+    # Стандартный шрифт (Dejavu нужен для кириллицы, но если его нет в докере, юзаем Arial)
+    # В Dockerfile мы добавили fonts-dejavu, поэтому используем его
+    try:
+        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
+        pdf.set_font('DejaVu', '', 14)
+    except:
+        pdf.set_font("Arial", size=12)
+
+    pdf.cell(0, 10, txt=f"Otchet: {item.name[:40]} ({sku})", ln=1, align='C')
+    pdf.ln(5)
+    
+    pdf.set_font_size(10)
+    pdf.cell(60, 10, "Date", 1)
+    pdf.cell(40, 10, "Wallet Price", 1)
+    pdf.cell(40, 10, "Regular Price", 1)
+    pdf.ln()
+
+    for h in history:
+        pdf.cell(60, 10, h.recorded_at.strftime("%Y-%m-%d %H:%M"), 1)
+        pdf.cell(40, 10, f"{h.wallet_price}", 1)
+        pdf.cell(40, 10, f"{h.standard_price}", 1)
+        pdf.ln()
+
+    return StreamingResponse(
+        io.BytesIO(pdf.output(dest='S').encode('latin-1')), 
+        media_type='application/pdf', 
+        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
