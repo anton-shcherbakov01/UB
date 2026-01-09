@@ -211,12 +211,15 @@ const ScannerPage = ({ onNavigate }) => {
       let attempts = 0;
       while (attempts < 60) {
         await new Promise(r => setTimeout(r, 3000));
-        setStatus('Парсинг WB...');
+        // Removed explicit status update here to avoid overriding backend status with static text
         
         const statusRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
         const statusData = await statusRes.json();
         
-        if (statusData.info) setStatus(statusData.info);
+        // Update only if changed
+        if (statusData.info && statusData.info !== status) {
+            setStatus(statusData.info);
+        }
 
         if (statusData.status === 'SUCCESS') {
            onNavigate('monitor');
@@ -254,9 +257,14 @@ const ScannerPage = ({ onNavigate }) => {
         <button
           onClick={handleScan}
           disabled={loading}
-          className="w-full bg-black text-white p-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl disabled:opacity-70"
+          className="w-full bg-black text-white p-5 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl disabled:opacity-70 min-h-[64px]"
         >
-          {loading ? <><Loader2 className="animate-spin" /> {status}</> : 'Начать отслеживание'}
+          {loading ? (
+             <span className="flex items-center gap-2 animate-in fade-in">
+                 <Loader2 className="animate-spin" /> 
+                 <span className="min-w-[100px] text-left">{status}</span>
+             </span>
+          ) : 'Начать отслеживание'}
         </button>
       </div>
     </div>
