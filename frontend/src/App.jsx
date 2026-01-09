@@ -12,8 +12,8 @@ const API_URL = "https://api.ulike-bot.ru";
 
 // --- КОМПОНЕНТЫ ---
 
-const TabNav = ({ active, setTab }) => (
-  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-4 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
+const TabNav = ({ active, setTab, isAdmin }) => (
+  <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
     <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <LayoutGrid size={24} strokeWidth={active === 'home' ? 2.5 : 2} />
       <span className="text-[10px] font-bold">Главная</span>
@@ -32,9 +32,10 @@ const TabNav = ({ active, setTab }) => (
         </button>
     </div>
 
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <Brain size={24} strokeWidth={active === 'ai' ? 2.5 : 2} />
-      <span className="text-[10px] font-bold">ИИ</span>
+    {/* КНОПКА ИСТОРИИ */}
+    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
+       <HistoryIcon size={24} strokeWidth={active === 'history' ? 2.5 : 2} />
+       <span className="text-[10px] font-bold">История</span>
     </button>
     
     <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-1/5 transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
@@ -422,12 +423,13 @@ const AIAnalysisPage = () => {
 
 const HistoryPage = () => {
     const [history, setHistory] = useState([]);
-    
+    const [loading, setLoading] = useState(true);
+
     const loadHistory = () => {
         fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
             .then(r => r.json())
-            .then(setHistory)
-            .catch(console.error);
+            .then(data => { setHistory(data); setLoading(false); })
+            .catch(e => { console.error(e); setLoading(false); });
     };
 
     const clearHistory = async () => {
@@ -451,7 +453,8 @@ const HistoryPage = () => {
             </div>
             
             <div className="space-y-3">
-                {history.length === 0 ? (
+                {loading ? <div className="text-center p-10"><Loader2 className="animate-spin text-slate-400 mx-auto"/></div> : 
+                 history.length === 0 ? (
                     <div className="text-center p-12 bg-white rounded-3xl border border-dashed border-slate-200">
                         <p className="text-slate-400 font-bold text-sm">История пуста</p>
                     </div>
@@ -499,12 +502,12 @@ const ProfilePage = ({ onNavigate }) => {
                 </div>
             </div>
             
-            {/* Кнопки меню профиля */}
             <div className="grid grid-cols-2 gap-3">
                  <button onClick={() => onNavigate('history')} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center gap-2 active:scale-95 transition-transform">
                      <div className="bg-indigo-50 p-2 rounded-xl text-indigo-600"><HistoryIcon size={20}/></div>
                      <span className="text-xs font-bold text-slate-700">История</span>
                  </button>
+                 {/* Кнопка Админка РЕАГИРУЕТ на нажатие */}
                  {user?.is_admin && (
                      <button onClick={() => onNavigate('admin')} className="bg-slate-900 p-4 rounded-2xl shadow-lg flex flex-col items-center gap-2 active:scale-95 transition-transform">
                          <div className="bg-white/20 p-2 rounded-xl text-white"><Shield size={20}/></div>
@@ -535,7 +538,7 @@ const AdminPage = ({ onBack }) => {
   return (
     <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-right-4">
       <div className="flex items-center gap-4 mb-4">
-          <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm"><ArrowUpRight className="rotate-180" size={20}/></button>
+          <button onClick={onBack} className="p-2 bg-white rounded-full shadow-sm active:scale-95"><ChevronLeft size={24}/></button>
           <h2 className="text-xl font-bold">Панель администратора</h2>
       </div>
       
@@ -548,16 +551,10 @@ const AdminPage = ({ onBack }) => {
           <p className="text-xs text-slate-400 font-bold uppercase">Товаров в базе</p>
           <p className="text-3xl font-black text-green-600 mt-1">{stats?.total_items_monitored || '-'}</p>
         </div>
-        <div className="col-span-2 bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
-           <span className="text-emerald-800 font-bold text-sm">Статус сервера</span>
-           <span className="bg-emerald-200 text-emerald-800 text-xs font-bold px-2 py-1 rounded-md">{stats?.server_status || 'Checking...'}</span>
-        </div>
       </div>
     </div>
   );
 };
-
-// --- ОСНОВНОЙ КОМПОНЕНТ ---
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');

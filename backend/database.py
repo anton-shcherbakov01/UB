@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
 
-DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://wb_user:wb_secret_password@db:5432/wb_monitor")
+# Используем postgres по умолчанию
+DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
@@ -25,6 +26,7 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
     created_at = Column(DateTime, default=datetime.utcnow)
+    
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
 
@@ -36,6 +38,7 @@ class MonitoredItem(Base):
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
     owner = relationship("User", back_populates="items")
     prices = relationship("PriceHistory", back_populates="item", cascade="all, delete-orphan")
 

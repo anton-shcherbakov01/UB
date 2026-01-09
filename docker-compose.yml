@@ -11,7 +11,6 @@ services:
     container_name: wb_postgres
     restart: always
     environment:
-      # Используем стандартного пользователя postgres
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=wb_secret_password
       - POSTGRES_DB=wb_monitor
@@ -20,9 +19,9 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      # Проверка под пользователем postgres
+      # Проверка здоровья под юзером postgres
       test: ["CMD-SHELL", "pg_isready -U postgres -d wb_monitor"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 5
 
@@ -38,9 +37,8 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
-      # Обновленная строка подключения
+      # Явно используем postgres пользователя
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # Остальные переменные
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
       - PROXY_HOST=${PROXY_HOST}
@@ -62,7 +60,6 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
-      # Обновленная строка подключения
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - PROXY_USER=${PROXY_USER}
       - PROXY_PASS=${PROXY_PASS}
