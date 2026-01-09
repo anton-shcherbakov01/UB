@@ -29,10 +29,10 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v12.0 (Resilient).
+    Микросервис парсинга Wildberries v13.0 (Robust Selenium).
     - Исправлен поиск корзин (до 50).
-    - Исправлен сбор отзывов (Fallback на старые API).
-    - Гибридный парсинг цен (API -> Selenium).
+    - Оптимизированное ожидание загрузки цен (WebDriverWait).
+    - 3 попытки парсинга с увеличенными таймаутами.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -93,7 +93,6 @@ class SeleniumWBParser:
             async with session.get(url, timeout=1.5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Восстанавливаем URL картинки
                     vol = url.split('vol')[1].split('/')[0]
                     part = url.split('part')[1].split('/')[0]
                     sku = url.split('/')[5]
@@ -142,7 +141,7 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"Driver Init Error: {e}")
             raise e
-        driver.set_page_load_timeout(90)
+        driver.set_page_load_timeout(120)
         return driver
 
     def _extract_price(self, driver, selector):
@@ -175,17 +174,27 @@ class SeleniumWBParser:
         except Exception as e:
             logger.warning(f"Static fail: {e}")
 
-        # 2. Парсим цены (Selenium)
-        for attempt in range(1, 3):
+        # 2. Парсим цены (Selenium) - Увеличенное время ожидания
+        for attempt in range(1, 4): # Увеличили до 3 попыток
             driver = None
             try:
                 driver = self._init_driver()
                 url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP"
                 driver.get(url)
                 
-                time.sleep(7) # Увеличенный sleep, чтобы прогрузился JS
-                driver.execute_script("window.scrollTo(0, 300);")
+                # Даем странице прогрузиться (увеличили с 7 до 10 сек для надежности)
+                time.sleep(15) 
+                driver.execute_script("window.scrollTo(0, 400);")
+                
+                # Явное ожидание блока цены (до 15 секунд)
+                try:
+                    WebDriverWait(driver, 15).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, [class*='walletPrice']"))
+                    )
+                except:
+                    logger.warning(f"Wait timeout for price selector attempt {attempt}")
 
+                # Попытка через JSON (window.staticModel)
                 try:
                     p_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
                     if p_json:
@@ -203,6 +212,7 @@ class SeleniumWBParser:
                             }
                 except: pass
 
+                # Попытка через DOM (Селекторы)
                 wallet = self._extract_price(driver, ".price-block__wallet-price, [class*='walletPrice']")
                 standard = self._extract_price(driver, ".price-block__final-price, [class*='priceBlockFinal']")
                 base = self._extract_price(driver, ".price-block__old-price, [class*='priceBlockOld']")
@@ -216,12 +226,15 @@ class SeleniumWBParser:
                         "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
                         "status": "success"
                     }
+                else:
+                    logger.warning(f"Prices not found in DOM attempt {attempt}")
+
             except Exception as e:
-                logger.error(f"Price attempt {attempt}: {e}")
+                logger.error(f"Price attempt {attempt} error: {e}")
             finally:
                 if driver: driver.quit()
         
-        return {"id": sku, "status": "error", "message": "Failed to parse prices"}
+        return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
         """Сбор отзывов с фоллбэками"""
@@ -236,8 +249,6 @@ class SeleniumWBParser:
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID not found"}
 
-            # Массив эндпоинтов. Основной API (feedbacks-api) требует куки, 
-            # поэтому ставим его последним или используем зеркала feedbacks1/2
             endpoints = [
                 f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
                 f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}",
@@ -258,7 +269,6 @@ class SeleniumWBParser:
             
             if not feed_data: return {"status": "error", "message": "API отзывов недоступен (401/404)"}
 
-            # Унификация ответа (разные API возвращают разную структуру)
             raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
             valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
             
