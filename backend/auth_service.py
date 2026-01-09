@@ -7,14 +7,13 @@ class AuthService:
         self.bot_token = bot_token
 
     def validate_init_data(self, init_data: str) -> bool:
-        if not self.bot_token:
-            return True # Dev mode fallback if token missing
-            
+        if not self.bot_token: return True # Debug skip if no token
         try:
             parsed_data = dict(parse_qsl(init_data))
             if 'hash' not in parsed_data: return False
             
             received_hash = parsed_data.pop('hash')
+            # Сортировка ключей обязательна по доке Telegram
             data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed_data.items()))
 
             secret_key = hmac.new(b"WebAppData", self.bot_token.encode(), hashlib.sha256).digest()

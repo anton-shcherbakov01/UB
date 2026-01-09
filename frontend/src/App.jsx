@@ -439,8 +439,8 @@ const AIAnalysisPage = () => {
                 <div className="mt-6 relative">
                     <input 
                         type="number" 
-                        value={sku}
-                        onChange={e => setSku(e.target.value)}
+                        value={sku} 
+                        onChange={e => setSku(e.target.value)} 
                         placeholder="Артикул конкурента" 
                         className="w-full p-4 pl-12 rounded-xl text-slate-900 font-bold placeholder:font-medium placeholder:text-slate-400 focus:ring-4 ring-white/30 outline-none transition-all"
                     />

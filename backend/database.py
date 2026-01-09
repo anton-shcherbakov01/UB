@@ -6,9 +6,9 @@ from sqlalchemy import create_engine
 from datetime import datetime
 
 # Настройки подключения
-# Значения по умолчанию для Docker сети
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
-DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "").replace("postgresql", "postgresql+psycopg2")
+# Для Воркера (Celery) используем синхронный драйвер
+DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
 # 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
@@ -37,7 +37,7 @@ class MonitoredItem(Base):
     __tablename__ = "monitored_items"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    sku = Column(Integer, index=True)
+    sku = Column(BigInteger, index=True) # Changed to BigInteger for safe measure
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -59,7 +59,7 @@ class SearchHistory(Base):
     __tablename__ = "search_history"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    sku = Column(Integer)
+    sku = Column(BigInteger)
     request_type = Column(String) 
     title = Column(String)
     result_json = Column(Text, nullable=True)
