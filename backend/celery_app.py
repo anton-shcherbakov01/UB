@@ -2,7 +2,8 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Используем redis сервис из docker-compose
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 celery_app = Celery(
     "wb_parser_worker",
@@ -22,7 +23,6 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
 )
 
-# Расписание: КАЖДЫЙ ЧАС
 celery_app.conf.beat_schedule = {
     'update-all-prices-hourly': {
         'task': 'update_all_monitored_items',

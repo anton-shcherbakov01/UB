@@ -8,13 +8,12 @@ import sys
 import requests
 import asyncio
 import aiohttp
+import zipfile  # БЫЛ ПРОПУЩЕН, ДОБАВЛЕН
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv()
 
@@ -27,12 +26,6 @@ logger = logging.getLogger("WB-Parser")
 logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
-    """
-    Микросервис парсинга Wildberries v10.0 (Robust Static + Hybrid).
-    - Автоматический подбор корзины (Basket Brute-force).
-    - Гарантированное получение статики (Название, Бренд, Root).
-    - Selenium только для цен (защита от ботов).
-    """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
         self.proxy_user = os.getenv("PROXY_USER")
@@ -40,10 +33,7 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
 
-    # --- ЛОГИКА ПОИСКА КОРЗИН ---
-    
     def _calc_basket_static(self, sku: int) -> str:
-        """Стандартный алгоритм WB для определения корзины (может устаревать)"""
         vol = sku // 100000
         if 0 <= vol <= 143: return "01"
         if 144 <= vol <= 287: return "02"
@@ -62,21 +52,14 @@ class SeleniumWBParser:
         if 2190 <= vol <= 2405: return "15"
         if 2406 <= vol <= 2621: return "16"
         if 2622 <= vol <= 2837: return "17"
-        return "18" # Default start for check
+        return "18"
 
     async def _find_card_json(self, sku: int):
-        """
-        Ищет card.json. Сначала пробует расчетную корзину, затем перебирает остальные.
-        Возвращает данные товара и номер рабочей корзины.
-        """
         vol = sku // 100000
         part = sku // 1000
-        
-        # Формируем список хостов для проверки
-        # Сначала расчетный, потом 18-25 (новые товары), потом остальные
         calc_host = self._calc_basket_static(sku)
+        # Приоритет: расчетный, затем новые, затем старые
         hosts_priority = [calc_host] + [f"{i:02d}" for i in range(18, 26)] + [f"{i:02d}" for i in range(1, 18)]
-        # Убираем дубликаты сохраняя порядок
         hosts = []
         [hosts.append(h) for h in hosts_priority if h not in hosts]
 
@@ -87,25 +70,33 @@ class SeleniumWBParser:
                     async with session.get(url, timeout=1.5) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            # Формируем ссылку на фото сразу
                             data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
                             return data
                 except:
                     continue
         return None
 
-    # --- SELENIUM SETUP ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
-        manifest_json = json.dumps({"version": "1.0.0", "manifest_version": 2, "name": "Edge Proxy", "permissions": ["proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"], "background": {"scripts": ["background.js"]}})
+        
+        manifest_json = json.dumps({
+            "version": "1.0.0", 
+            "manifest_version": 2, 
+            "name": "Edge Proxy", 
+            "permissions": ["proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"], 
+            "background": {"scripts": ["background.js"]}
+        })
+        
         session_id = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=10))
         auth_user = f"{user}-session-{session_id};country-ru"
+        
         background_js = """
         var config = { mode: "fixed_servers", rules: { singleProxy: { scheme: "http", host: "%s", port: parseInt(%s) }, bypassList: ["localhost"] } };
         chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
         chrome.webRequest.onAuthRequired.addListener(function(details) { return { authCredentials: { username: "%s", password: "%s" } }; }, {urls: ["<all_urls>"]}, ['blocking']);
         """ % (host, port, auth_user, pw)
+        
         extension_path = os.path.join(folder_path, "proxy_auth_plugin.zip")
         with zipfile.ZipFile(extension_path, 'w') as zp:
             zp.writestr("manifest.json", manifest_json)
@@ -119,10 +110,12 @@ class SeleniumWBParser:
         edge_options.add_argument("--disable-dev-shm-usage")
         edge_options.add_argument("--disable-gpu")
         edge_options.add_argument("--disable-blink-features=AutomationControlled")
-        plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
-        edge_options.add_extension(plugin_path)
         edge_options.add_argument("--window-size=1920,1080")
         edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        
+        if self.proxy_user and self.proxy_host:
+            plugin_path = self._create_proxy_auth_extension(self.proxy_user, self.proxy_pass, self.proxy_host, self.proxy_port)
+            edge_options.add_extension(plugin_path)
         
         try:
             driver_bin = '/usr/local/bin/msedgedriver'
@@ -134,22 +127,19 @@ class SeleniumWBParser:
         driver.set_page_load_timeout(120)
         return driver
 
-    def _extract_digits(self, text):
-        if not text: return 0
-        text = str(text).replace('&nbsp;', '').replace(u'\xa0', '')
-        digits = re.sub(r'[^\d]', '', text)
-        return int(digits) if digits else 0
-
-    # --- MAIN METHODS ---
+    def _extract_price(self, driver, selector):
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            for el in elements:
+                text = el.get_attribute("innerText") or el.text
+                digits = re.sub(r'[^\d]', '', text)
+                if digits: return int(digits)
+        except: pass
+        return 0
 
     def get_product_data(self, sku: int):
-        """
-        Парсинг цен (Selenium) + Статика (API).
-        Гарантирует наличие названия и бренда, даже если Selenium не нашел их в DOM.
-        """
         logger.info(f"--- АНАЛИЗ ЦЕН SKU: {sku} ---")
         
-        # 1. Получаем статику (асинхронно запускаем цикл для requests)
         static_info = {"name": f"Товар {sku}", "brand": "Unknown", "image": ""}
         try:
             loop = asyncio.new_event_loop()
@@ -164,22 +154,18 @@ class SeleniumWBParser:
         except Exception as e:
             logger.warning(f"Static fail: {e}")
 
-        # 2. Парсим цены
+        # Если нашли статику и цены (иногда они есть в card.json, но не всегда актуальны для юзера), можно вернуть сразу
+        # Но ТЗ требует Selenium для цен. Идем в Selenium.
+
         for attempt in range(1, 3):
             driver = None
             try:
                 driver = self._init_driver()
-                driver.get("https://www.wildberries.ru/")
-                driver.add_cookie({"name": "x-city-id", "value": "77"})
-                
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
-                driver.get(url)
-                
+                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP")
                 time.sleep(3)
                 driver.execute_script("window.scrollTo(0, 400);")
-                if "Kaspersky" in driver.page_source: driver.quit(); continue
-
-                # Пытаемся взять цену из JSON на странице (самый точный метод)
+                
+                # Проверка JSON на странице
                 try:
                     p_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
                     if p_json:
@@ -188,7 +174,6 @@ class SeleniumWBParser:
                         wallet = int(price.get('clientPriceU', 0)/100) or int(price.get('totalPrice', 0)/100)
                         
                         if wallet > 0:
-                            # Объединяем статику и цену
                             return {
                                 "id": sku, 
                                 "name": static_info["name"], 
@@ -198,81 +183,60 @@ class SeleniumWBParser:
                             }
                 except: pass
 
-                # Если JSON нет, ищем в DOM
+                # DOM
                 start = time.time()
-                while time.time() - start < 45:
+                while time.time() - start < 15: # Уменьшил таймаут для скорости
                     if driver.find_elements(By.CSS_SELECTOR, "[class*='price']"): break
                     time.sleep(1)
 
-                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], .price-block__wallet-price")
-                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], .price-block__final-price")
-                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], .price-block__old-price")
+                wallet = self._extract_price(driver, ".price-block__wallet-price")
+                standard = self._extract_price(driver, ".price-block__final-price")
+                base = self._extract_price(driver, ".price-block__old-price")
+                
+                if wallet == 0 and standard > 0: wallet = standard
 
-                # JS Fallback
-                if not standard and not wallet:
-                    js_prices = driver.execute_script("let r=[]; document.querySelectorAll('[class*=\"price\"]').forEach(e=>{let t=e.innerText; let m=t.match(/\\d[\\d\\s]{2,}/g); if(m) m.forEach(v=>{let n=parseInt(v.replace(/\\s/g,'')); if(n>100 && n<1000000) r.push(n)})}); return [...new Set(r)].sort((a,b)=>a-b);")
-                    if js_prices:
-                        wallet = js_prices[0]
-                        standard = js_prices[1] if len(js_prices) > 1 else js_prices[0]
-                        base = js_prices[-1] if len(js_prices) > 1 else 0
-
-                if wallet == 0: wallet = standard
-                if wallet == 0: raise Exception("Price not found")
-
-                return {
-                    "id": sku, 
-                    "name": static_info["name"], # Берем из статики
-                    "brand": static_info["brand"], # Берем из статики
-                    "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
-                    "status": "success"
-                }
+                if wallet > 0:
+                    return {
+                        "id": sku, 
+                        "name": static_info["name"],
+                        "brand": static_info["brand"],
+                        "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
+                        "status": "success"
+                    }
 
             except Exception as e:
                 logger.error(f"Price Err {attempt}: {e}")
-                continue
             finally:
                 if driver: driver.quit()
+        
         return {"id": sku, "status": "error", "message": "Failed to parse prices"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
-        """
-        Сбор отзывов: Умный поиск Root ID -> API отзывов.
-        """
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         try:
-            # 1. Получаем card.json перебором (гарантирует rootId)
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             static_data = loop.run_until_complete(self._find_card_json(sku))
             loop.close()
 
-            if not static_data: return {"status": "error", "message": "Товар не найден (card.json)"}
+            if not static_data: return {"status": "error", "message": "Товар не найден"}
 
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID не найден"}
 
-            # 2. Качаем отзывы через API
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
             feed_data = None
+            headers = {"User-Agent": "Mozilla/5.0"}
             
-            # Пробуем 3 зеркала API, включая новое
-            for domain in ["feedbacks1", "feedbacks2", "feedbacks-api"]:
-                try:
-                    url = f"https://{domain}.wb.ru/feedbacks/v1/{root_id}"
-                    if domain == "feedbacks-api":
-                         url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={limit}&skip=0&nmId={sku}&imtId={root_id}"
-                    
-                    r = requests.get(url, headers=headers, timeout=10)
-                    if r.status_code == 200: 
-                        feed_data = r.json()
-                        break
-                except: pass
+            # API Feedbacks
+            try:
+                url = f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}"
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code == 200: feed_data = r.json()
+            except: pass
             
             if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
             
             reviews = []
-            raw_list = feed_data.get('feedbacks', []) or feed_data.get('data', {}).get('feedbacks', [])
-            
+            raw_list = feed_data.get('feedbacks', [])
             for f in raw_list:
                 if f.get('text'): reviews.append({"text": f['text'], "rating": f.get('productValuation', 5)})
                 if len(reviews) >= limit: break

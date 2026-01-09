@@ -6,10 +6,9 @@ from sqlalchemy import create_engine
 from datetime import datetime
 
 # Настройки подключения
-# Для API используем асинхронный драйвер
+# Значения по умолчанию для Docker сети
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
-# Для Воркера (Celery) используем синхронный драйвер (убираем +asyncpg)
-DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
+DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "").replace("postgresql", "postgresql+psycopg2")
 
 # 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)

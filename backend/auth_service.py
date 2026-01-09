@@ -7,6 +7,9 @@ class AuthService:
         self.bot_token = bot_token
 
     def validate_init_data(self, init_data: str) -> bool:
+        if not self.bot_token:
+            return True # Dev mode fallback if token missing
+            
         try:
             parsed_data = dict(parse_qsl(init_data))
             if 'hash' not in parsed_data: return False
