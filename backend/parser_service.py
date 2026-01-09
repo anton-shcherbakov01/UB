@@ -7,6 +7,8 @@ import re
 import sys
 import requests
 import zipfile
+import asyncio
+import aiohttp
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -33,7 +35,6 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
 
-    # --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
     def _get_basket_number(self, sku: int) -> str:
         vol = sku // 100000
         if 0 <= vol <= 143: return "01"
@@ -69,7 +70,6 @@ class SeleniumWBParser:
         except: pass
         return None
 
-    # --- SELENIUM ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -108,21 +108,14 @@ class SeleniumWBParser:
         driver.set_page_load_timeout(120)
         return driver
 
-    def _extract_price(self, driver, selector):
-        try:
-            elements = driver.find_elements(By.CSS_SELECTOR, selector)
-            if elements:
-                txt = driver.execute_script("return arguments[0].textContent;", elements[0])
-                digits = re.sub(r'[^\d]', '', txt)
-                return int(digits) if digits else 0
-        except: return 0
-        return 0
+    def _extract_digits(self, text):
+        if not text: return 0
+        text = str(text).replace('&nbsp;', '').replace(u'\xa0', '')
+        digits = re.sub(r'[^\d]', '', text)
+        return int(digits) if digits else 0
 
     def get_product_data(self, sku: int):
-        """Парсинг цен (Selenium Old Stable)"""
         logger.info(f"--- PRICES SKU: {sku} ---")
-        
-        # Берем имя из статики, чтобы не падать на селекторах
         static_data = self._get_static_card_data(sku)
         brand = static_data.get('selling', {}).get('brand_name') if static_data else "Unknown"
         name = static_data.get('imt_name') or static_data.get('subj_name') if static_data else f"Товар {sku}"
@@ -133,61 +126,47 @@ class SeleniumWBParser:
                 driver = self._init_driver()
                 driver.get("https://www.wildberries.ru/")
                 driver.add_cookie({"name": "x-city-id", "value": "77"})
-                
-                url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786"
-                driver.get(url)
-                
+                driver.get(f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP&dest=-1257786")
                 time.sleep(3)
                 driver.execute_script("window.scrollTo(0, 400);")
                 if "Kaspersky" in driver.page_source: driver.quit(); continue
 
-                # Ожидание
+                try:
+                    product_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
+                    if product_json:
+                        data = json.loads(product_json)
+                        price_data = data.get('price') or (data['products'][0] if 'products' in data else {})
+                        wallet = int(price_data.get('clientPriceU', 0)/100) or int(price_data.get('totalPrice', 0)/100)
+                        if wallet > 0:
+                            return {"id": sku, "name": name, "brand": brand, "prices": {"wallet_purple": wallet, "standard_black": int(price_data.get('salePriceU',0)/100), "base_crossed": int(price_data.get('priceU',0)/100)}, "status": "success"}
+                except: pass
+
                 start = time.time()
                 while time.time() - start < 60:
-                    if driver.find_elements(By.CSS_SELECTOR, "[class*='priceBlockFinalPrice']"): break
+                    if driver.find_elements(By.CSS_SELECTOR, "[class*='price']"): break
                     time.sleep(1)
 
-                # Селекторы
-                wallet = self._extract_price(driver, "[class*='priceBlockWalletPrice'], .price-block__wallet-price, [class*='productLinePriceWallet']")
-                standard = self._extract_price(driver, "[class*='priceBlockFinalPrice'], .price-block__final-price, [class*='productLinePriceNow']")
-                base = self._extract_price(driver, "[class*='priceBlockOldPrice'], .price-block__old-price, [class*='productLinePriceOld']")
-
-                # JS Fallback
-                if not standard and not wallet:
-                    logger.info("JS Fallback...")
-                    js_prices = driver.execute_script("let r=[]; document.querySelectorAll('[class*=\"price\"]').forEach(e=>{let t=e.innerText; let m=t.match(/\\d[\\d\\s]{2,}/g); if(m) m.forEach(v=>{let n=parseInt(v.replace(/\\s/g,'')); if(n>100 && n<1000000) r.push(n)})}); return [...new Set(r)].sort((a,b)=>a-b);")
-                    if js_prices:
-                        clean = sorted([n for n in js_prices if n > 400])
-                        if clean:
-                            wallet = clean[0]
-                            standard = clean[1] if len(clean) > 1 else clean[0]
-                            base = clean[-1] if len(clean) > 1 else 0
-
-                if wallet == 0: wallet = standard
-                if standard == 0: raise Exception("Prices not found")
+                prices = []
+                elements = driver.find_elements(By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, .price-block__old-price, [class*='Price']")
+                for el in elements:
+                    txt = el.get_attribute('textContent')
+                    nums = re.findall(r'\d+', txt.replace('\xa0', '').replace(' ', ''))
+                    if nums: prices.append(int(nums[0]))
                 
-                # Доп. попытка взять бренд со страницы
-                if brand == "Unknown":
-                    b_el = driver.find_elements(By.CSS_SELECTOR, ".product-page__header-brand")
-                    if b_el: brand = b_el[0].text.strip()
-
-                return {
-                    "id": sku, "name": name, "brand": brand,
-                    "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
-                    "status": "success"
-                }
+                prices = sorted(list(set([p for p in prices if 100 < p < 1000000])))
+                if prices:
+                    wallet = prices[0]
+                    return {"id": sku, "name": name, "brand": brand, "prices": {"wallet_purple": wallet, "standard_black": prices[1] if len(prices)>2 else wallet, "base_crossed": prices[-1]}, "status": "success"}
+                raise Exception("Prices not found")
 
             except Exception as e:
                 logger.error(f"Err {attempt}: {e}")
                 continue
             finally:
                 if driver: driver.quit()
-        return {"id": sku, "status": "error", "message": "Failed to parse prices"}
+        return {"id": sku, "status": "error", "message": "Failed"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
-        """
-        Сбор отзывов (Static + API). Работает стабильно.
-        """
         logger.info(f"--- REVIEWS SKU: {sku} ---")
         try:
             static_data = self._get_static_card_data(sku)

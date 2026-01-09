@@ -28,7 +28,8 @@ async def get_current_user(x_tg_data: str = Header(None), db: AsyncSession = Dep
             parsed = dict(parse_qsl(x_tg_data))
             if 'user' in parsed: user_data_dict = json.loads(parsed['user'])
         except: pass
-    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True": user_data_dict = {"id": 111111, "username": "test", "first_name": "Tester"}
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True": 
+        user_data_dict = {"id": 111111, "username": "test", "first_name": "Tester"}
     
     if not user_data_dict: raise HTTPException(401, "Unauthorized")
     
