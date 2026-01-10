@@ -1,39 +1,47 @@
 import os
 from celery import Celery
-from celery.schedules import crontab
 
-# Настройки Redis
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Получаем URL из окружения (по умолчанию локальный Docker)
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 celery_app = Celery(
-    "wb_parser_worker",
+    "wb_bot_worker",
     broker=REDIS_URL,
     backend=REDIS_URL
 )
 
 celery_app.conf.update(
+    # --- Основные настройки ---
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
     timezone="Europe/Moscow",
     enable_utc=True,
-    worker_max_tasks_per_child=50,
-    task_acks_late=True,
-    worker_prefetch_multiplier=1,
+
+    # --- FIX: Устойчивость к падениям Redis ---
+    
+    # 1. Разрешить ретрай подключения при старте (обязательно для Celery 6.0+)
     broker_connection_retry_on_startup=True,
-    imports=['tasks']
+    
+    # 2. Бесконечные попытки переподключения
+    broker_connection_max_retries=None,
+
+    # 3. Настройки транспорта Redis (Healthchecks)
+    # Это позволяет Celery понять, что соединение умерло, и пересоздать его,
+    # вместо того чтобы ждать вечно или падать с ошибкой.
+    broker_transport_options={
+        "visibility_timeout": 3600,  # 1 час на задачу
+        "health_check_interval": 10, # Проверять пульс Redis каждые 10 сек
+        "socket_timeout": 15,        # Таймаут операций
+        "socket_connect_timeout": 15,
+        "socket_keepalive": True,
+    },
+
+    # --- Оптимизация исполнения задач ---
+    # worker_concurrency=2, # Можно раскомментировать для ограничения потоков
+    worker_prefetch_multiplier=1, # Брать по 1 задаче за раз (важно для долгих задач парсинга)
+    task_acks_late=True, # Подтверждать выполнение ТОЛЬКО после завершения (если упадет, задача вернется в очередь)
 )
 
-# Расписание
-celery_app.conf.beat_schedule = {
-    # 1. Обновление цен парсингом - каждый час
-    'update-all-prices-hourly': {
-        'task': 'update_all_monitored_items',
-        'schedule': crontab(minute=0, hour='*'),
-    },
-    # 2. "Дзынь!" - проверка заказов каждые 15 минут
-    'check-new-orders-15min': {
-        'task': 'check_new_orders',
-        'schedule': crontab(minute='*/15'),
-    },
-}
+# Автоматический поиск задач в файле tasks.py
+celery_app.autodiscover_tasks(["tasks"])
