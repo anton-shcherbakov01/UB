@@ -3,22 +3,23 @@ import aiohttp
 import asyncio
 import json
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger("WB-API-Service")
 
 class WBApiService:
     """
-    Сервис для работы с официальным API Wildberries (Statistics API).
-    Добавлено: Retry-механизм и простое In-Memory кэширование.
+    Сервис для работы с официальным API Wildberries (Statistics API + Common API).
+    Внедрен механизм повторных запросов (Retry) и кэширования (In-Memory).
     """
     
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
-    ADV_URL = "https://advert-api.wb.ru/adv/v1" # Для рекламы
+    COMMON_URL = "https://common-api.wildberries.ru/api/v1" # Тарифы, коэффициенты
+    ADV_URL = "https://advert-api.wb.ru/adv/v1" # Реклама
     
-    # Простой кэш в памяти: { "token_method_params": (timestamp, data) }
+    # In-Memory Cache: { "token_method_params": (timestamp, data) }
     _cache: Dict[str, Any] = {}
-    _cache_ttl = 300 # 5 минут жизни кэша
+    _cache_ttl = 300 # 5 минут (TTL)
 
     async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
         """
@@ -45,26 +46,26 @@ class WBApiService:
                         await asyncio.sleep(backoff)
                         backoff *= 2
                     else:
-                        # 401, 400 и т.д. - нет смысла повторять
-                        logger.error(f"WB API Error {resp.status}: {await resp.text()}")
+                        text = await resp.text()
+                        # 401, 400 и т.д. - нет смысла повторять, логируем ошибку
+                        logger.error(f"WB API Error {resp.status}: {text}")
                         return None
             except Exception as e:
                 logger.error(f"Request failed: {e}")
                 await asyncio.sleep(backoff)
-                
+        
         logger.error(f"Failed to fetch {url} after {retries} attempts.")
         return None
 
     def _get_cache_key(self, token, method, params):
-        """Генерация ключа кэша"""
-        # Используем только последние символы токена для ключа, чтобы не хранить его целиком в логах если что
+        """Генерация уникального ключа для кэша"""
         token_part = token[-10:] if token else "none"
         param_str = json.dumps(params, sort_keys=True)
         return f"{token_part}:{method}:{param_str}"
 
     async def _get_cached_or_request(self, session, url, headers, params, use_cache=True):
         """
-        Проверяет кэш перед запросом.
+        Прослойка кэширования перед запросом.
         """
         if not use_cache:
             return await self._request_with_retry(session, url, headers, params)
@@ -77,7 +78,7 @@ class WBApiService:
                 # logger.info(f"Returning cached data for {url}")
                 return data
         
-        # Если в кэше нет или протух - делаем запрос
+        # Если в кэше нет или он протух - делаем реальный запрос
         data = await self._request_with_retry(session, url, headers, params)
         
         if data is not None:
@@ -96,7 +97,7 @@ class WBApiService:
         
         async with aiohttp.ClientSession() as session:
             try:
-                # Для проверки токена кэш не используем, нужен свежий статус
+                # Для проверки токена кэш отключаем, нужен актуальный статус
                 async with session.get(url, headers=headers, params=params, timeout=10) as resp:
                     if resp.status == 401:
                         return False
@@ -112,7 +113,7 @@ class WBApiService:
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            # Используем кэш для дашборда, чтобы не долбить при каждом обновлении страницы
+            # Используем кэш для дашборда, чтобы не нагружать API при частом обновлении UI
             orders_task = self._get_orders(session, token, today_str, use_cache=True)
             stocks_task = self._get_stocks(session, token, today_str, use_cache=True)
             
@@ -124,14 +125,14 @@ class WBApiService:
             }
 
     async def get_new_orders_since(self, token: str, last_check: datetime):
-        """Получение новых заказов (без кэша, т.к. это воркер уведомлений)"""
+        """Получение новых заказов (без кэша, для уведомлений)"""
         if not last_check:
             last_check = datetime.now() - timedelta(hours=1)
         
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         
         async with aiohttp.ClientSession() as session:
-            # Для "Дзынь!" кэш отключаем, нужны свежие данные
+            # Для "Дзынь!" кэш отключаем, нужны самые свежие данные
             orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
             
             if not orders_data or "items" not in orders_data:
@@ -150,7 +151,7 @@ class WBApiService:
     async def get_my_stocks(self, token: str):
         """
         Получение списка остатков для Unit-экономики.
-        Кэшируем агрессивно (на 5-10 минут), так как список большой и меняется не часто.
+        Кэшируем агрессивно (на 5 минут), так как список большой и меняется медленно.
         """
         if not token: return []
         
@@ -166,19 +167,51 @@ class WBApiService:
     async def get_warehouse_coeffs(self, token: str):
         """
         Получение коэффициентов приемки (для Supply Chain).
-        Используем метод /api/v1/supplier/incomes (Приемка) как прокси, 
-        либо просто возвращаем моковые данные, если API не дает (официальный метод coeffs закрыт под ключ).
-        Для MVP сделаем симуляцию на основе реальных складов.
+        Подготовлено для использования реального API тарифов (Common API).
         """
-        # Note: Реальный API коэффициентов требует отдельного метода. 
-        # Здесь мы возвращаем структуру для Supply Chain.
+        # URL для будущего использования
+        url = f"{self.COMMON_URL}/tariffs/box"
+        headers = {"Authorization": token} if token else {}
         
+        # В данный момент возвращаем расширенную симуляцию для MVP
         return [
-            {"warehouse": "Коледино", "coefficient": 1, "transit_time": "1-2 дня"},
-            {"warehouse": "Электросталь", "coefficient": 5, "transit_time": "1-2 дня"},
-            {"warehouse": "Казань", "coefficient": 0, "transit_time": "2-3 дня"},
-            {"warehouse": "Тула", "coefficient": 2, "transit_time": "1-2 дня"},
+            {"warehouse": "Коледино", "coefficient": 1, "transit_time": "1 день", "price_per_liter": 30},
+            {"warehouse": "Электросталь", "coefficient": 5, "transit_time": "1 день", "price_per_liter": 150},
+            {"warehouse": "Казань", "coefficient": 0, "transit_time": "2 дня", "price_per_liter": 20},
+            {"warehouse": "Тула", "coefficient": 2, "transit_time": "1 день", "price_per_liter": 60},
+            {"warehouse": "Краснодар", "coefficient": 0, "transit_time": "3 дня", "price_per_liter": 25},
+            {"warehouse": "Санкт-Петербург", "coefficient": 1, "transit_time": "2 дня", "price_per_liter": 35},
         ]
+
+    async def calculate_transit(self, liters: int, destination: str = "Koledino"):
+        """
+        [NEW] Калькулятор транзита (Supply Chain).
+        Рассчитывает стоимость прямой поставки vs транзит.
+        """
+        # Базовые тарифы (можно вынести в конфиг или БД)
+        # Пример: Везти в Коледино напрямую дорого, через Казань дешевле
+        
+        # Прямая поставка (условно 1500р за палету + 30р/литр)
+        direct_base = 1500
+        direct_rate = 30
+        
+        # Транзит через Казань (условно 500р транзит + 10р/литр приемка в Казани)
+        transit_base = 500 
+        transit_rate = 10 
+        transit_logistics = 1000 # Стоимость перевозки Казань -> Коледино
+        
+        return {
+            "destination": destination,
+            "direct": {
+                "rate": direct_rate,
+                "total": direct_base + (liters * direct_rate)
+            },
+            "transit_kazan": {
+                "rate": transit_rate,
+                "logistics": transit_logistics,
+                "total": transit_base + (liters * transit_rate) + transit_logistics
+            }
+        }
 
     async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
         url = f"{self.BASE_URL}/orders"
@@ -190,7 +223,7 @@ class WBApiService:
         if not data:
             return {"count": 0, "sum": 0, "items": []}
         
-        # Данные приходят списком, нам нужно агрегировать
+        # Агрегация данных
         if isinstance(data, list):
             valid_orders = [x for x in data if not x.get("isCancel")]
             total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)

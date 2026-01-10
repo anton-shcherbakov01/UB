@@ -29,12 +29,13 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v14.0 (Robust Selenium).
+    Микросервис парсинга Wildberries v14.1 (Robust Selenium).
     - Исправлен поиск корзин (до 50).
     - Оптимизированное ожидание загрузки цен (WebDriverWait).
     - 3 попытки парсинга с увеличенными таймаутами.
-    - Добавлен сбор SEO данных (v13.1).
-    - Добавлен парсинг позиций в поиске (SERP) (v14.0).
+    - Добавлен сбор SEO данных.
+    - Добавлен парсинг позиций в поиске (SERP).
+    - [FIX] Фоллбэк парсинга остатков через Selenium.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -42,6 +43,13 @@ class SeleniumWBParser:
         self.proxy_pass = os.getenv("PROXY_PASS")
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
+        
+        # Список User-Agents для ротации
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+        ]
 
     # --- ЛОГИКА ПОИСКА КОРЗИН ---
     
@@ -134,7 +142,10 @@ class SeleniumWBParser:
             edge_options.add_extension(plugin_path)
             
         edge_options.add_argument("--window-size=1920,1080")
-        edge_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        
+        # Ротация UA
+        ua = random.choice(self.user_agents)
+        edge_options.add_argument(f"user-agent={ua}")
         
         try:
             driver_bin = '/usr/local/bin/msedgedriver'
@@ -164,15 +175,26 @@ class SeleniumWBParser:
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
         
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
+        total_qty = 0
+
+        # 1. Получаем статику + ОСТАТКИ из card.json (Шпионаж)
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             data = loop.run_until_complete(self._find_card_json(sku))
             loop.close()
+            
             if data:
                 static_info["name"] = data.get('imt_name') or data.get('subj_name')
                 static_info["brand"] = data.get('selling', {}).get('brand_name')
                 static_info["image"] = data.get('image_url')
+                
+                # Парсинг остатков по размерам
+                sizes = data.get('sizes', [])
+                for size in sizes:
+                    stocks = size.get('stocks', [])
+                    for s in stocks:
+                        total_qty += s.get('qty', 0)
         except Exception as e:
             logger.warning(f"Static fail: {e}")
 
@@ -205,10 +227,21 @@ class SeleniumWBParser:
                         wallet = int(price.get('clientPriceU', 0)/100) or int(price.get('totalPrice', 0)/100)
                         
                         if wallet > 0:
+                            # [FALLBACK] Если остатки не нашлись через card.json, пробуем взять отсюда
+                            if total_qty == 0:
+                                try:
+                                    sizes = d.get('sizes', [])
+                                    for size in sizes:
+                                        stocks = size.get('stocks', [])
+                                        for s in stocks:
+                                            total_qty += s.get('qty', 0)
+                                except: pass
+
                             return {
                                 "id": sku, 
                                 "name": static_info["name"], 
                                 "brand": static_info["brand"],
+                                "stock_qty": total_qty,
                                 "prices": {"wallet_purple": wallet, "standard_black": int(price.get('salePriceU',0)/100), "base_crossed": int(price.get('priceU',0)/100)},
                                 "status": "success"
                             }
@@ -225,6 +258,7 @@ class SeleniumWBParser:
                         "id": sku, 
                         "name": static_info["name"], 
                         "brand": static_info["brand"],
+                        "stock_qty": total_qty, # Будет 0, если card.json упал, но цену нашли в DOM
                         "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
                         "status": "success"
                     }
@@ -258,7 +292,8 @@ class SeleniumWBParser:
             ]
             
             feed_data = None
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            # [FIX] Используем ротацию UA из класса
+            headers = {"User-Agent": random.choice(self.user_agents)}
             
             for url in endpoints:
                 try:

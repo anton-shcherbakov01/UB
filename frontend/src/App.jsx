@@ -253,15 +253,38 @@ const DashboardPage = ({ onNavigate, user }) => {
     );
 };
 
-// NEW: Supply Chain Page
+// NEW: Supply Chain Page (Fixed Calculation Logic)
 const SupplyPage = () => {
     const [coeffs, setCoeffs] = useState([]);
+    const [volume, setVolume] = useState(1000);
+    const [calculation, setCalculation] = useState(null);
+    const [loading, setLoading] = useState(false);
     
     useEffect(() => {
         fetch(`${API_URL}/api/internal/coefficients`, {
              headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
         }).then(r => r.json()).then(setCoeffs).catch(console.error);
     }, []);
+
+    const handleCalculate = async () => {
+        if (!volume) return;
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/internal/transit_calc`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
+                },
+                body: JSON.stringify({ volume: Number(volume), destination: "Koledino" })
+            });
+            setCalculation(await res.json());
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in">
@@ -277,7 +300,7 @@ const SupplyPage = () => {
                 {coeffs.map((c, i) => (
                     <div key={i} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         <div className="flex justify-between items-start mb-2">
-                             <span className="font-bold text-sm">{c.warehouse}</span>
+                             <span className="font-bold text-sm truncate">{c.warehouse}</span>
                              <span className={`text-xs font-black px-2 py-0.5 rounded ${c.coefficient === 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
                                 x{c.coefficient}
                              </span>
@@ -289,8 +312,42 @@ const SupplyPage = () => {
 
             <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
                  <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
-                 <p className="text-sm text-blue-600 mb-4">Рассчитайте выгоду отправки через транзитные склады.</p>
-                 <button className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать маршрут</button>
+                 <p className="text-sm text-blue-600 mb-4">Сравнение: Прямая поставка vs Транзит через Казань.</p>
+                 
+                 <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">Объем поставки (литры)</label>
+                    <input 
+                        type="number"
+                        value={volume}
+                        onChange={e => setVolume(e.target.value)}
+                        className="w-full font-black text-lg outline-none text-slate-800"
+                    />
+                 </div>
+
+                 <button 
+                    onClick={handleCalculate} 
+                    disabled={loading}
+                    className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold active:scale-95 transition-transform"
+                 >
+                    {loading ? <Loader2 className="animate-spin mx-auto"/> : 'Рассчитать выгоду'}
+                 </button>
+
+                 {calculation && (
+                     <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
+                         <div className="flex justify-between text-sm mb-1">
+                             <span className="text-slate-500">Прямая (Коледино):</span>
+                             <span className="font-bold">{calculation.direct_cost} ₽</span>
+                         </div>
+                         <div className="flex justify-between text-sm mb-3">
+                             <span className="text-slate-500">Транзит (Казань):</span>
+                             <span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span>
+                         </div>
+                         <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
+                             {calculation.recommendation}
+                             {calculation.is_profitable && <div className="mt-1">Выгода: {calculation.benefit} ₽</div>}
+                         </div>
+                     </div>
+                 )}
             </div>
         </div>
     )
@@ -525,7 +582,7 @@ const FinancePage = ({ onNavigate }) => {
                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.unit_economy.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                                  ROI: {item.unit_economy.roi}%
                              </span>
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
+                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
                                  Маржа: {item.unit_economy.margin}%
                              </span>
                         </div>
@@ -1440,9 +1497,9 @@ export default function App() {
           case 'finance': return <FinancePage onNavigate={setActiveTab} />;
           case 'ai': return <AIAnalysisPage />;
           case 'seo': return <SeoGeneratorPage />;
-          case 'seo_tracker': return <SeoTrackerPage />; // New
-          case 'bidder': return <BidderPage />; // New
-          case 'supply': return <SupplyPage />; // New
+          case 'seo_tracker': return <SeoTrackerPage />; 
+          case 'bidder': return <BidderPage />; 
+          case 'supply': return <SupplyPage />; 
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'history': return <HistoryPage />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;

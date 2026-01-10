@@ -54,6 +54,31 @@ class AnalysisService:
             
         return {"days_left": days_left, "status": status, "message": message}
 
+    @staticmethod
+    def calculate_transit_benefit(volume_liters: int):
+        """
+        [NEW] Расчет выгоды транзита (из Roadmap 3.2.2).
+        volume_liters: объем поставки в литрах.
+        Возвращает сравнение прямой поставки и транзита.
+        """
+        # Примерные тарифы (в продакшене брать из API)
+        # Коледино: Коэффициент х1, базовая приемка 30р/литр
+        koledino_direct_cost = volume_liters * 30 * 1 
+        
+        # Казань: Коэффициент х0, транзит 1500р/палета + приемка бесплатно
+        # Упрощенная логика: 1500р фикс за транзит
+        kazan_transit_cost = 1500 + (volume_liters * 20 * 0) 
+        
+        benefit = koledino_direct_cost - kazan_transit_cost
+        
+        return {
+            "direct_cost": koledino_direct_cost,
+            "transit_cost": kazan_transit_cost,
+            "benefit": benefit,
+            "is_profitable": benefit > 0,
+            "recommendation": "Используйте транзит через Казань" if benefit > 0 else "Прямая поставка выгоднее"
+        }
+
     def clean_ai_text(self, text: str) -> str:
         """Очистка текста от Markdown мусора"""
         if not text: return ""

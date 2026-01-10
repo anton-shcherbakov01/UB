@@ -12,7 +12,7 @@ from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta  # [FIX] Добавлен timedelta
 
 from parser_service import parser_service
 from analysis_service import analysis_service
@@ -310,6 +310,16 @@ async def get_supply_coefficients(user: User = Depends(get_current_user)):
     """Получение коэффициентов приемки для Supply Chain"""
     return await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
 
+# --- TRANSIT CALCULATOR ---
+class TransitCalcRequest(BaseModel):
+    volume: int # Литы
+    destination: str = "Koledino"
+
+@app.post("/api/internal/transit_calc")
+async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
+    """Калькулятор транзита (Roadmap 3.2.2)"""
+    return analysis_service.calculate_transit_benefit(req.volume)
+
 # --- NEW: BIDDER SIMULATION ---
 @app.get("/api/bidder/simulation")
 async def get_bidder_simulation(user: User = Depends(get_current_user)):
@@ -322,9 +332,9 @@ async def get_bidder_simulation(user: User = Depends(get_current_user)):
         "campaigns_active": 3,
         "total_budget_saved": random.randint(5000, 25000),
         "logs": [
-            {"time": "10:05", "msg": "Кампания 'Платья': Ставка конкурента 500₽ -> Оптимизировано до 155₽"},
-            {"time": "09:45", "msg": "Кампания 'Блузки': Удержание 2 места (Target CPA)"},
-            {"time": "09:30", "msg": "Аукцион перегрет. Реклама на паузе."}
+            {"time": (datetime.now() - timedelta(minutes=5)).strftime("%H:%M"), "msg": "Кампания 'Платья': Ставка конкурента 500₽ -> Оптимизировано до 155₽"},
+            {"time": (datetime.now() - timedelta(minutes=15)).strftime("%H:%M"), "msg": "Кампания 'Блузки': Удержание 2 места (Target CPA)"},
+            {"time": (datetime.now() - timedelta(minutes=45)).strftime("%H:%M"), "msg": "Аукцион перегрет. Реклама на паузе."}
         ]
     }
 
@@ -548,13 +558,28 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
 
     pdf = FPDF()
     pdf.add_page()
+    
+    # [FIX] Добавляем поддержку шрифтов для кириллицы
+    # Пытаемся загрузить системный шрифт или fallback
+    font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf' # Docker standard
     try:
-        pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
-        pdf.set_font('DejaVu', '', 14)
-    except:
+        if os.path.exists(font_path):
+            pdf.add_font('DejaVu', '', font_path, uni=True)
+            pdf.set_font('DejaVu', '', 14)
+        else:
+             # Попытка найти локальный шрифт
+             local_font = "fonts/DejaVuSans.ttf"
+             if os.path.exists(local_font):
+                 pdf.add_font('DejaVu', '', local_font, uni=True)
+                 pdf.set_font('DejaVu', '', 14)
+             else:
+                 logger.warning("No unicode font found. Cyrillic may fail.")
+                 pdf.set_font("Arial", size=12) # Fallback (Внимание: кириллица не будет работать!)
+    except Exception as e:
+        logger.error(f"Font loading error: {e}")
         pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, txt=f"Report: {item.name[:40]} ({sku})", ln=1, align='C')
+    pdf.cell(0, 10, txt=f"Report: {sku}", ln=1, align='C') # Убрали item.name из заголовка на случай проблем с кодировкой
     pdf.ln(5)
     
     pdf.set_font_size(10)
@@ -570,6 +595,8 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         pdf.ln()
 
     pdf_content = pdf.output(dest='S')
+    
+    # Совместимость версий FPDF
     if isinstance(pdf_content, str):
         pdf_bytes = pdf_content.encode('latin-1') 
     else:
