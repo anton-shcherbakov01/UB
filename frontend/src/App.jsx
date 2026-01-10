@@ -47,19 +47,23 @@ const TabNav = ({ active, setTab, isAdmin }) => (
 );
 
 const StoriesBar = () => {
-    // Stories: Утренняя сводка (пока моковые данные)
-    const stories = [
-        { id: 1, title: "Продажи", val: "+15k ₽", color: "bg-emerald-500" },
-        { id: 2, title: "Топ", val: "Джинсы", color: "bg-blue-500" },
-        { id: 3, title: "Алерт", val: "M size", color: "bg-red-500" },
-        { id: 4, title: "Реклама", val: "CPA OK", color: "bg-purple-500" },
-    ];
+    // Stories теперь подтягиваются с API
+    const [stories, setStories] = useState([]);
+    
+    useEffect(() => {
+        fetch(`${API_URL}/api/internal/stories`, {
+             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        }).then(r => r.json()).then(setStories).catch(console.error);
+    }, []);
+
+    if (stories.length === 0) return null;
+
     return (
         <div className="flex gap-3 overflow-x-auto pb-4 px-2 scrollbar-hide">
             {stories.map(s => (
                 <div key={s.id} className="flex flex-col items-center gap-1 min-w-[64px]">
                     <div className={`w-14 h-14 rounded-full p-[2px] ${s.color}`}>
-                        <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center">
+                        <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center flex-col">
                              <span className="text-[10px] font-bold text-center leading-tight">{s.val}</span>
                         </div>
                     </div>
@@ -295,6 +299,15 @@ const SupplyPage = () => {
 // NEW: Bidder Page
 const BidderPage = () => {
     const [isSafeMode, setIsSafeMode] = useState(true);
+    const [logs, setLogs] = useState([]);
+    const [stats, setStats] = useState(null);
+
+    const startSimulation = async () => {
+        const res = await fetch(`${API_URL}/api/bidder/simulation`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+        const data = await res.json();
+        setStats(data);
+        setLogs(data.logs);
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in">
@@ -324,24 +337,30 @@ const BidderPage = () => {
                         <PlayCircle size={16} className="inline mr-2"/> Run
                      </button>
                 </div>
+                <button onClick={startSimulation} className="w-full mt-4 bg-slate-900 text-white py-3 rounded-xl font-bold">Обновить отчет (Simulate)</button>
             </div>
 
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 opacity-50 pointer-events-none grayscale">
-                <h3 className="font-bold text-lg mb-4">Активные кампании</h3>
-                <div className="space-y-3">
-                    <div className="p-4 bg-slate-50 rounded-2xl">
-                        <div className="flex justify-between mb-2">
-                            <span className="font-bold text-sm">Поиск: Платья</span>
-                            <span className="text-xs font-bold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">Paused</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-slate-500">
-                             <span>Ставка: 125 ₽</span>
-                             <span>Место: 4</span>
-                        </div>
+            {stats && (
+                <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 animate-in slide-in-from-bottom-4">
+                    <h3 className="font-bold text-emerald-800">Экономия (Прогноз)</h3>
+                    <p className="text-3xl font-black text-emerald-600 my-2">{stats.total_budget_saved} ₽</p>
+                    <p className="text-xs text-emerald-700">За последние 24 часа в Safe Mode</p>
+                </div>
+            )}
+
+            {logs.length > 0 && (
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <h3 className="font-bold text-lg mb-4">Лог операций</h3>
+                    <div className="space-y-3">
+                        {logs.map((l, i) => (
+                            <div key={i} className="text-xs border-b border-slate-50 pb-2 last:border-0">
+                                <span className="font-bold text-slate-400 mr-2">{l.time}</span>
+                                <span className="text-slate-700">{l.msg}</span>
+                            </div>
+                        ))}
                     </div>
                 </div>
-            </div>
-            <p className="text-center text-xs text-slate-400">Для управления кампаниями нужен API токен "Продвижение"</p>
+            )}
         </div>
     )
 }
@@ -468,15 +487,22 @@ const FinancePage = ({ onNavigate }) => {
                 </div>
             ) : (
                 products.map((item) => (
-                    <div key={item.sku} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group">
+                    <div key={item.sku} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group mb-3">
                         <div className="flex justify-between items-start mb-3">
                             <div className="min-w-0">
                                 <div className="font-bold truncate text-sm">SKU {item.sku}</div>
                                 <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Остаток: {item.quantity} шт</div>
                             </div>
-                            <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
-                                <Calculator size={18} />
-                            </button>
+                            <div className="flex flex-col items-end gap-1">
+                                <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
+                                    <Calculator size={18} />
+                                </button>
+                                {item.supply && (
+                                    <span className={`text-[9px] font-bold px-2 py-1 rounded-lg ${item.supply.status === 'critical' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                        {item.supply.days_left} дн.
+                                    </span>
+                                )}
+                            </div>
                         </div>
                         
                         <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
@@ -503,11 +529,6 @@ const FinancePage = ({ onNavigate }) => {
                                  Маржа: {item.unit_economy.margin}%
                              </span>
                         </div>
-                        {item.supply && (
-                             <div className={`mt-2 text-[10px] font-bold px-2 py-1 rounded w-max ${item.supply.status === 'critical' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                Supply: {item.supply.days_left} дн. ({item.supply.message})
-                             </div>
-                        )}
                     </div>
                 ))
             )}

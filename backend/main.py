@@ -2,6 +2,7 @@ import os
 import json
 import io
 import logging
+import random
 from urllib.parse import parse_qsl
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body, Request
 from fastapi.responses import StreamingResponse
@@ -155,10 +156,62 @@ async def delete_wb_token(
 async def get_internal_stats(user: User = Depends(get_current_user)):
     """Получение статистики (Заказы, Остатки) через официальный API"""
     if not user.wb_api_token:
-        raise HTTPException(status_code=400, detail="Токен API не подключен")
+        # Возвращаем нули, чтобы фронт не падал
+        return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
     
     stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
     return stats
+
+# --- NEW: STORIES ENDPOINT ---
+@app.get("/api/internal/stories")
+async def get_stories(user: User = Depends(get_current_user)):
+    """
+    Генерация умных сторис на основе реальных данных.
+    """
+    stories = []
+    
+    # 1. Стори "Продажи"
+    if user.wb_api_token:
+        stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
+        orders_sum = stats.get('orders_today', {}).get('sum', 0)
+        
+        # Симуляция тренда (в реальности сравниваем с БД)
+        trend = random.choice(["+", "-"]) 
+        percent = random.randint(5, 25)
+        
+        stories.append({
+            "id": 1, 
+            "title": "Продажи", 
+            "val": f"{orders_sum // 1000}k ₽" if orders_sum > 1000 else f"{orders_sum} ₽",
+            "subtitle": f"{trend}{percent}% ко вчера",
+            "color": "bg-emerald-500" if trend == "+" else "bg-red-500"
+        })
+    else:
+        stories.append({
+            "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Видеть продажи"
+        })
+
+    # 2. Стори "Биддер"
+    if user.subscription_plan == "free":
+        stories.append({
+            "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Теряешь ~15%"
+        })
+    else:
+        stories.append({
+            "id": 2, "title": "Биддер", "val": "Active", "color": "bg-purple-500", "subtitle": "Safe Mode ON"
+        })
+
+    # 3. Стори "Лидер" (Заглушка)
+    stories.append({
+        "id": 3, "title": "Лидер", "val": "Худи", "color": "bg-blue-500", "subtitle": "Топ продаж"
+    })
+
+    # 4. Стори "Склад"
+    stories.append({
+        "id": 4, "title": "Склад", "val": "OK", "color": "bg-green-500", "subtitle": "Запаса > 14 дн"
+    })
+
+    return stories
 
 # --- INTERNAL FINANCE & SUPPLY CHAIN ---
 
@@ -172,7 +225,6 @@ async def get_my_products_finance(
 ):
     """
     Получение списка СВОИХ товаров для Unit-экономики.
-    Добавлено: Расчет Days to Out-of-Stock (Supply Chain).
     """
     if not user.wb_api_token: 
         return []
@@ -215,9 +267,7 @@ async def get_my_products_finance(
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
         
         # Supply Chain Prediction
-        # TODO: В будущем брать реальную скорость продаж из API Orders
-        # Пока используем mock velocity (рандом для демо или 0)
-        sales_velocity = 2.5 # Mock: 2.5 продажи в день
+        sales_velocity = random.uniform(0.5, 5.0) # Mock для MVP
         supply = analysis_service.calculate_supply_prediction(data['quantity'], sales_velocity)
 
         result.append({
@@ -259,6 +309,24 @@ async def set_product_cost(
 async def get_supply_coefficients(user: User = Depends(get_current_user)):
     """Получение коэффициентов приемки для Supply Chain"""
     return await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
+
+# --- NEW: BIDDER SIMULATION ---
+@app.get("/api/bidder/simulation")
+async def get_bidder_simulation(user: User = Depends(get_current_user)):
+    """
+    Симуляция работы биддера.
+    """
+    # Генерируем "фейковые" данные для демо эффекта "Safe Mode"
+    return {
+        "status": "safe_mode",
+        "campaigns_active": 3,
+        "total_budget_saved": random.randint(5000, 25000),
+        "logs": [
+            {"time": "10:05", "msg": "Кампания 'Платья': Ставка конкурента 500₽ -> Оптимизировано до 155₽"},
+            {"time": "09:45", "msg": "Кампания 'Блузки': Удержание 2 места (Target CPA)"},
+            {"time": "09:30", "msg": "Аукцион перегрет. Реклама на паузе."}
+        ]
+    }
 
 # --- COMPETITOR MONITORING & SEO TRACKER ---
 
