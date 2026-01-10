@@ -14,12 +14,13 @@ class WBApiService:
     """
     
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
+    ADV_URL = "https://advert-api.wb.ru/adv/v1" # Для рекламы
     
     # Простой кэш в памяти: { "token_method_params": (timestamp, data) }
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 # 5 минут жизни кэша
 
-    async def _request_with_retry(self, session, url, headers, params, retries=3):
+    async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
         """
         Выполняет запрос с повторными попытками при 429/5xx ошибках.
         """
@@ -27,7 +28,12 @@ class WBApiService:
         
         for attempt in range(retries):
             try:
-                async with session.get(url, headers=headers, params=params, timeout=20) as resp:
+                if method == 'GET':
+                    coro = session.get(url, headers=headers, params=params, timeout=20)
+                else:
+                    coro = session.post(url, headers=headers, json=json_data, timeout=20)
+
+                async with coro as resp:
                     if resp.status == 200:
                         return await resp.json()
                     elif resp.status == 429:
@@ -156,6 +162,23 @@ class WBApiService:
         async with aiohttp.ClientSession() as session:
              data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              return data if isinstance(data, list) else []
+
+    async def get_warehouse_coeffs(self, token: str):
+        """
+        Получение коэффициентов приемки (для Supply Chain).
+        Используем метод /api/v1/supplier/incomes (Приемка) как прокси, 
+        либо просто возвращаем моковые данные, если API не дает (официальный метод coeffs закрыт под ключ).
+        Для MVP сделаем симуляцию на основе реальных складов.
+        """
+        # Note: Реальный API коэффициентов требует отдельного метода. 
+        # Здесь мы возвращаем структуру для Supply Chain.
+        
+        return [
+            {"warehouse": "Коледино", "coefficient": 1, "transit_time": "1-2 дня"},
+            {"warehouse": "Электросталь", "coefficient": 5, "transit_time": "1-2 дня"},
+            {"warehouse": "Казань", "coefficient": 0, "transit_time": "2-3 дня"},
+            {"warehouse": "Тула", "coefficient": 2, "transit_time": "1-2 дня"},
+        ]
 
     async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
         url = f"{self.BASE_URL}/orders"

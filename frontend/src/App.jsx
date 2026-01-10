@@ -4,7 +4,7 @@ import {
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
   ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
-  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart
+  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, Scale, Target, PlayCircle, ShieldCheck
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -45,6 +45,30 @@ const TabNav = ({ active, setTab, isAdmin }) => (
     </button>
   </div>
 );
+
+const StoriesBar = () => {
+    // Stories: Утренняя сводка (пока моковые данные)
+    const stories = [
+        { id: 1, title: "Продажи", val: "+15k ₽", color: "bg-emerald-500" },
+        { id: 2, title: "Топ", val: "Джинсы", color: "bg-blue-500" },
+        { id: 3, title: "Алерт", val: "M size", color: "bg-red-500" },
+        { id: 4, title: "Реклама", val: "CPA OK", color: "bg-purple-500" },
+    ];
+    return (
+        <div className="flex gap-3 overflow-x-auto pb-4 px-2 scrollbar-hide">
+            {stories.map(s => (
+                <div key={s.id} className="flex flex-col items-center gap-1 min-w-[64px]">
+                    <div className={`w-14 h-14 rounded-full p-[2px] ${s.color}`}>
+                        <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center">
+                             <span className="text-[10px] font-bold text-center leading-tight">{s.val}</span>
+                        </div>
+                    </div>
+                    <span className="text-[9px] font-medium text-slate-500">{s.title}</span>
+                </div>
+            ))}
+        </div>
+    )
+}
 
 const TariffCard = ({ plan, onPay }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
@@ -122,6 +146,9 @@ const DashboardPage = ({ onNavigate, user }) => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
+            {/* Stories */}
+            <StoriesBar />
+
             {/* Блок Внутренней Аналитики */}
             <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
                 <div className="relative z-10">
@@ -172,31 +199,49 @@ const DashboardPage = ({ onNavigate, user }) => {
                         <span className="text-xs text-slate-400">P&L, Маржа, ROI по вашим товарам</span>
                     </div>
                 </div>
-                <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+                        <Truck size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Поставки</span>
+                        <span className="text-xs text-slate-400">Прогноз склада</span>
+                    </div>
+                </div>
+                <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
+                        <Target size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Биддер</span>
+                        <span className="text-xs text-slate-400">Управление рекламой</span>
+                    </div>
+                </div>
+                 <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                     <div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
                         <TrendingUp size={24} />
                     </div>
                     <div>
-                        <span className="font-bold text-slate-800 block">Конкуренты</span>
-                        <span className="text-xs text-slate-400">Мониторинг цен</span>
+                        <span className="font-bold text-slate-800 block">SEO Трекер</span>
+                        <span className="text-xs text-slate-400">Позиции в поиске (SERP)</span>
                     </div>
                 </div>
-                <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
-                    <div className="bg-violet-100 w-12 h-12 rounded-2xl flex items-center justify-center text-violet-600">
-                        <Brain size={24} />
+                 <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
+                        <Plus size={24} />
                     </div>
                     <div>
-                        <span className="font-bold text-slate-800 block">AI Аналитик</span>
-                        <span className="text-xs text-slate-400">Отзывы</span>
+                        <span className="font-bold text-slate-800 block">Сканер</span>
+                        <span className="text-xs text-slate-400">Добавить конкурента</span>
                     </div>
                 </div>
-                <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
-                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+                 <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-yellow-100 w-12 h-12 rounded-2xl flex items-center justify-center text-yellow-600">
                         <Wand2 size={24} />
                     </div>
                     <div>
-                        <span className="font-bold text-slate-800 block">SEO Генератор</span>
-                        <span className="text-xs text-slate-400">Создание карточек товара</span>
+                        <span className="font-bold text-slate-800 block">SEO Gen</span>
+                        <span className="text-xs text-slate-400">Генератор</span>
                     </div>
                 </div>
             </div>
@@ -204,7 +249,172 @@ const DashboardPage = ({ onNavigate, user }) => {
     );
 };
 
-// НОВАЯ СТРАНИЦА: ФИНАНСЫ (Internal)
+// NEW: Supply Chain Page
+const SupplyPage = () => {
+    const [coeffs, setCoeffs] = useState([]);
+    
+    useEffect(() => {
+        fetch(`${API_URL}/api/internal/coefficients`, {
+             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        }).then(r => r.json()).then(setCoeffs).catch(console.error);
+    }, []);
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+             <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
+                <h1 className="text-2xl font-black flex items-center gap-2">
+                    <Truck className="text-white" /> Supply Chain
+                </h1>
+                <p className="text-sm opacity-90 mt-2">Управление поставками и коэффициенты складов.</p>
+            </div>
+            
+            <h3 className="font-bold text-lg px-2">Приемка складов (Live)</h3>
+            <div className="grid grid-cols-2 gap-3">
+                {coeffs.map((c, i) => (
+                    <div key={i} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-start mb-2">
+                             <span className="font-bold text-sm">{c.warehouse}</span>
+                             <span className={`text-xs font-black px-2 py-0.5 rounded ${c.coefficient === 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                                x{c.coefficient}
+                             </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400">Транзит: {c.transit_time}</p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
+                 <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
+                 <p className="text-sm text-blue-600 mb-4">Рассчитайте выгоду отправки через транзитные склады.</p>
+                 <button className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать маршрут</button>
+            </div>
+        </div>
+    )
+}
+
+// NEW: Bidder Page
+const BidderPage = () => {
+    const [isSafeMode, setIsSafeMode] = useState(true);
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+             <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 rounded-3xl text-white shadow-xl shadow-purple-200">
+                <h1 className="text-2xl font-black flex items-center gap-2">
+                    <Target className="text-white" /> Автобиддер
+                </h1>
+                <p className="text-sm opacity-90 mt-2">Управление рекламой. Защита бюджета.</p>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-lg">Статус</h3>
+                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-full">
+                        <div className={`w-2 h-2 rounded-full ${isSafeMode ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                        <span className="text-xs font-bold text-slate-600">{isSafeMode ? 'Safe Mode' : 'Active'}</span>
+                    </div>
+                </div>
+                <p className="text-sm text-slate-500 mb-6">
+                    В безопасном режиме мы только симулируем ставки, показывая, сколько вы могли бы сэкономить.
+                </p>
+                <div className="flex gap-2">
+                     <button onClick={() => setIsSafeMode(true)} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${isSafeMode ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-50 text-slate-400'}`}>
+                        <ShieldCheck size={16} className="inline mr-2"/> Safe Mode
+                     </button>
+                     <button onClick={() => setIsSafeMode(false)} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${!isSafeMode ? 'bg-red-500 text-white' : 'bg-slate-50 text-slate-400'}`}>
+                        <PlayCircle size={16} className="inline mr-2"/> Run
+                     </button>
+                </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 opacity-50 pointer-events-none grayscale">
+                <h3 className="font-bold text-lg mb-4">Активные кампании</h3>
+                <div className="space-y-3">
+                    <div className="p-4 bg-slate-50 rounded-2xl">
+                        <div className="flex justify-between mb-2">
+                            <span className="font-bold text-sm">Поиск: Платья</span>
+                            <span className="text-xs font-bold bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">Paused</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-slate-500">
+                             <span>Ставка: 125 ₽</span>
+                             <span>Место: 4</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p className="text-center text-xs text-slate-400">Для управления кампаниями нужен API токен "Продвижение"</p>
+        </div>
+    )
+}
+
+// NEW: SEO Tracker Page (SERP)
+const SeoTrackerPage = () => {
+    const [positions, setPositions] = useState([]);
+    const [sku, setSku] = useState('');
+    const [keyword, setKeyword] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const loadPositions = () => {
+        fetch(`${API_URL}/api/seo/positions`, {
+             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        }).then(r => r.json()).then(setPositions).catch(console.error);
+    }
+
+    useEffect(() => { loadPositions(); }, []);
+
+    const handleTrack = async () => {
+        if(!sku || !keyword) return;
+        setLoading(true);
+        try {
+             await fetch(`${API_URL}/api/seo/track`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" },
+                body: JSON.stringify({sku: Number(sku), keyword})
+             });
+             alert("Задача добавлена! Обновите список через пару минут.");
+             setSku(''); setKeyword('');
+             loadPositions();
+        } catch(e) { console.error(e); } finally { setLoading(false); }
+    }
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+             <div className="bg-gradient-to-r from-blue-500 to-cyan-500 p-6 rounded-3xl text-white shadow-xl shadow-blue-200">
+                <h1 className="text-2xl font-black flex items-center gap-2">
+                    <TrendingUp className="text-white" /> SEO Tracker
+                </h1>
+                <p className="text-sm opacity-90 mt-2">Отслеживайте позиции товаров в поисковой выдаче WB.</p>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                 <div className="flex gap-2 mb-3">
+                     <input value={sku} onChange={e => setSku(e.target.value)} placeholder="SKU" className="w-1/3 bg-slate-50 rounded-xl p-3 text-sm font-bold outline-none"/>
+                     <input value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="Ключевой запрос" className="flex-1 bg-slate-50 rounded-xl p-3 text-sm font-bold outline-none"/>
+                 </div>
+                 <button onClick={handleTrack} disabled={loading} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold text-sm">
+                     {loading ? <Loader2 className="animate-spin mx-auto"/> : 'Отследить позицию'}
+                 </button>
+            </div>
+
+            <div className="space-y-3">
+                {positions.map(p => (
+                    <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between">
+                         <div>
+                             <div className="font-bold text-sm">{p.keyword}</div>
+                             <div className="text-[10px] text-slate-400">SKU: {p.sku}</div>
+                         </div>
+                         <div className="text-right">
+                             <div className={`font-black text-lg ${p.position > 0 && p.position <= 10 ? 'text-emerald-500' : 'text-slate-700'}`}>
+                                 {p.position > 0 ? `#${p.position}` : '>100'}
+                             </div>
+                             <div className="text-[9px] text-slate-300">{new Date(p.last_check).toLocaleDateString()}</div>
+                         </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 const FinancePage = ({ onNavigate }) => {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -293,6 +503,11 @@ const FinancePage = ({ onNavigate }) => {
                                  Маржа: {item.unit_economy.margin}%
                              </span>
                         </div>
+                        {item.supply && (
+                             <div className={`mt-2 text-[10px] font-bold px-2 py-1 rounded w-max ${item.supply.status === 'critical' ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                                Supply: {item.supply.days_left} дн. ({item.supply.message})
+                             </div>
+                        )}
                     </div>
                 ))
             )}
@@ -300,7 +515,6 @@ const FinancePage = ({ onNavigate }) => {
     );
 }
 
-// MONITOR PAGE (Только конкуренты, без Unit)
 const MonitorPage = () => {
   const [list, setList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
@@ -1037,7 +1251,6 @@ const ProfilePage = ({ onNavigate }) => {
             });
             const d = await res.json();
             if (d.invoice_link) {
-                 // В Telegram WebApp открываем инвойс
                  window.Telegram?.WebApp?.openInvoice(d.invoice_link, (status) => {
                      if (status === 'paid') {
                          alert("Оплата прошла успешно!");
@@ -1206,6 +1419,9 @@ export default function App() {
           case 'finance': return <FinancePage onNavigate={setActiveTab} />;
           case 'ai': return <AIAnalysisPage />;
           case 'seo': return <SeoGeneratorPage />;
+          case 'seo_tracker': return <SeoTrackerPage />; // New
+          case 'bidder': return <BidderPage />; // New
+          case 'supply': return <SupplyPage />; // New
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'history': return <HistoryPage />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;

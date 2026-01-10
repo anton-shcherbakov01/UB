@@ -18,9 +18,9 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
-from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost
+from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition
 from celery_app import celery_app
-from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task
+from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task, check_seo_position_task
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 
@@ -160,7 +160,7 @@ async def get_internal_stats(user: User = Depends(get_current_user)):
     stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
     return stats
 
-# --- INTERNAL FINANCE & UNIT ECONOMICS (NEW) ---
+# --- INTERNAL FINANCE & SUPPLY CHAIN ---
 
 class CostUpdateRequest(BaseModel):
     cost_price: int
@@ -171,8 +171,8 @@ async def get_my_products_finance(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Получение списка СВОИХ товаров для Unit-экономики (внутренняя аналитика).
-    Данные берутся из API WB (остатки) + БД (себестоимость).
+    Получение списка СВОИХ товаров для Unit-экономики.
+    Добавлено: Расчет Days to Out-of-Stock (Supply Chain).
     """
     if not user.wb_api_token: 
         return []
@@ -182,7 +182,7 @@ async def get_my_products_finance(
     if not stocks: 
         return []
     
-    # Группируем по SKU (nmId), суммируем остатки
+    # Группируем по SKU (nmId)
     sku_map = {}
     for s in stocks:
         sku = s.get('nmId')
@@ -190,32 +190,36 @@ async def get_my_products_finance(
             sku_map[sku] = {
                 "sku": sku, 
                 "quantity": 0, 
-                "price": s.get('Price', 0), # Базовая цена
+                "price": s.get('Price', 0), 
                 "discount": s.get('Discount', 0)
             }
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
     
-    # 2. Получаем сохраненную себестоимость из БД
+    # 2. Получаем себестоимость из БД
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
     costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
     
     result = []
-    # 3. Собираем итоговый отчет
+    # 3. Собираем отчет
     for sku, data in sku_map.items():
         cost = costs_map.get(sku, 0)
-        # Примерная цена продажи
         selling_price = data['price'] * (1 - data['discount']/100)
         
-        # Расчет P&L (Unit-экономика)
-        # Хардкод комиссий для MVP (позже будем брать из API тарифов)
-        commission = selling_price * 0.23 # ~23%
-        logistics = 50 # ~50 руб
+        # P&L (Unit)
+        commission = selling_price * 0.23
+        logistics = 50 
         profit = selling_price - commission - logistics - cost
         roi = round((profit / cost * 100), 1) if cost > 0 else 0
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
         
+        # Supply Chain Prediction
+        # TODO: В будущем брать реальную скорость продаж из API Orders
+        # Пока используем mock velocity (рандом для демо или 0)
+        sales_velocity = 2.5 # Mock: 2.5 продажи в день
+        supply = analysis_service.calculate_supply_prediction(data['quantity'], sales_velocity)
+
         result.append({
             "sku": sku,
             "quantity": data['quantity'],
@@ -225,7 +229,8 @@ async def get_my_products_finance(
                 "profit": int(profit),
                 "roi": roi,
                 "margin": margin
-            }
+            },
+            "supply": supply
         })
         
     return result
@@ -237,7 +242,6 @@ async def set_product_cost(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    """Установка себестоимости для своего товара"""
     stmt = select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku == sku)
     cost_obj = (await db.execute(stmt)).scalars().first()
     
@@ -251,7 +255,12 @@ async def set_product_cost(
     await db.commit()
     return {"status": "saved", "cost_price": req.cost_price}
 
-# --- COMPETITOR MONITORING ---
+@app.get("/api/internal/coefficients")
+async def get_supply_coefficients(user: User = Depends(get_current_user)):
+    """Получение коэффициентов приемки для Supply Chain"""
+    return await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
+
+# --- COMPETITOR MONITORING & SEO TRACKER ---
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -277,10 +286,6 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
 
 @app.get("/api/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """
-    Получение списка ОТСЛЕЖИВАЕМЫХ КОНКУРЕНТОВ.
-    Здесь нет Unit-экономики, только цена.
-    """
     stmt = select(MonitoredItem).where(MonitoredItem.user_id == user.id).order_by(MonitoredItem.id.desc())
     items = (await db.execute(stmt)).scalars().all()
     
@@ -324,7 +329,31 @@ async def get_status(task_id: str):
     elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
     return resp
 
-# --- AI & SEO ---
+# --- NEW: SEO TRACKER (SERP) ---
+
+class SeoTrackRequest(BaseModel):
+    sku: int
+    keyword: str
+
+@app.post("/api/seo/track")
+async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):
+    """Запуск задачи трекинга позиции"""
+    task = check_seo_position_task.delay(req.sku, req.keyword, user.id)
+    return {"status": "accepted", "task_id": task.id}
+
+@app.get("/api/seo/positions")
+async def get_seo_positions(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Получение сохраненных позиций"""
+    res = await db.execute(select(SeoPosition).where(SeoPosition.user_id == user.id).order_by(SeoPosition.last_check.desc()))
+    return res.scalars().all()
+
+@app.delete("/api/seo/positions/{id}")
+async def delete_seo_position(id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(SeoPosition).where(SeoPosition.id == id, SeoPosition.user_id == user.id))
+    await db.commit()
+    return {"status": "deleted"}
+
+# --- AI & SEO CONTENT ---
 @app.post("/api/ai/analyze/{sku}")
 async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
@@ -337,7 +366,6 @@ async def get_ai_result(task_id: str):
 
 @app.get("/api/seo/parse/{sku}")
 async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
-    """Извлекаем ключевые слова (название + характеристики)"""
     res = await parser_service.get_seo_data(sku) 
     if res.get("status") == "error":
         raise HTTPException(400, res.get("message"))
@@ -350,7 +378,6 @@ class SeoGenRequest(BaseModel):
 
 @app.post("/api/seo/generate")
 async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
-    """Запуск задачи генерации текста"""
     task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id)
     return {"status": "accepted", "task_id": task.id}
 
@@ -438,7 +465,7 @@ async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSessi
     if not user.is_admin: raise HTTPException(403, "Forbidden")
     users = (await db.execute(select(func.count(User.id)))).scalar()
     items = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
-    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v1.5)"}
+    return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v2.0)"}
 
 # --- PDF REPORT ---
 @app.get("/api/report/pdf/{sku}")
@@ -454,7 +481,6 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
     pdf = FPDF()
     pdf.add_page()
     try:
-        # Используем шрифт, который точно есть в контейнере
         pdf.add_font('DejaVu', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', uni=True)
         pdf.set_font('DejaVu', '', 14)
     except:
@@ -475,7 +501,6 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         pdf.cell(40, 10, f"{h.standard_price}", 1)
         pdf.ln()
 
-    # FIX: FPDF2 output() returns bytes/bytearray in newer versions, no encode needed
     pdf_content = pdf.output(dest='S')
     if isinstance(pdf_content, str):
         pdf_bytes = pdf_content.encode('latin-1') 

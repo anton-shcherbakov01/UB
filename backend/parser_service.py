@@ -29,11 +29,12 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v13.0 (Robust Selenium).
+    Микросервис парсинга Wildberries v14.0 (Robust Selenium).
     - Исправлен поиск корзин (до 50).
     - Оптимизированное ожидание загрузки цен (WebDriverWait).
     - 3 попытки парсинга с увеличенными таймаутами.
     - Добавлен сбор SEO данных (v13.1).
+    - Добавлен парсинг позиций в поиске (SERP) (v14.0).
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -183,7 +184,7 @@ class SeleniumWBParser:
                 url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP"
                 driver.get(url)
                 
-                # Даем странице прогрузиться (увеличили с 7 до 10 сек для надежности)
+                # Даем странице прогрузиться
                 time.sleep(15) 
                 driver.execute_script("window.scrollTo(0, 400);")
                 
@@ -344,5 +345,66 @@ class SeleniumWBParser:
         except Exception as e:
             logger.error(f"SEO Parse Error: {e}")
             return {"status": "error", "message": str(e)}
+
+    def get_search_position(self, query: str, target_sku: int):
+        """
+        Парсинг выдачи WB для поиска позиции товара.
+        Возвращает позицию (1-100) или 0, если не найдено на первой странице.
+        """
+        logger.info(f"--- SERP CHECK: {query} for {target_sku} ---")
+        driver = None
+        try:
+            driver = self._init_driver()
+            # Кодируем запрос в URL
+            encoded_query = requests.utils.quote(query)
+            url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded_query}"
+            driver.get(url)
+            
+            # Ждем прогрузки карточек
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card"))
+                )
+            except:
+                logger.warning("Timeout waiting for SERP cards")
+                return 0
+
+            # Скроллим немного, чтобы подгрузились (lazy load)
+            for _ in range(3):
+                driver.execute_script("window.scrollBy(0, 800);")
+                time.sleep(1)
+
+            # Собираем ID всех карточек на странице
+            # WB использует разные классы, пробуем универсальный поиск по атрибутам
+            cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
+            if not cards:
+                cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
+            
+            position = 0
+            for index, card in enumerate(cards):
+                try:
+                    # id карточки обычно в id элемента или data-nm-id
+                    card_id = card.get_attribute("id") 
+                    if not card_id:
+                        # Fallback на data-popup-nm-id и подобные
+                        data_nm = card.get_attribute("data-nm-id")
+                        if data_nm: card_id = data_nm
+                    
+                    # id обычно вида 'c123456', берем цифры
+                    if card_id:
+                        sku_str = re.sub(r'[^\d]', '', card_id)
+                        if sku_str and int(sku_str) == int(target_sku):
+                            position = index + 1
+                            break
+                except: continue
+                
+            logger.info(f"Found SKU {target_sku} at pos {position}")
+            return position
+
+        except Exception as e:
+            logger.error(f"SERP Error: {e}")
+            return 0
+        finally:
+            if driver: driver.quit()
 
 parser_service = SeleniumWBParser()

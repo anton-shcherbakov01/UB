@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text, Float
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
@@ -37,8 +37,8 @@ class User(Base):
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
-    # Связь с себестоимостью собственных товаров
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
+    seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
 
 class ProductCost(Base):
     """
@@ -89,6 +89,20 @@ class SearchHistory(Base):
     result_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="history")
+
+class SeoPosition(Base):
+    """
+    Новая таблица: Трекинг позиций (SERP)
+    """
+    __tablename__ = "seo_positions"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    sku = Column(BigInteger)
+    keyword = Column(String)
+    position = Column(Integer, default=0) # 0 - не найдено в топ-100
+    last_check = Column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User", back_populates="seo_keywords")
 
 async def init_db():
     async with engine_async.begin() as conn:

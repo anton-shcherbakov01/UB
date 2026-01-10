@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import requests
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("AI-Service")
 
@@ -30,6 +31,28 @@ class AnalysisService:
             "is_favorable": discount_pct > 45
         }
         return raw_data
+
+    @staticmethod
+    def calculate_supply_prediction(current_stock: int, sales_velocity: float):
+        """
+        Расчет дней до обнуления (Out-of-Stock).
+        sales_velocity: продаж в день.
+        """
+        if sales_velocity <= 0:
+            return {"days_left": 999, "status": "ok", "message": "Продаж нет"}
+        
+        days_left = int(current_stock / sales_velocity)
+        
+        status = "ok"
+        message = "Запаса достаточно"
+        if days_left <= 3:
+            status = "critical"
+            message = "Критический остаток!"
+        elif days_left <= 7:
+            status = "warning"
+            message = "Пора планировать поставку"
+            
+        return {"days_left": days_left, "status": status, "message": message}
 
     def clean_ai_text(self, text: str) -> str:
         """Очистка текста от Markdown мусора"""
