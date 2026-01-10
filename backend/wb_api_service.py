@@ -1,52 +1,114 @@
 import logging
 import aiohttp
 import asyncio
+import json
 from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger("WB-API-Service")
 
 class WBApiService:
     """
     Сервис для работы с официальным API Wildberries (Statistics API).
+    Добавлено: Retry-механизм и простое In-Memory кэширование.
     """
     
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
+    
+    # Простой кэш в памяти: { "token_method_params": (timestamp, data) }
+    _cache: Dict[str, Any] = {}
+    _cache_ttl = 300 # 5 минут жизни кэша
+
+    async def _request_with_retry(self, session, url, headers, params, retries=3):
+        """
+        Выполняет запрос с повторными попытками при 429/5xx ошибках.
+        """
+        backoff = 2 # Начальная задержка 2 секунды
+        
+        for attempt in range(retries):
+            try:
+                async with session.get(url, headers=headers, params=params, timeout=20) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    elif resp.status == 429:
+                        logger.warning(f"WB API Rate Limit (429) on {url}. Retrying in {backoff}s...")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2 # Экспоненциальная задержка
+                    elif resp.status >= 500:
+                        logger.warning(f"WB API Server Error ({resp.status}). Retrying...")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                    else:
+                        # 401, 400 и т.д. - нет смысла повторять
+                        logger.error(f"WB API Error {resp.status}: {await resp.text()}")
+                        return None
+            except Exception as e:
+                logger.error(f"Request failed: {e}")
+                await asyncio.sleep(backoff)
+                
+        logger.error(f"Failed to fetch {url} after {retries} attempts.")
+        return None
+
+    def _get_cache_key(self, token, method, params):
+        """Генерация ключа кэша"""
+        # Используем только последние символы токена для ключа, чтобы не хранить его целиком в логах если что
+        token_part = token[-10:] if token else "none"
+        param_str = json.dumps(params, sort_keys=True)
+        return f"{token_part}:{method}:{param_str}"
+
+    async def _get_cached_or_request(self, session, url, headers, params, use_cache=True):
+        """
+        Проверяет кэш перед запросом.
+        """
+        if not use_cache:
+            return await self._request_with_retry(session, url, headers, params)
+
+        cache_key = self._get_cache_key(headers.get("Authorization"), url, params)
+        
+        if cache_key in self._cache:
+            ts, data = self._cache[cache_key]
+            if (datetime.now() - ts).total_seconds() < self._cache_ttl:
+                # logger.info(f"Returning cached data for {url}")
+                return data
+        
+        # Если в кэше нет или протух - делаем запрос
+        data = await self._request_with_retry(session, url, headers, params)
+        
+        if data is not None:
+            self._cache[cache_key] = (datetime.now(), data)
+            
+        return data
 
     async def check_token(self, token: str) -> bool:
         """Проверка валидности токена"""
         if not token: 
             return False
-        # Используем метод incomes как легкий способ проверить доступ
+        
         url = f"{self.BASE_URL}/incomes"
         params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
         headers = {"Authorization": token}
         
         async with aiohttp.ClientSession() as session:
             try:
+                # Для проверки токена кэш не используем, нужен свежий статус
                 async with session.get(url, headers=headers, params=params, timeout=10) as resp:
-                    # 401 - Unauthorized, значит токен неверный
                     if resp.status == 401:
                         return False
-                    # 200 или 429 (Rate limit) считаем валидным токеном
                     return True
             except Exception as e:
                 logger.error(f"Token check error: {e}")
                 return False
 
     async def get_dashboard_stats(self, token: str):
-        """
-        Получение сводной статистики для дашборда:
-        1. Заказы за сегодня.
-        2. Текущие остатки.
-        """
-        if not token:
-            return {"error": "Token not provided"}
+        """Сводка: Заказы сегодня и остатки"""
+        if not token: return {"error": "Token not provided"}
 
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            orders_task = self._get_orders(session, token, today_str)
-            stocks_task = self._get_stocks(session, token, today_str)
+            # Используем кэш для дашборда, чтобы не долбить при каждом обновлении страницы
+            orders_task = self._get_orders(session, token, today_str, use_cache=True)
+            stocks_task = self._get_stocks(session, token, today_str, use_cache=True)
             
             orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
             
@@ -56,26 +118,22 @@ class WBApiService:
             }
 
     async def get_new_orders_since(self, token: str, last_check: datetime):
-        """
-        Получение новых заказов с момента последней проверки.
-        Для уведомлений.
-        """
+        """Получение новых заказов (без кэша, т.к. это воркер уведомлений)"""
         if not last_check:
             last_check = datetime.now() - timedelta(hours=1)
         
-        # WB API требует dateFrom. Берем с запасом 1 день, фильтруем в коде
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         
         async with aiohttp.ClientSession() as session:
-            orders_data = await self._get_orders(session, token, date_from_str)
+            # Для "Дзынь!" кэш отключаем, нужны свежие данные
+            orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
             
-            if "items" not in orders_data:
+            if not orders_data or "items" not in orders_data:
                 return []
             
             new_orders = []
             for order in orders_data["items"]:
                 try:
-                    # Формат даты WB: 2023-10-25T12:00:00
                     order_date = datetime.strptime(order["date"], "%Y-%m-%dT%H:%M:%S")
                     if order_date > last_check:
                         new_orders.append(order)
@@ -85,8 +143,8 @@ class WBApiService:
 
     async def get_my_stocks(self, token: str):
         """
-        Получение детального списка остатков (склад, SKU, цена).
-        Используется для построения таблицы Unit-экономики.
+        Получение списка остатков для Unit-экономики.
+        Кэшируем агрессивно (на 5-10 минут), так как список большой и меняется не часто.
         """
         if not token: return []
         
@@ -96,58 +154,44 @@ class WBApiService:
         headers = {"Authorization": token}
         
         async with aiohttp.ClientSession() as session:
-             try:
-                async with session.get(url, headers=headers, params=params, timeout=20) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    else:
-                        logger.error(f"Stocks API error: {resp.status}")
-                        return []
-             except Exception as e:
-                 logger.error(f"Stocks fetch error: {e}")
-                 return []
+             data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+             return data if isinstance(data, list) else []
 
-    async def _get_orders(self, session, token: str, date_from: str):
+    async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
         url = f"{self.BASE_URL}/orders"
         params = {"dateFrom": date_from}
         headers = {"Authorization": token}
         
-        try:
-            async with session.get(url, headers=headers, params=params, timeout=20) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if not data:
-                        return {"count": 0, "sum": 0, "items": []}
-                    
-                    # Фильтруем отмены
-                    valid_orders = [x for x in data if not x.get("isCancel")]
-                    total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
-                    
-                    return {
-                        "count": len(valid_orders),
-                        "sum": int(total_sum),
-                        "items": valid_orders
-                    }
-                return {"count": 0, "sum": 0, "items": []}
-        except Exception as e:
-            logger.error(f"Fetch orders error: {e}")
+        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        
+        if not data:
             return {"count": 0, "sum": 0, "items": []}
+        
+        # Данные приходят списком, нам нужно агрегировать
+        if isinstance(data, list):
+            valid_orders = [x for x in data if not x.get("isCancel")]
+            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            return {
+                "count": len(valid_orders),
+                "sum": int(total_sum),
+                "items": valid_orders
+            }
+        return {"count": 0, "sum": 0, "items": []}
 
-    async def _get_stocks(self, session, token: str, date_from: str):
-        """Агрегированные остатки (всего штук)"""
+    async def _get_stocks(self, session, token: str, date_from: str, use_cache=True):
         url = f"{self.BASE_URL}/stocks"
         params = {"dateFrom": date_from}
         headers = {"Authorization": token}
         
-        try:
-            async with session.get(url, headers=headers, params=params, timeout=20) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    total_qty = sum(item.get("quantity", 0) for item in data) if data else 0
-                    return {"total_quantity": total_qty}
-                return {"total_quantity": 0}
-        except Exception as e:
-            logger.error(f"Fetch stocks error: {e}")
+        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        
+        if not data:
             return {"total_quantity": 0}
+            
+        if isinstance(data, list):
+            total_qty = sum(item.get("quantity", 0) for item in data)
+            return {"total_quantity": total_qty}
+            
+        return {"total_quantity": 0}
 
 wb_api_service = WBApiService()
