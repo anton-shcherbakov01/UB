@@ -29,11 +29,11 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v14.3.
+    Микросервис парсинга Wildberries v14.4.
+    - [FIX] Возврат ссылки на изображение при парсинге цен.
     - Исправлен поиск корзин (до 50).
-    - Оптимизированное ожидание загрузки цен (WebDriverWait).
+    - Оптимизированное ожидание загрузки цен.
     - Улучшенный сбор SEO данных (Smart Keyword Extraction).
-    - Добавлен парсинг позиций в поиске (SERP).
     - Фоллбэк парсинга остатков через Selenium.
     """
     def __init__(self):
@@ -43,7 +43,6 @@ class SeleniumWBParser:
         self.proxy_host = os.getenv("PROXY_HOST")
         self.proxy_port = os.getenv("PROXY_PORT")
         
-        # Список User-Agents для ротации
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
@@ -240,6 +239,7 @@ class SeleniumWBParser:
                                 "id": sku, 
                                 "name": static_info["name"], 
                                 "brand": static_info["brand"],
+                                "image": static_info["image"], # [FIX] Добавлено изображение
                                 "stock_qty": total_qty,
                                 "prices": {"wallet_purple": wallet, "standard_black": int(price.get('salePriceU',0)/100), "base_crossed": int(price.get('priceU',0)/100)},
                                 "status": "success"
@@ -257,7 +257,8 @@ class SeleniumWBParser:
                         "id": sku, 
                         "name": static_info["name"], 
                         "brand": static_info["brand"],
-                        "stock_qty": total_qty, # Будет 0, если card.json упал, но цену нашли в DOM
+                        "image": static_info["image"], # [FIX] Добавлено изображение
+                        "stock_qty": total_qty, 
                         "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
                         "status": "success"
                     }
@@ -401,34 +402,50 @@ class SeleniumWBParser:
         driver = None
         try:
             driver = self._init_driver()
+            # Кодируем запрос в URL
             encoded_query = requests.utils.quote(query)
             url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded_query}"
             driver.get(url)
+            
+            # Ждем прогрузки карточек
             try:
-                WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card")))
-            except: return 0
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card"))
+                )
+            except:
+                return 0
 
+            # Скроллим немного, чтобы подгрузились (lazy load)
             for _ in range(3):
                 driver.execute_script("window.scrollBy(0, 800);")
                 time.sleep(1)
 
+            # Собираем ID всех карточек на странице
+            # WB использует разные классы, пробуем универсальный поиск по атрибутам
             cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
-            if not cards: cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
+            if not cards:
+                cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
             
             position = 0
             for index, card in enumerate(cards):
                 try:
+                    # id карточки обычно в id элемента или data-nm-id
                     card_id = card.get_attribute("id") 
                     if not card_id:
+                        # Fallback на data-popup-nm-id и подобные
                         data_nm = card.get_attribute("data-nm-id")
                         if data_nm: card_id = data_nm
+                    
+                    # id обычно вида 'c123456', берем цифры
                     if card_id:
                         sku_str = re.sub(r'[^\d]', '', card_id)
                         if sku_str and int(sku_str) == int(target_sku):
                             position = index + 1
                             break
                 except: continue
+                
             return position
+
         except Exception as e:
             logger.error(f"SERP Error: {e}")
             return 0
