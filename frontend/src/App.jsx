@@ -4,7 +4,7 @@ import {
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
   ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
-  Key, TrendingUp, Package, Coins, Calculator
+  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -16,38 +16,30 @@ const API_URL = "https://api.ulike-bot.ru";
 
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <LayoutGrid size={22} strokeWidth={active === 'home' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Главная</span>
     </button>
-    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={22} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Цены</span>
     </button>
-    <button onClick={() => setTab('history')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'history' ? 'text-indigo-600' : 'text-slate-400'}`}>
-       <HistoryIcon size={22} strokeWidth={active === 'history' ? 2.5 : 2} />
-       <span className="text-[9px] font-bold">История</span>
-    </button>
     
-    <div className="relative -top-5 w-[14%] flex justify-center">
+    <div className="relative -top-5 w-[20%] flex justify-center">
         <button 
-            onClick={() => setTab('scanner')} 
-            className="bg-indigo-600 text-white w-12 h-12 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
+            onClick={() => setTab('finance')} 
+            className="bg-indigo-600 text-white w-14 h-14 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
         >
-            <Plus size={24} strokeWidth={3} />
+            <DollarSign size={28} strokeWidth={3} />
         </button>
     </div>
 
-    <button onClick={() => setTab('seo')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'seo' ? 'text-indigo-600' : 'text-slate-400'}`}>
-      <Wand2 size={22} strokeWidth={active === 'seo' ? 2.5 : 2} />
-      <span className="text-[9px] font-bold">SEO</span>
-    </button>
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <Brain size={22} strokeWidth={active === 'ai' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[14%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <User size={22} strokeWidth={active === 'profile' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Профиль</span>
     </button>
@@ -66,7 +58,6 @@ const TariffCard = ({ plan, onPay }) => (
         <span className="text-3xl font-black text-slate-900">{plan.price}</span>
         {plan.stars > 0 && <span className="text-xs font-bold text-amber-500 bg-amber-100 px-2 py-0.5 rounded-full flex items-center gap-1"><Star size={10} fill="currentColor"/> {plan.stars} Stars</span>}
     </div>
-    
     <ul className="space-y-3 mb-6">
       {plan.features.map((f, i) => (
         <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
@@ -75,11 +66,7 @@ const TariffCard = ({ plan, onPay }) => (
         </li>
       ))}
     </ul>
-    
-    <button 
-        onClick={() => !plan.current && onPay(plan)}
-        className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}
-    >
+    <button onClick={() => !plan.current && onPay(plan)} className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
       {plan.current ? 'Ваш текущий план' : <>{plan.stars > 0 && <Star size={16} fill="currentColor" className="text-amber-400"/>} Оплатить Stars</>}
     </button>
   </div>
@@ -90,14 +77,9 @@ const CostEditModal = ({ item, onClose, onSave }) => {
     return (
         <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
             <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl">
-                <h3 className="font-bold text-lg mb-2">Себестоимость товара</h3>
-                <p className="text-xs text-slate-400 mb-4">Введите закупочную цену для расчета Unit-экономики и чистой прибыли.</p>
-                <input 
-                    type="number" 
-                    value={cost} 
-                    onChange={e => setCost(e.target.value)}
-                    className="w-full bg-slate-50 text-2xl font-black text-center p-4 rounded-2xl outline-none focus:ring-2 ring-indigo-500 mb-4"
-                />
+                <h3 className="font-bold text-lg mb-2">Себестоимость</h3>
+                <p className="text-xs text-slate-400 mb-4">Для расчета чистой прибыли SKU {item.sku}</p>
+                <input type="number" value={cost} onChange={e => setCost(e.target.value)} className="w-full bg-slate-50 text-2xl font-black text-center p-4 rounded-2xl outline-none focus:ring-2 ring-indigo-500 mb-4" />
                 <div className="flex gap-2">
                     <button onClick={onClose} className="flex-1 py-3 bg-slate-100 font-bold rounded-xl text-slate-600">Отмена</button>
                     <button onClick={() => onSave(item.sku, cost)} className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200">Сохранить</button>
@@ -116,15 +98,8 @@ const DashboardPage = ({ onNavigate, user }) => {
     useEffect(() => {
         if (user?.has_wb_token) {
             setLoading(true);
-            fetch(`${API_URL}/api/internal/stats`, {
-                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-            })
-            .then(r => r.json())
-            .then(data => {
-                setStats(data);
-                setLoading(false);
-            })
-            .catch(() => setLoading(false));
+            fetch(`${API_URL}/api/internal/stats`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } })
+            .then(r => r.json()).then(data => { setStats(data); setLoading(false); }).catch(() => setLoading(false));
         }
     }, [user]);
 
@@ -136,19 +111,15 @@ const DashboardPage = ({ onNavigate, user }) => {
                     <div className="flex justify-between items-start mb-4">
                         <div className="flex items-center gap-2 opacity-80">
                             <Sparkles size={16} className="text-amber-300" />
-                            <span className="text-xs font-bold uppercase tracking-widest">Мои Продажи (API)</span>
+                            <span className="text-xs font-bold uppercase tracking-widest">Мои Продажи</span>
                         </div>
-                        {!user?.has_wb_token && (
-                            <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">
-                                Подключить
-                            </button>
-                        )}
+                        {!user?.has_wb_token && <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">Подключить</button>}
                     </div>
 
                     {!user?.has_wb_token ? (
                         <div className="text-center py-4">
-                            <p className="font-bold text-lg mb-2">Подключите API ключ</p>
-                            <p className="text-xs opacity-70">Чтобы видеть реальные продажи и остатки</p>
+                            <p className="font-bold text-lg mb-2">Подключите API</p>
+                            <p className="text-xs opacity-70">Чтобы видеть реальные продажи</p>
                         </div>
                     ) : loading ? (
                         <div className="flex justify-center py-6"><Loader2 className="animate-spin" /></div>
@@ -162,7 +133,6 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm">
                                 <p className="text-xs opacity-70 mb-1">Остатки</p>
                                 <p className="text-2xl font-black">{stats?.stocks?.total_quantity?.toLocaleString() || 0} шт</p>
-                                <p className="text-xs opacity-70">На складах WB</p>
                             </div>
                         </div>
                     )}
@@ -172,13 +142,22 @@ const DashboardPage = ({ onNavigate, user }) => {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-                <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                 <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                     <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
-                        <TrendingUp size={24} />
+                        <PieChart size={24} />
                     </div>
                     <div>
                         <span className="font-bold text-slate-800 block">Unit-экономика</span>
-                        <span className="text-xs text-slate-400">P&L по товарам</span>
+                        <span className="text-xs text-slate-400">P&L, Маржа, ROI по вашим товарам</span>
+                    </div>
+                </div>
+                <div onClick={() => onNavigate('monitor')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
+                        <TrendingUp size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Конкуренты</span>
+                        <span className="text-xs text-slate-400">Мониторинг цен</span>
                     </div>
                 </div>
                 <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -187,16 +166,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                     </div>
                     <div>
                         <span className="font-bold text-slate-800 block">AI Аналитик</span>
-                        <span className="text-xs text-slate-400">Анализ отзывов</span>
-                    </div>
-                </div>
-                <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
-                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
-                        <Wand2 size={24} />
-                    </div>
-                    <div>
-                        <span className="font-bold text-slate-800 block">SEO Генератор</span>
-                        <span className="text-xs text-slate-400">Создание карточек товара</span>
+                        <span className="text-xs text-slate-400">Отзывы</span>
                     </div>
                 </div>
             </div>
@@ -204,44 +174,124 @@ const DashboardPage = ({ onNavigate, user }) => {
     );
 };
 
+// НОВАЯ СТРАНИЦА: ФИНАНСЫ (Internal)
+const FinancePage = ({ onNavigate }) => {
+    const [products, setProducts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [editingCost, setEditingCost] = useState(null);
+
+    const fetchProducts = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/internal/products`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            });
+            if (res.ok) setProducts(await res.json());
+        } catch(e) { console.error(e); } finally { setLoading(false); }
+    };
+
+    useEffect(() => { fetchProducts(); }, []);
+
+    const handleUpdateCost = async (sku, cost) => {
+        try {
+            await fetch(`${API_URL}/api/internal/cost/${sku}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" },
+                body: JSON.stringify({ cost_price: Number(cost) })
+            });
+            setEditingCost(null);
+            fetchProducts();
+        } catch(e) { alert("Ошибка"); }
+    };
+
+    return (
+        <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
+             <div className="flex justify-between items-center px-2">
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800">Unit-экономика</h2>
+                    <p className="text-xs text-slate-400">Внутренняя аналитика (API)</p>
+                </div>
+                <button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
+            </div>
+
+            {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
+
+            {loading ? (
+                <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div>
+            ) : products.length === 0 ? (
+                <div className="text-center p-10 bg-white rounded-3xl border border-dashed border-slate-200">
+                    <p className="font-bold text-slate-500 mb-2">Нет данных</p>
+                    <p className="text-xs text-slate-400">Убедитесь, что подключен API токен и на остатках есть товары.</p>
+                </div>
+            ) : (
+                products.map((item) => (
+                    <div key={item.sku} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group">
+                        <div className="flex justify-between items-start mb-3">
+                            <div className="min-w-0">
+                                <div className="font-bold truncate text-sm">SKU {item.sku}</div>
+                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Остаток: {item.quantity} шт</div>
+                            </div>
+                            <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
+                                <Calculator size={18} />
+                            </button>
+                        </div>
+                        
+                        <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
+                             <div>
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Себестоимость</span>
+                                <span className="font-bold text-slate-700">{item.cost_price} ₽</span>
+                             </div>
+                             <div className="text-center">
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Цена</span>
+                                <span className="font-bold text-slate-700">{item.price} ₽</span>
+                             </div>
+                             <div className="text-right">
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Прибыль</span>
+                                <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                    {item.unit_economy.profit} ₽
+                                </span>
+                             </div>
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.unit_economy.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                 ROI: {item.unit_economy.roi}%
+                             </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
+                                 Маржа: {item.unit_economy.margin}%
+                             </span>
+                        </div>
+                    </div>
+                ))
+            )}
+        </div>
+    );
+}
+
+// MONITOR PAGE (Только конкуренты, без Unit)
 const MonitorPage = () => {
   const [list, setList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [editingCost, setEditingCost] = useState(null);
 
   const fetchList = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/monitor/list`, {
-            headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-        });
+        const res = await fetch(`${API_URL}/api/monitor/list`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
         if (res.ok) setList(await res.json());
       } catch(e) { console.error(e); } finally { setLoading(false); }
   };
 
   useEffect(() => { fetchList(); }, []);
 
-  const handleUpdateCost = async (sku, cost) => {
-      try {
-          await fetch(`${API_URL}/api/monitor/cost/${sku}`, {
-              method: 'PUT',
-              headers: { 
-                  'Content-Type': 'application/json',
-                  'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
-              },
-              body: JSON.stringify({ cost_price: Number(cost) })
-          });
-          setEditingCost(null);
-          fetchList();
-      } catch(e) { alert("Ошибка обновления"); }
+  const handleDelete = async (e, sku) => {
+    e.stopPropagation(); if(!confirm("Удалить?")) return;
+    await fetch(`${API_URL}/api/monitor/delete/${sku}`, { method: 'DELETE', headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+    fetchList();
   };
 
   const loadHistory = async (sku) => {
     setHistoryData(null);
     try {
-        const res = await fetch(`${API_URL}/api/monitor/history/${sku}`, {
-            headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-        });
+        const res = await fetch(`${API_URL}/api/monitor/history/${sku}`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
         if(res.ok) setHistoryData(await res.json());
     } catch(e) { console.error(e); }
   };
@@ -249,14 +299,15 @@ const MonitorPage = () => {
   return (
     <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
       <div className="flex justify-between items-center px-2">
-        <h2 className="text-xl font-bold text-slate-800">Unit-экономика</h2>
-        <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all">
-            <RefreshCw size={18}/>
-        </button>
+        <div>
+             <h2 className="text-xl font-bold text-slate-800">Конкуренты</h2>
+             <p className="text-xs text-slate-400">Мониторинг цен (Внешний)</p>
+        </div>
+        <div className="flex gap-2">
+            <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
+        </div>
       </div>
       
-      {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
-
       {historyData && (
         <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative">
@@ -268,12 +319,7 @@ const MonitorPage = () => {
                 <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={historyData.history}>
-                        <defs>
-                        <linearGradient id="colorWallet" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/>
-                            <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
-                        </linearGradient>
-                        </defs>
+                        <defs><linearGradient id="colorWallet" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/><stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/></linearGradient></defs>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                         <XAxis dataKey="date" tick={{fontSize: 10}} tickLine={false} axisLine={false} />
                         <YAxis hide domain={['auto', 'auto']} />
@@ -286,48 +332,21 @@ const MonitorPage = () => {
       )}
 
       <div className="space-y-3">
-        {loading ? (
-            <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-600"/></div>
-        ) : list.length === 0 ? (
-          <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
-              Список пуст.
-          </div>
+        {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-600"/></div> : list.length === 0 ? (
+          <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">Список пуст. Добавьте товары через сканер.</div>
         ) : (
           list.map((item) => (
-            <div key={item.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group">
-              <div className="flex justify-between items-start mb-3">
-                  <div onClick={() => loadHistory(item.sku)} className="min-w-0 cursor-pointer">
-                      <div className="font-bold truncate text-sm">{item.name || `SKU ${item.sku}`}</div>
-                      <div className="text-[10px] text-slate-400 font-black uppercase tracking-wider">{item.brand || 'WB'}</div>
-                  </div>
-                  <div className="flex gap-2">
-                       <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
-                           <Calculator size={18} />
-                       </button>
-                       <button onClick={() => loadHistory(item.sku)} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-                           <BarChart3 size={18} />
-                       </button>
-                  </div>
+            <div key={item.id} onClick={() => loadHistory(item.sku)} className="bg-white p-4 rounded-2xl flex items-center gap-4 border border-slate-100 shadow-sm relative group active:scale-[0.98] transition-transform cursor-pointer">
+              <div className="bg-indigo-50 w-12 h-12 flex items-center justify-center rounded-xl text-indigo-600">
+                  <BarChart3 size={20} />
               </div>
-              
-              {/* P&L Block */}
-              <div className="bg-slate-50 rounded-xl p-3 flex justify-between items-center text-sm">
-                  <div>
-                      <span className="block text-[10px] text-slate-400 uppercase font-bold">Себестоимость</span>
-                      <span className="font-bold text-slate-700">{item.cost_price} ₽</span>
-                  </div>
-                  <div className="text-right">
-                      <span className="block text-[10px] text-slate-400 uppercase font-bold">Прибыль с шт.</span>
-                      <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {item.unit_economy.profit} ₽
-                      </span>
-                  </div>
-                  <div className="text-right">
-                      <span className="block text-[10px] text-slate-400 uppercase font-bold">ROI</span>
-                      <span className={`font-bold ${item.unit_economy.roi > 30 ? 'text-emerald-500' : 'text-slate-700'}`}>
-                          {item.unit_economy.roi}%
-                      </span>
-                  </div>
+              <div className="flex-1 min-w-0">
+                  <div className="font-bold truncate text-sm">{item.name || `SKU ${item.sku}`}</div>
+                  <div className="text-[10px] text-slate-400 font-black uppercase tracking-wider">{item.brand || 'WB'}</div>
+              </div>
+              <div className="text-right">
+                  <div className="font-black text-indigo-600">{item.prices[0]?.wallet_price} ₽</div>
+                  <button onClick={(e) => handleDelete(e, item.sku)} className="text-red-300 hover:text-red-500 p-1"><Trash2 size={16}/></button>
               </div>
             </div>
           ))
@@ -1067,9 +1086,7 @@ export default function App() {
   useEffect(() => {
       const tgData = window.Telegram?.WebApp?.initData || "";
       fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} })
-          .then(r => r.json())
-          .then(setUser)
-          .catch(console.error);
+          .then(r => r.json()).then(setUser).catch(console.error);
   }, [activeTab]); 
 
   const renderContent = () => {
@@ -1077,6 +1094,7 @@ export default function App() {
           case 'home': return <DashboardPage onNavigate={setActiveTab} user={user} />;
           case 'scanner': return <ScannerPage onNavigate={setActiveTab} />;
           case 'monitor': return <MonitorPage />;
+          case 'finance': return <FinancePage onNavigate={setActiveTab} />;
           case 'ai': return <AIAnalysisPage />;
           case 'seo': return <SeoGeneratorPage />;
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
