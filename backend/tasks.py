@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 import asyncio
 from datetime import datetime
 from celery_app import celery_app
@@ -8,8 +8,9 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition
+from sqlalchemy import select
 
-logger = logging.getLogger("CeleryWorker")
+logger = logging.getLogger("CeleryTasks")
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (SYNC) ---
 
@@ -35,6 +36,7 @@ def save_price_sync(sku, data):
     if data.get("status") == "error": return
     session = SyncSessionLocal()
     try:
+        # Используем синхронный query
         item = session.query(MonitoredItem).filter(MonitoredItem.sku == sku).first()
         if item:
             item.name = data.get("name")
@@ -78,13 +80,13 @@ def save_seo_position_sync(user_id, sku, keyword, position):
     finally:
         session.close()
 
-# --- ЗАДАЧИ CELERY ---
+# --- ЗАДАЧИ CELERY (SYNC) ---
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
 def parse_and_save_sku(self, sku: int, user_id: int = None):
     self.update_state(state='PROGRESS', meta={'status': 'Запуск парсера...'})
     
-    # 1. Парсинг
+    # 1. Парсинг (метод внутри синхронный или сам создает луп)
     raw_result = parser_service.get_product_data(sku)
     
     if raw_result.get("status") == "error": 
@@ -93,10 +95,10 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
     
     self.update_state(state='PROGRESS', meta={'status': 'Сохранение...'})
     
-    # 2. Сохранение
+    # 2. Сохранение (Синхронно)
     save_price_sync(sku, raw_result)
     
-    # 3. Аналитика цен
+    # 3. Аналитика
     final_result = analysis_service.calculate_metrics(raw_result)
 
     # 4. История
@@ -112,42 +114,42 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов...'})
     
-    # 1. Парсинг API
-    product_data = parser_service.get_full_product_info(sku, limit)
+    # 1. Парсинг API (Requests - синхронно)
+    product_info = parser_service.get_full_product_info(sku, limit)
     
-    if product_data.get("status") == "error":
-        return {"status": "error", "error": product_data.get("message")}
+    if product_info.get("status") == "error":
+        return {"status": "error", "error": product_info.get("message")}
     
     self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
     
-    # 2. ИИ Анализ
-    reviews = product_data.get('reviews', [])
+    # 2. ИИ Анализ (Requests - синхронно)
+    reviews = product_info.get('reviews', [])
+    if not reviews:
+        return {"status": "error", "error": "Нет отзывов"}
+
     ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
 
     final_result = {
         "status": "success",
         "sku": sku,
-        "image": product_data.get('image'),
-        "rating": product_data.get('rating'),
-        "reviews_count": product_data.get('reviews_count'),
+        "image": product_info.get('image'),
+        "rating": product_info.get('rating'),
+        "reviews_count": product_info.get('reviews_count'),
         "ai_analysis": ai_result
     }
 
     if user_id:
-        title = f"AI Отзывы: {product_data.get('rating')}★"
+        title = f"AI Отзывы: {product_info.get('rating')}★"
         save_history_sync(user_id, sku, 'ai', title, final_result)
 
     return final_result
 
 @celery_app.task(bind=True, name="generate_seo_task")
 def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: int = None, title_len: int = 100, desc_len: int = 1000):
-    """
-    Генерация SEO описания. 
-    [FIX] Добавлены аргументы title_len и desc_len
-    """
+    """Генерация SEO. Аргументы длины прокинуты."""
     self.update_state(state='PROGRESS', meta={'status': 'Генерация контента...'})
     
-    # Генерация
+    # Генерация (Requests - синхронно)
     content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
     
     final_result = {
@@ -166,11 +168,13 @@ def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: in
 
 @celery_app.task(bind=True, name="check_seo_position_task")
 def check_seo_position_task(self, sku: int, keyword: str, user_id: int):
-    """Проверка позиции товара по ключевому слову"""
+    """Проверка позиций (SERP)"""
     self.update_state(state='PROGRESS', meta={'status': 'Парсинг поиска...'})
     
+    # Парсинг (Selenium - синхронно)
     position = parser_service.get_search_position(keyword, sku)
     
+    # Сохранение (Синхронно)
     save_seo_position_sync(user_id, sku, keyword, position)
     
     return {"status": "success", "sku": sku, "keyword": keyword, "position": position}
@@ -188,17 +192,24 @@ def update_all_monitored_items():
 
 # --- NOTIFICATIONS ("ДЗЫНЬ!") ---
 
-async def _process_orders_async():
-    """Асинхронная логика внутри синхронной задачи Celery"""
+def _process_orders_sync():
+    """
+    Синхронная обертка для проверки заказов.
+    Используем asyncio.run для вызова асинхронных методов WB API.
+    """
+    async def run_check():
+        # Важно: Здесь можно использовать AsyncSession или SyncSession, но так как
+        # мы внутри asyncio.run, лучше создать сессию внутри.
+        # Для простоты используем wb_api_service напрямую, а базу через SyncSession
+        pass # Реализация ниже
+
     session = SyncSessionLocal()
     try:
-        # Берем пользователей, у которых есть токен WB
         users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
         
-        for user in users:
+        async def check_user(user):
             try:
                 new_orders = await wb_api_service.get_new_orders_since(user.wb_api_token, user.last_order_check)
-                
                 if new_orders:
                     total_sum = sum(x.get('priceWithDiscount', 0) for x in new_orders)
                     msg = f"🔔 <b>Дзынь! Новые заказы: +{len(new_orders)}</b>\n"
@@ -211,22 +222,27 @@ async def _process_orders_async():
                     
                     if len(new_orders) > 3:
                         msg += f"...и еще {len(new_orders)-3} шт."
-                        
+                    
                     await bot_service.send_message(user.telegram_id, msg)
-                    
-                    user.last_order_check = datetime.now()
-                    session.commit()
-                    
+                    return True # Orders found
             except Exception as e:
-                logger.error(f"Error checking orders for user {user.telegram_id}: {e}")
+                logger.error(f"User {user.id} error: {e}")
+            return False
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        for user in users:
+            found = loop.run_until_complete(check_user(user))
+            if found:
+                user.last_order_check = datetime.now()
+                session.commit()
                 
+        loop.close()
+        
     finally:
         session.close()
 
 @celery_app.task(name="check_new_orders")
 def check_new_orders():
-    """Периодическая задача для проверки новых заказов."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(_process_orders_async())
-    loop.close()
+    _process_orders_sync()
