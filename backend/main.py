@@ -378,6 +378,9 @@ class StarsPaymentRequest(BaseModel):
     plan_id: str
     amount: int # Stars
 
+class PaymentRequest(BaseModel):
+    plan_id: str
+
 @app.post("/api/payment/stars_link")
 async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_current_user)):
     """Генерация инвойса для Telegram Stars"""
