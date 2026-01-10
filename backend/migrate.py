@@ -2,17 +2,25 @@ import logging
 from sqlalchemy import text, inspect
 from database import engine_sync
 
+# Настройка логгера
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Migration")
 
 def run_migration():
+    """
+    Безопасное обновление структуры БД.
+    1. Создает таблицу product_costs (если нет).
+    2. Добавляет колонки в users (wb_api_token, last_order_check).
+    """
     logger.info("Starting migration check...")
+    
+    # Инспектор для проверки текущего состояния БД
     inspector = inspect(engine_sync)
     
     with engine_sync.connect() as connection:
         trans = connection.begin()
         try:
-            # 1. Таблица для себестоимости собственных товаров (Unit Economics)
+            # 1. Создаем таблицу для себестоимости СОБСТВЕННЫХ товаров
             if not inspector.has_table("product_costs"):
                 logger.info("Creating table 'product_costs'...")
                 connection.execute(text("""
@@ -25,13 +33,19 @@ def run_migration():
                     );
                     CREATE INDEX idx_product_costs_user_sku ON product_costs (user_id, sku);
                 """))
+            else:
+                logger.info("Table 'product_costs' already exists.")
 
-            # 2. Проверяем поля User (на случай если это первый запуск фазы 2)
+            # 2. Проверяем и обновляем таблицу users
             if inspector.has_table("users"):
-                cols = [c['name'] for c in inspector.get_columns('users')]
-                if 'wb_api_token' not in cols:
+                existing_columns = [c['name'] for c in inspector.get_columns('users')]
+                
+                if 'wb_api_token' not in existing_columns:
+                    logger.info("Adding 'wb_api_token' to users...")
                     connection.execute(text("ALTER TABLE users ADD COLUMN wb_api_token VARCHAR"))
-                if 'last_order_check' not in cols:
+                
+                if 'last_order_check' not in existing_columns:
+                    logger.info("Adding 'last_order_check' to users...")
                     connection.execute(text("ALTER TABLE users ADD COLUMN last_order_check TIMESTAMP WITHOUT TIME ZONE"))
 
             trans.commit()
@@ -42,4 +56,7 @@ def run_migration():
             raise e
 
 if __name__ == "__main__":
-    run_migration()
+    try:
+        run_migration()
+    except Exception as e:
+        logger.error(f"Fatal migration error: {e}")

@@ -5,12 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
 
+# Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
+# Для Воркера (Celery) используем синхронный драйвер
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
+# 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=engine_async, class_=AsyncSession, expire_on_commit=False)
 
+# 2. Синхронный движок (Celery)
 engine_sync = create_engine(DATABASE_URL_SYNC, echo=False)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_sync)
 
@@ -24,16 +28,23 @@ class User(Base):
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
+    
+    # Новые поля для API WB и уведомлений
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
+    # Связь с себестоимостью собственных товаров
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
 
 class ProductCost(Base):
-    """Таблица для хранения себестоимости СОБСТВЕННЫХ товаров пользователя"""
+    """
+    Таблица для хранения себестоимости СОБСТВЕННЫХ товаров пользователя.
+    Используется для расчета Unit-экономики и P&L во внутренней аналитике.
+    """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -44,13 +55,15 @@ class ProductCost(Base):
     user = relationship("User", back_populates="costs")
 
 class MonitoredItem(Base):
+    """
+    Таблица для ВНЕШНЕГО мониторинга (конкуренты).
+    """
     __tablename__ = "monitored_items"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
-    # cost_price убрали логически, используем ProductCost для внутренних товаров
     created_at = Column(DateTime, default=datetime.utcnow)
     
     owner = relationship("User", back_populates="items")

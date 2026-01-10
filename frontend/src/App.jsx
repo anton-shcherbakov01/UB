@@ -58,6 +58,7 @@ const TariffCard = ({ plan, onPay }) => (
         <span className="text-3xl font-black text-slate-900">{plan.price}</span>
         {plan.stars > 0 && <span className="text-xs font-bold text-amber-500 bg-amber-100 px-2 py-0.5 rounded-full flex items-center gap-1"><Star size={10} fill="currentColor"/> {plan.stars} Stars</span>}
     </div>
+    
     <ul className="space-y-3 mb-6">
       {plan.features.map((f, i) => (
         <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
@@ -66,7 +67,11 @@ const TariffCard = ({ plan, onPay }) => (
         </li>
       ))}
     </ul>
-    <button onClick={() => !plan.current && onPay(plan)} className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
+    
+    <button 
+        onClick={() => !plan.current && onPay(plan)}
+        className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}
+    >
       {plan.current ? 'Ваш текущий план' : <>{plan.stars > 0 && <Star size={16} fill="currentColor" className="text-amber-400"/>} Оплатить Stars</>}
     </button>
   </div>
@@ -79,7 +84,12 @@ const CostEditModal = ({ item, onClose, onSave }) => {
             <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl">
                 <h3 className="font-bold text-lg mb-2">Себестоимость</h3>
                 <p className="text-xs text-slate-400 mb-4">Для расчета чистой прибыли SKU {item.sku}</p>
-                <input type="number" value={cost} onChange={e => setCost(e.target.value)} className="w-full bg-slate-50 text-2xl font-black text-center p-4 rounded-2xl outline-none focus:ring-2 ring-indigo-500 mb-4" />
+                <input 
+                    type="number" 
+                    value={cost} 
+                    onChange={e => setCost(e.target.value)}
+                    className="w-full bg-slate-50 text-2xl font-black text-center p-4 rounded-2xl outline-none focus:ring-2 ring-indigo-500 mb-4"
+                />
                 <div className="flex gap-2">
                     <button onClick={onClose} className="flex-1 py-3 bg-slate-100 font-bold rounded-xl text-slate-600">Отмена</button>
                     <button onClick={() => onSave(item.sku, cost)} className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200">Сохранить</button>
@@ -98,8 +108,15 @@ const DashboardPage = ({ onNavigate, user }) => {
     useEffect(() => {
         if (user?.has_wb_token) {
             setLoading(true);
-            fetch(`${API_URL}/api/internal/stats`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } })
-            .then(r => r.json()).then(data => { setStats(data); setLoading(false); }).catch(() => setLoading(false));
+            fetch(`${API_URL}/api/internal/stats`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            })
+            .then(r => r.json())
+            .then(data => {
+                setStats(data);
+                setLoading(false);
+            })
+            .catch(() => setLoading(false));
         }
     }, [user]);
 
@@ -113,7 +130,11 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <Sparkles size={16} className="text-amber-300" />
                             <span className="text-xs font-bold uppercase tracking-widest">Мои Продажи</span>
                         </div>
-                        {!user?.has_wb_token && <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">Подключить</button>}
+                        {!user?.has_wb_token && (
+                            <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">
+                                Подключить
+                            </button>
+                        )}
                     </div>
 
                     {!user?.has_wb_token ? (
@@ -169,6 +190,15 @@ const DashboardPage = ({ onNavigate, user }) => {
                         <span className="text-xs text-slate-400">Отзывы</span>
                     </div>
                 </div>
+                <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+                        <Wand2 size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">SEO Генератор</span>
+                        <span className="text-xs text-slate-400">Создание карточек товара</span>
+                    </div>
+                </div>
             </div>
         </div>
     );
@@ -196,12 +226,15 @@ const FinancePage = ({ onNavigate }) => {
         try {
             await fetch(`${API_URL}/api/internal/cost/${sku}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
+                },
                 body: JSON.stringify({ cost_price: Number(cost) })
             });
             setEditingCost(null);
             fetchProducts();
-        } catch(e) { alert("Ошибка"); }
+        } catch(e) { alert("Ошибка обновления"); }
     };
 
     return (
@@ -272,10 +305,13 @@ const MonitorPage = () => {
   const [list, setList] = useState([]);
   const [historyData, setHistoryData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   const fetchList = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/monitor/list`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+        const res = await fetch(`${API_URL}/api/monitor/list`, {
+            headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        });
         if (res.ok) setList(await res.json());
       } catch(e) { console.error(e); } finally { setLoading(false); }
   };
@@ -283,17 +319,55 @@ const MonitorPage = () => {
   useEffect(() => { fetchList(); }, []);
 
   const handleDelete = async (e, sku) => {
-    e.stopPropagation(); if(!confirm("Удалить?")) return;
-    await fetch(`${API_URL}/api/monitor/delete/${sku}`, { method: 'DELETE', headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+    e.stopPropagation();
+    if(!confirm("Удалить товар из списка?")) return;
+    await fetch(`${API_URL}/api/monitor/delete/${sku}`, { 
+        method: 'DELETE',
+        headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+    });
     fetchList();
   };
 
   const loadHistory = async (sku) => {
     setHistoryData(null);
     try {
-        const res = await fetch(`${API_URL}/api/monitor/history/${sku}`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+        const res = await fetch(`${API_URL}/api/monitor/history/${sku}`, {
+            headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        });
         if(res.ok) setHistoryData(await res.json());
     } catch(e) { console.error(e); }
+  };
+
+  const downloadReport = async (sku) => {
+      setDownloading(true);
+      try {
+          const token = window.Telegram?.WebApp?.initData || "";
+          const response = await fetch(`${API_URL}/api/report/pdf/${sku}`, {
+              headers: { 'X-TG-Data': token }
+          });
+
+          if (response.status === 403) {
+              alert("Эта функция доступна только в тарифе PRO или Business");
+              setDownloading(false);
+              return;
+          }
+
+          if (!response.ok) throw new Error("Ошибка загрузки");
+
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `report_${sku}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+      } catch (e) {
+          alert("Не удалось скачать отчет");
+      } finally {
+          setDownloading(false);
+      }
   };
 
   return (
@@ -303,9 +377,9 @@ const MonitorPage = () => {
              <h2 className="text-xl font-bold text-slate-800">Конкуренты</h2>
              <p className="text-xs text-slate-400">Мониторинг цен (Внешний)</p>
         </div>
-        <div className="flex gap-2">
-            <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
-        </div>
+        <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all">
+            <RefreshCw size={18}/>
+        </button>
       </div>
       
       {historyData && (
@@ -316,24 +390,49 @@ const MonitorPage = () => {
                     <span className="text-[10px] font-black uppercase text-indigo-500 bg-indigo-50 px-2 py-1 rounded-lg">{historyData.sku}</span>
                     <h3 className="font-bold text-xl leading-tight mt-2 line-clamp-2">{historyData.name}</h3>
                 </div>
+                
+                <div className="flex gap-2 mb-4">
+                    <button 
+                        onClick={() => downloadReport(historyData.sku)} 
+                        disabled={downloading}
+                        className="flex-1 bg-slate-900 text-white py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-70"
+                    >
+                        {downloading ? <Loader2 size={16} className="animate-spin" /> : <><FileDown size={16} /> Скачать PDF</>}
+                    </button>
+                </div>
+
                 <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={historyData.history}>
-                        <defs><linearGradient id="colorWallet" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/><stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/></linearGradient></defs>
+                        <defs>
+                        <linearGradient id="colorWallet" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
+                        </linearGradient>
+                        </defs>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                         <XAxis dataKey="date" tick={{fontSize: 10}} tickLine={false} axisLine={false} />
                         <YAxis hide domain={['auto', 'auto']} />
+                        <Tooltip 
+                            contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.1)'}} 
+                            itemStyle={{color: '#4f46e5', fontWeight: 800}}
+                        />
                         <Area type="monotone" dataKey="wallet" stroke="#4f46e5" strokeWidth={3} fill="url(#colorWallet)" />
                     </AreaChart>
                     </ResponsiveContainer>
                 </div>
+                <p className="text-center text-xs text-slate-400 mt-4">Динамика цены WB Кошелек</p>
             </div>
         </div>
       )}
 
       <div className="space-y-3">
-        {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-600"/></div> : list.length === 0 ? (
-          <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">Список пуст. Добавьте товары через сканер.</div>
+        {loading ? (
+            <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-600"/></div>
+        ) : list.length === 0 ? (
+          <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
+              Список пуст. Добавьте товары через сканер.
+          </div>
         ) : (
           list.map((item) => (
             <div key={item.id} onClick={() => loadHistory(item.sku)} className="bg-white p-4 rounded-2xl flex items-center gap-4 border border-slate-100 shadow-sm relative group active:scale-[0.98] transition-transform cursor-pointer">
@@ -355,8 +454,6 @@ const MonitorPage = () => {
     </div>
   );
 };
-
-// ... (SeoGeneratorPage, ScannerPage, MonitorPage, AIAnalysisPage, HistoryPage остаются без изменений в логике, но копируются для полноты кода)
 
 const SeoGeneratorPage = () => {
     const [step, setStep] = useState(1);
@@ -914,133 +1011,143 @@ const HistoryPage = () => {
 };
 
 const ProfilePage = ({ onNavigate }) => {
-  const [tariffs, setTariffs] = useState([]);
-  const [user, setUser] = useState(null);
-  const [wbToken, setWbToken] = useState('');
-  const [tokenLoading, setTokenLoading] = useState(false);
+    const [tariffs, setTariffs] = useState([]);
+    const [user, setUser] = useState(null);
+    const [wbToken, setWbToken] = useState('');
+    const [tokenLoading, setTokenLoading] = useState(false);
 
-  useEffect(() => {
-      const tgData = window.Telegram?.WebApp?.initData || "";
-      fetch(`${API_URL}/api/user/tariffs`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setTariffs);
-      fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(data => {
-          setUser(data);
-          if (data.has_wb_token) {
-              setWbToken(data.wb_token_preview);
-          }
-      });
-  }, []);
+    useEffect(() => {
+        const tgData = window.Telegram?.WebApp?.initData || "";
+        fetch(`${API_URL}/api/user/tariffs`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(setTariffs);
+        fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r=>r.json()).then(data => {
+            setUser(data);
+            if (data.has_wb_token) {
+                setWbToken(data.wb_token_preview);
+            }
+        });
+    }, []);
 
-  const payStars = async (plan) => {
-      if (!plan.stars) return;
-      try {
-          const res = await fetch(`${API_URL}/api/payment/stars_link`, { 
-              method: 'POST', 
-              headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
-              body: JSON.stringify({plan_id: plan.id, amount: plan.stars})
-          });
-          const d = await res.json();
-          if (d.invoice_link) {
-               // В Telegram WebApp открываем инвойс
-               window.Telegram?.WebApp?.openInvoice(d.invoice_link, (status) => {
-                   if (status === 'paid') {
-                       alert("Оплата прошла успешно!");
-                       window.location.reload();
-                   }
-               });
-          } else {
-              alert("Ошибка создания ссылки");
-          }
-      } catch (e) {
-          alert(e.message);
-      }
-  };
+    const payStars = async (plan) => {
+        if (!plan.stars) return;
+        try {
+            const res = await fetch(`${API_URL}/api/payment/stars_link`, { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
+                body: JSON.stringify({plan_id: plan.id, amount: plan.stars})
+            });
+            const d = await res.json();
+            if (d.invoice_link) {
+                 // В Telegram WebApp открываем инвойс
+                 window.Telegram?.WebApp?.openInvoice(d.invoice_link, (status) => {
+                     if (status === 'paid') {
+                         alert("Оплата прошла успешно!");
+                         window.location.reload();
+                     }
+                 });
+            } else {
+                alert("Ошибка создания ссылки");
+            }
+        } catch (e) {
+            alert(e.message);
+        }
+    };
 
-  const saveToken = async () => {
-      if (!wbToken || wbToken.includes("*****")) return;
-      setTokenLoading(true);
-      try {
-           const res = await fetch(`${API_URL}/api/user/token`, { 
-              method: 'POST', 
-              headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
-              body: JSON.stringify({token: wbToken})
-          });
-          const data = await res.json();
-          if (res.status === 200) {
-              alert("Токен успешно сохранен!");
-              const uRes = await fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} });
-              setUser(await uRes.json());
-          } else {
-              throw new Error(data.detail || "Ошибка");
-          }
-      } catch (e) {
-          alert(e.message);
-      } finally {
-          setTokenLoading(false);
-      }
-  };
+    const saveToken = async () => {
+        if (!wbToken || wbToken.includes("*****")) return;
+        setTokenLoading(true);
+        try {
+             const res = await fetch(`${API_URL}/api/user/token`, { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || ""},
+                body: JSON.stringify({token: wbToken})
+            });
+            const data = await res.json();
+            if (res.status === 200) {
+                alert("Токен успешно сохранен!");
+                const uRes = await fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} });
+                setUser(await uRes.json());
+            } else {
+                throw new Error(data.detail || "Ошибка");
+            }
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setTokenLoading(false);
+        }
+    };
 
-  const deleteToken = async () => {
-      if (!confirm("Удалить токен?")) return;
-      setTokenLoading(true);
-      try {
-           await fetch(`${API_URL}/api/user/token`, { 
-              method: 'DELETE', 
-              headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""}
-          });
-          setWbToken('');
-          setUser({...user, has_wb_token: false});
-      } finally {
-          setTokenLoading(false);
-      }
-  };
+    const deleteToken = async () => {
+        if (!confirm("Удалить токен?")) return;
+        setTokenLoading(true);
+        try {
+             await fetch(`${API_URL}/api/user/token`, { 
+                method: 'DELETE', 
+                headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""}
+            });
+            setWbToken('');
+            setUser({...user, has_wb_token: false});
+        } finally {
+            setTokenLoading(false);
+        }
+    };
 
-  return (
-      <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
-                  <User size={32} />
-              </div>
-              <div>
-                  <h2 className="text-xl font-bold">{user?.name || 'Гость'}</h2>
-                  <p className="text-sm text-slate-400">@{user?.username}</p>
-                  <div className="mt-2 inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
-                      {user?.plan || 'Free'} Plan
-                  </div>
-              </div>
-          </div>
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                    <User size={32} />
+                </div>
+                <div>
+                    <h2 className="text-xl font-bold">{user?.name || 'Гость'}</h2>
+                    <p className="text-sm text-slate-400">@{user?.username}</p>
+                    <div className="mt-2 inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
+                        {user?.plan || 'Free'} Plan
+                    </div>
+                </div>
+            </div>
 
-          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-              <div className="flex items-center gap-2 mb-4">
-                  <Key className="text-indigo-600" size={20} />
-                  <h2 className="font-bold text-lg">API Ключ WB</h2>
-              </div>
-              <div className="relative">
-                  <input 
-                      type="text" 
-                      value={wbToken}
-                      onChange={(e) => setWbToken(e.target.value)}
-                      placeholder="Введите токен..."
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100"
-                  />
-                  {user?.has_wb_token && (
-                      <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500"><X size={16}/></button>
-                  )}
-              </div>
-              {!user?.has_wb_token && (
-                  <button onClick={saveToken} disabled={tokenLoading} className="w-full mt-3 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm">
-                      {tokenLoading ? <Loader2 className="animate-spin" /> : 'Сохранить токен'}
-                  </button>
-              )}
-          </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-4">
+                    <Key className="text-indigo-600" size={20} />
+                    <h2 className="font-bold text-lg">API Ключ WB</h2>
+                </div>
+                <div className="relative">
+                    <input 
+                        type="text" 
+                        value={wbToken}
+                        onChange={(e) => setWbToken(e.target.value)}
+                        placeholder="Введите токен..."
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100"
+                    />
+                    {user?.has_wb_token && (
+                        <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500"><X size={16}/></button>
+                    )}
+                </div>
+                {!user?.has_wb_token && (
+                    <button onClick={saveToken} disabled={tokenLoading} className="w-full mt-3 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm">
+                        {tokenLoading ? <Loader2 className="animate-spin" /> : 'Сохранить токен'}
+                    </button>
+                )}
+            </div>
 
-          <h2 className="font-bold text-lg px-2 mt-4">Тарифы (Stars)</h2>
-          <div className="space-y-4">
-              {tariffs.map(plan => (
-                  <TariffCard key={plan.id} plan={plan} onPay={payStars} />
-              ))}
-          </div>
-      </div>
-  );
+            <h2 className="font-bold text-lg px-2 mt-4">Тарифы (Stars)</h2>
+            <div className="space-y-4">
+                {tariffs.map(plan => (
+                    <TariffCard key={plan.id} plan={plan} onPay={payStars} />
+                ))}
+            </div>
+            
+            {user?.is_admin && (
+                 <button onClick={() => onNavigate('admin')} className="w-full bg-slate-900 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between active:scale-95 transition-transform mt-4">
+                     <div className="flex items-center gap-3">
+                         <Shield size={20} className="text-emerald-400"/>
+                         <span className="font-bold text-sm">Админ-панель</span>
+                     </div>
+                     <ArrowUpRight size={18}/>
+                 </button>
+            )}
+        </div>
+    );
 };
 
 const AdminPage = ({ onBack }) => {
@@ -1086,7 +1193,9 @@ export default function App() {
   useEffect(() => {
       const tgData = window.Telegram?.WebApp?.initData || "";
       fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} })
-          .then(r => r.json()).then(setUser).catch(console.error);
+          .then(r => r.json())
+          .then(setUser)
+          .catch(console.error);
   }, [activeTab]); 
 
   const renderContent = () => {
