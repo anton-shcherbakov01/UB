@@ -12,7 +12,7 @@ from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timedelta  # [FIX] Добавлен timedelta
+from datetime import datetime, timedelta
 
 from parser_service import parser_service
 from analysis_service import analysis_service
@@ -449,20 +449,36 @@ async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
         raise HTTPException(400, res.get("message"))
     return res
 
+# [UPDATED] Модель запроса с настройками длины
 class SeoGenRequest(BaseModel):
     sku: int
     keywords: List[str]
     tone: str
+    title_len: Optional[int] = 100
+    desc_len: Optional[int] = 1000
 
 @app.post("/api/seo/generate")
 async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
-    task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id)
+    # [UPDATED] Передаем параметры длины в задачу
+    task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id, req.title_len, req.desc_len)
     return {"status": "accepted", "task_id": task.id}
 
 # --- HISTORY ---
 @app.get("/api/user/history")
-async def get_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(SearchHistory).where(SearchHistory.user_id == user.id).order_by(SearchHistory.created_at.desc()).limit(50))
+async def get_user_history(
+    request_type: Optional[str] = Query(None), # [UPDATED] Фильтр по типу
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(SearchHistory).where(SearchHistory.user_id == user.id)
+    
+    # [UPDATED] Применяем фильтр, если он передан
+    if request_type:
+        stmt = stmt.where(SearchHistory.request_type == request_type)
+    
+    stmt = stmt.order_by(SearchHistory.created_at.desc()).limit(50)
+    
+    res = await db.execute(stmt)
     history = res.scalars().all()
     result = []
     for h in history:
@@ -531,10 +547,11 @@ async def create_payment(req: PaymentRequest, user: User = Depends(get_current_u
 
 @app.get("/api/user/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
+    # [UPDATED] Обновлены фичи в тарифах
     return [
-        {"id": "free", "name": "Start", "price": "0 ₽", "stars": 0, "features": ["3 товара", "История 24ч", "P&L (7 дней)", "Ding! (1 раз/день)"], "current": user.subscription_plan == "free", "color": "slate"},
-        {"id": "pro", "name": "Pro", "price": "2990 ₽", "stars": 2500, "features": ["50 товаров", "Полный P&L (API)", "Unit-экономика", "Ding! (Безлимит)", "PDF"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
-        {"id": "business", "name": "Business", "price": "6990 ₽", "stars": 6000, "features": ["Автобиддер", "Конкуренты (Парсинг)", "Прогноз поставок", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
+        {"id": "free", "name": "Start", "price": "0 ₽", "stars": 0, "features": ["3 товара", "История 24ч", "SEO (Авто)", "Ding! (1 раз/день)"], "current": user.subscription_plan == "free", "color": "slate"},
+        {"id": "pro", "name": "Pro", "price": "2990 ₽", "stars": 2500, "features": ["50 товаров", "SEO (Настройка длины)", "Unit-экономика", "Ding! (Безлимит)", "PDF"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
+        {"id": "business", "name": "Business", "price": "6990 ₽", "stars": 6000, "features": ["Автобиддер", "Все настройки SEO", "Прогноз поставок", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
     ]
 
 # --- ADMIN ---
@@ -559,7 +576,6 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
     pdf = FPDF()
     pdf.add_page()
     
-    # [FIX] Добавляем поддержку шрифтов для кириллицы
     # Пытаемся загрузить системный шрифт или fallback
     font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf' # Docker standard
     try:
@@ -574,12 +590,12 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
                  pdf.set_font('DejaVu', '', 14)
              else:
                  logger.warning("No unicode font found. Cyrillic may fail.")
-                 pdf.set_font("Arial", size=12) # Fallback (Внимание: кириллица не будет работать!)
+                 pdf.set_font("Arial", size=12) # Fallback
     except Exception as e:
         logger.error(f"Font loading error: {e}")
         pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, txt=f"Report: {sku}", ln=1, align='C') # Убрали item.name из заголовка на случай проблем с кодировкой
+    pdf.cell(0, 10, txt=f"Report: {sku}", ln=1, align='C')
     pdf.ln(5)
     
     pdf.set_font_size(10)

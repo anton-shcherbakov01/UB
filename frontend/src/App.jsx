@@ -4,7 +4,7 @@ import {
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
   ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
-  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, Scale, Target, PlayCircle, ShieldCheck
+  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, Scale, Target, PlayCircle, ShieldCheck, Clock
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
@@ -16,11 +16,11 @@ const API_URL = "https://api.ulike-bot.ru";
 
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <LayoutGrid size={22} strokeWidth={active === 'home' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Главная</span>
     </button>
-    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={22} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Цены</span>
     </button>
@@ -34,12 +34,12 @@ const TabNav = ({ active, setTab, isAdmin }) => (
         </button>
     </div>
 
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <Brain size={22} strokeWidth={active === 'ai' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[18%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <User size={22} strokeWidth={active === 'profile' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Профиль</span>
     </button>
@@ -47,7 +47,6 @@ const TabNav = ({ active, setTab, isAdmin }) => (
 );
 
 const StoriesBar = () => {
-    // Stories теперь подтягиваются с API
     const [stories, setStories] = useState([]);
     
     useEffect(() => {
@@ -127,6 +126,83 @@ const CostEditModal = ({ item, onClose, onSave }) => {
     );
 };
 
+// --- NEW: History Modal Module ---
+const HistoryModule = ({ type, isOpen, onClose }) => {
+    const [history, setHistory] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedItem, setSelectedItem] = useState(null);
+
+    useEffect(() => {
+        if (isOpen) {
+            setLoading(true);
+            fetch(`${API_URL}/api/user/history?request_type=${type}`, { 
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } 
+            })
+            .then(r => r.json())
+            .then(data => { setHistory(data); setLoading(false); })
+            .catch(() => setLoading(false));
+        }
+    }, [isOpen, type]);
+
+    if (!isOpen) return null;
+
+    const getTypeIcon = (t) => {
+        switch(t) {
+            case 'ai': return <Brain size={18}/>;
+            case 'seo': return <Wand2 size={18}/>;
+            default: return <Search size={18}/>;
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-lg sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl relative max-h-[85vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-lg">История запросов</h3>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-3 pb-4">
+                    {loading ? (
+                        <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
+                    ) : history.length === 0 ? (
+                        <div className="text-center p-10 text-slate-400 border border-dashed border-slate-200 rounded-2xl">Пусто</div>
+                    ) : (
+                        history.map(h => (
+                            <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-slate-50 p-3 rounded-xl flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform">
+                                <div className="bg-white p-2 rounded-lg text-indigo-600 shadow-sm">{getTypeIcon(h.type)}</div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-bold text-sm truncate">{h.title || `SKU ${h.sku}`}</div>
+                                    <div className="text-[10px] text-slate-400">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+            
+            {selectedItem && (
+                <div className="absolute inset-0 z-[70] bg-white sm:rounded-[32px] rounded-t-[32px] p-6 overflow-y-auto">
+                    <button onClick={() => setSelectedItem(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><ChevronLeft size={20} /></button>
+                    <h3 className="font-bold text-xl mb-4 mt-2">{selectedItem.title}</h3>
+                    <div className="whitespace-pre-wrap text-sm text-slate-700">
+                        {selectedItem.type === 'seo' && selectedItem.data.generated_content ? (
+                            <>
+                                <div className="font-bold mb-1">Заголовок:</div>
+                                <div className="bg-slate-50 p-3 rounded-xl mb-3">{selectedItem.data.generated_content.title}</div>
+                                <div className="font-bold mb-1">Описание:</div>
+                                <div className="bg-slate-50 p-3 rounded-xl">{selectedItem.data.generated_content.description}</div>
+                            </>
+                        ) : (
+                            <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto">{JSON.stringify(selectedItem.data, null, 2)}</pre>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 // --- СТРАНИЦЫ ---
 
 const DashboardPage = ({ onNavigate, user }) => {
@@ -150,10 +226,8 @@ const DashboardPage = ({ onNavigate, user }) => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
-            {/* Stories */}
             <StoriesBar />
 
-            {/* Блок Внутренней Аналитики */}
             <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
                 <div className="relative z-10">
                     <div className="flex justify-between items-start mb-4">
@@ -189,8 +263,6 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     )}
                 </div>
-                <div className="absolute -right-10 -top-10 w-40 h-40 bg-white opacity-10 rounded-full blur-3xl"></div>
-                <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-purple-500 opacity-20 rounded-full blur-3xl"></div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -200,7 +272,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                     </div>
                     <div>
                         <span className="font-bold text-slate-800 block">Unit-экономика</span>
-                        <span className="text-xs text-slate-400">P&L, Маржа, ROI по вашим товарам</span>
+                        <span className="text-xs text-slate-400">P&L, Маржа, ROI</span>
                     </div>
                 </div>
                 <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -227,7 +299,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                     </div>
                     <div>
                         <span className="font-bold text-slate-800 block">SEO Трекер</span>
-                        <span className="text-xs text-slate-400">Позиции в поиске (SERP)</span>
+                        <span className="text-xs text-slate-400">Позиции (SERP)</span>
                     </div>
                 </div>
                  <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -236,7 +308,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                     </div>
                     <div>
                         <span className="font-bold text-slate-800 block">Сканер</span>
-                        <span className="text-xs text-slate-400">Добавить конкурента</span>
+                        <span className="text-xs text-slate-400">Добавить</span>
                     </div>
                 </div>
                  <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
@@ -253,7 +325,6 @@ const DashboardPage = ({ onNavigate, user }) => {
     );
 };
 
-// NEW: Supply Chain Page (Fixed Calculation Logic)
 const SupplyPage = () => {
     const [coeffs, setCoeffs] = useState([]);
     const [volume, setVolume] = useState(1000);
@@ -353,7 +424,6 @@ const SupplyPage = () => {
     )
 }
 
-// NEW: Bidder Page
 const BidderPage = () => {
     const [isSafeMode, setIsSafeMode] = useState(true);
     const [logs, setLogs] = useState([]);
@@ -383,9 +453,6 @@ const BidderPage = () => {
                         <span className="text-xs font-bold text-slate-600">{isSafeMode ? 'Safe Mode' : 'Active'}</span>
                     </div>
                 </div>
-                <p className="text-sm text-slate-500 mb-6">
-                    В безопасном режиме мы только симулируем ставки, показывая, сколько вы могли бы сэкономить.
-                </p>
                 <div className="flex gap-2">
                      <button onClick={() => setIsSafeMode(true)} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${isSafeMode ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-50 text-slate-400'}`}>
                         <ShieldCheck size={16} className="inline mr-2"/> Safe Mode
@@ -394,7 +461,7 @@ const BidderPage = () => {
                         <PlayCircle size={16} className="inline mr-2"/> Run
                      </button>
                 </div>
-                <button onClick={startSimulation} className="w-full mt-4 bg-slate-900 text-white py-3 rounded-xl font-bold">Обновить отчет (Simulate)</button>
+                <button onClick={startSimulation} className="w-full mt-4 bg-slate-900 text-white py-3 rounded-xl font-bold">Обновить отчет</button>
             </div>
 
             {stats && (
@@ -422,7 +489,6 @@ const BidderPage = () => {
     )
 }
 
-// NEW: SEO Tracker Page (SERP)
 const SeoTrackerPage = () => {
     const [positions, setPositions] = useState([]);
     const [sku, setSku] = useState('');
@@ -595,6 +661,7 @@ const FinancePage = ({ onNavigate }) => {
 
 const MonitorPage = () => {
   const [list, setList] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [historyData, setHistoryData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -669,10 +736,12 @@ const MonitorPage = () => {
              <h2 className="text-xl font-bold text-slate-800">Конкуренты</h2>
              <p className="text-xs text-slate-400">Мониторинг цен (Внешний)</p>
         </div>
-        <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all">
-            <RefreshCw size={18}/>
-        </button>
+        <div className="flex gap-2">
+            <button onClick={() => setHistoryOpen(true)} className="p-2 bg-indigo-50 text-indigo-600 rounded-full shadow-sm active:scale-95"><Clock size={18}/></button>
+            <button onClick={fetchList} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
+        </div>
       </div>
+      <HistoryModule type="price" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
       
       {historyData && (
         <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -754,29 +823,23 @@ const SeoGeneratorPage = () => {
     const [keywords, setKeywords] = useState([]);
     const [newKeyword, setNewKeyword] = useState('');
     const [tone, setTone] = useState('Продающий');
+    const [titleLen, setTitleLen] = useState(100);
+    const [descLen, setDescLen] = useState(1000);
     const [result, setResult] = useState(null);
     const [error, setError] = useState('');
+    const [historyOpen, setHistoryOpen] = useState(false);
 
-    const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
+    const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный"];
 
     const fetchKeywords = async () => {
         if (!sku) return;
-        setLoading(true);
-        setError('');
+        setLoading(true); setError('');
         try {
-            const res = await fetch(`${API_URL}/api/seo/parse/${sku}`, {
-                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-            });
+            const res = await fetch(`${API_URL}/api/seo/parse/${sku}`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
             const data = await res.json();
             if (res.status !== 200) throw new Error(data.detail || data.message);
-            
-            setKeywords(data.keywords || []);
-            setStep(2);
-        } catch (e) {
-            setError(e.message);
-        } finally {
-            setLoading(false);
-        }
+            setKeywords(data.keywords || []); setStep(2);
+        } catch (e) { setError(e.message); } finally { setLoading(false); }
     };
 
     const addKeyword = () => {
@@ -799,36 +862,19 @@ const SeoGeneratorPage = () => {
     const generateContent = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/seo/generate`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
-                },
-                body: JSON.stringify({ sku: Number(sku), keywords, tone })
-            });
+            const res = await fetch(`${API_URL}/api/seo/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify({ sku: Number(sku), keywords, tone, title_len: titleLen, desc_len: descLen }) });
             const data = await res.json();
             const taskId = data.task_id;
-
             let attempts = 0;
             while(attempts < 60) {
                 await new Promise(r => setTimeout(r, 3000));
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
                 const sData = await sRes.json();
-                
-                if (sData.status === 'SUCCESS') {
-                    setResult(sData.data.generated_content);
-                    setStep(3);
-                    break;
-                }
-                if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка генерации");
+                if (sData.status === 'SUCCESS') { setResult(sData.data.generated_content); setStep(3); break; }
+                if (sData.status === 'FAILURE') throw new Error(sData.error);
                 attempts++;
             }
-        } catch (e) {
-            setError(e.message);
-        } finally {
-            setLoading(false);
-        }
+        } catch (e) { setError(e.message); } finally { setLoading(false); }
     };
 
     const CopyButton = ({ text }) => (
@@ -839,12 +885,15 @@ const SeoGeneratorPage = () => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-            <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
-                <h1 className="text-2xl font-black flex items-center gap-2">
-                    <Wand2 className="text-yellow-200" /> SEO Генератор
-                </h1>
-                <p className="text-sm opacity-90 mt-2">Создавайте идеальные описания товаров с помощью ИИ за секунды.</p>
+            <div className="flex justify-between items-center">
+                <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200 flex-1 mr-4">
+                    <h1 className="text-2xl font-black flex items-center gap-2"><Wand2 className="text-yellow-200" /> SEO Gen</h1>
+                    <p className="text-sm opacity-90 mt-2">Генератор описаний</p>
+                </div>
+                <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
             </div>
+            
+            <HistoryModule type="seo" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
             {step === 1 && (
                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
@@ -867,9 +916,9 @@ const SeoGeneratorPage = () => {
 
             {step === 2 && (
                 <div className="space-y-4 animate-in fade-in">
-                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
                         <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-lg">Шаг 2. Ключевые слова</h3>
+                            <h3 className="font-bold text-lg">Шаг 2. Настройки</h3>
                             <button onClick={copyKeywords} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-lg active:scale-95">
                                 Копировать всё
                             </button>
@@ -892,6 +941,15 @@ const SeoGeneratorPage = () => {
                                 className="flex-1 bg-slate-50 rounded-xl px-4 py-2 text-sm outline-none"
                             />
                             <button onClick={addKeyword} className="bg-slate-900 text-white px-4 rounded-xl font-bold text-xl">+</button>
+                        </div>
+                        
+                        <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase">Длина заголовка: {titleLen}</label>
+                            <input type="range" min="40" max="150" value={titleLen} onChange={e=>setTitleLen(Number(e.target.value))} className="w-full accent-indigo-600"/>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase">Длина описания: {descLen}</label>
+                            <input type="range" min="500" max="3000" step="100" value={descLen} onChange={e=>setDescLen(Number(e.target.value))} className="w-full accent-indigo-600"/>
                         </div>
 
                         <h3 className="font-bold text-lg mb-3">Настроение текста</h3>
@@ -1043,6 +1101,7 @@ const AIAnalysisPage = () => {
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState('');
     const [result, setResult] = useState(null);
+    const [historyOpen, setHistoryOpen] = useState(false);
 
     const runAnalysis = async () => {
         if(!sku) return;
@@ -1080,29 +1139,20 @@ const AIAnalysisPage = () => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-            <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 p-6 rounded-3xl text-white shadow-xl shadow-fuchsia-200">
-                <h1 className="text-2xl font-black flex items-center gap-2">
-                    <Sparkles className="text-yellow-300" /> AI Стратег
-                </h1>
-                
-                <div className="mt-6 relative">
-                    <input 
-                        type="number" 
-                        value={sku} 
-                        onChange={e => setSku(e.target.value)} 
-                        placeholder="Артикул конкурента" 
-                        className="w-full p-4 pl-12 rounded-xl text-slate-900 font-bold placeholder:font-medium placeholder:text-slate-400 focus:ring-4 ring-white/30 outline-none transition-all"
-                    />
-                    <Search className="absolute left-4 top-4.5 text-slate-400" />
+            <div className="flex justify-between items-center">
+                <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 p-6 rounded-3xl text-white shadow-xl shadow-fuchsia-200 flex-1 mr-4">
+                    <h1 className="text-2xl font-black flex items-center gap-2">
+                        <Sparkles className="text-yellow-300" /> AI Стратег
+                    </h1>
                 </div>
-                
-                <button 
-                    onClick={runAnalysis} 
-                    disabled={loading}
-                    className="w-full bg-white text-violet-700 mt-3 py-4 rounded-xl font-black shadow-lg active:scale-95 transition-all disabled:opacity-70 flex justify-center gap-2"
-                >
-                    {loading ? <><Loader2 className="animate-spin"/> {status}</> : 'Запустить анализ'}
-                </button>
+                <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
+            </div>
+            
+            <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
+
+            <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
+                <input type="number" value={sku} onChange={e => setSku(e.target.value)} placeholder="Артикул" className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-3 outline-none" />
+                <button onClick={runAnalysis} disabled={loading} className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg">{loading ? <Loader2 className="animate-spin mx-auto"/> : 'Анализировать'}</button>
             </div>
 
             {result && (
@@ -1145,159 +1195,6 @@ const AIAnalysisPage = () => {
                     </div>
                 </div>
             )}
-        </div>
-    );
-};
-
-const HistoryPage = () => {
-    const [history, setHistory] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [selectedItem, setSelectedItem] = useState(null);
-
-    const loadHistory = () => {
-        fetch(`${API_URL}/api/user/history`, { headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} })
-            .then(r => r.json())
-            .then(data => { setHistory(data); setLoading(false); })
-            .catch(e => { console.error(e); setLoading(false); });
-    };
-
-    const clearHistory = async () => {
-        if(!confirm("Очистить историю?")) return;
-        await fetch(`${API_URL}/api/user/history`, { 
-            method: 'DELETE', 
-            headers: {'X-TG-Data': window.Telegram?.WebApp?.initData || ""} 
-        });
-        loadHistory();
-    };
-
-    useEffect(() => { loadHistory(); }, []);
-
-    const getTypeIcon = (type) => {
-        switch(type) {
-            case 'ai': return <Brain size={18}/>;
-            case 'seo': return <Wand2 size={18}/>;
-            default: return <Search size={18}/>;
-        }
-    };
-
-    const getTypeColor = (type) => {
-         switch(type) {
-            case 'ai': return 'bg-violet-100 text-violet-600';
-            case 'seo': return 'bg-orange-100 text-orange-600';
-            default: return 'bg-emerald-100 text-emerald-600';
-        }
-    }
-
-    const HistoryDetailsModal = ({ item, onClose }) => {
-        if (!item) return null;
-        const data = item.data || {};
-        
-        return (
-            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-                <div className="bg-white w-full max-w-lg rounded-[32px] p-6 shadow-2xl relative max-h-[80vh] overflow-y-auto">
-                    <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
-                    <div className="mb-4">
-                        <span className="text-[10px] font-black uppercase text-slate-400">{new Date(item.created_at).toLocaleString('ru-RU')}</span>
-                        <h3 className="font-bold text-xl mt-1">{item.title || `Запрос ${item.id}`}</h3>
-                    </div>
-    
-                    {item.type === 'ai' && data.ai_analysis ? (
-                        <div className="space-y-4">
-                            <div className="flex gap-4 items-center bg-slate-50 p-3 rounded-2xl">
-                                 {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
-                                 <div>
-                                     <div className="font-bold text-lg flex items-center gap-1"><Star size={16} className="fill-amber-400 text-amber-400"/> {data.rating}</div>
-                                     <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
-                                 </div>
-                            </div>
-                            <div className="space-y-2">
-                                 <h4 className="font-bold text-red-500 text-sm">Жалобы:</h4>
-                                 <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                     {data.ai_analysis.flaws?.length > 0 ? data.ai_analysis.flaws.map((f,i) => <li key={i}>{f}</li>) : <li>Нет явных жалоб</li>}
-                                 </ul>
-                            </div>
-                            <div className="space-y-2">
-                                 <h4 className="font-bold text-indigo-600 text-sm">Стратегия:</h4>
-                                 <ul className="text-sm list-disc pl-4 space-y-1 text-slate-600">
-                                     {data.ai_analysis.strategy?.length > 0 ? data.ai_analysis.strategy.map((s,i) => <li key={i}>{s}</li>) : <li>Мало данных для анализа</li>}
-                                 </ul>
-                            </div>
-                        </div>
-                    ) : item.type === 'seo' && data.generated_content ? (
-                        <div className="space-y-4">
-                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                <h4 className="font-bold text-xs text-slate-400 uppercase mb-2">Ключевые слова</h4>
-                                <div className="flex flex-wrap gap-1">
-                                    {data.keywords?.map((k,i) => (
-                                        <span key={i} className="bg-white border px-2 py-0.5 rounded text-[10px]">{k}</span>
-                                    ))}
-                                </div>
-                            </div>
-                            <div>
-                                <h4 className="font-bold mb-1 text-sm">Заголовок</h4>
-                                <p className="text-sm bg-slate-50 p-3 rounded-xl">{data.generated_content.title}</p>
-                            </div>
-                            <div>
-                                <h4 className="font-bold mb-1 text-sm">Описание</h4>
-                                <p className="text-sm bg-slate-50 p-3 rounded-xl whitespace-pre-wrap">{data.generated_content.description}</p>
-                            </div>
-                        </div>
-                    ) : item.type === 'price' && data.prices ? (
-                        <div className="space-y-3">
-                             <div className="flex justify-between p-3 bg-purple-50 rounded-xl">
-                                 <span className="text-purple-700 font-bold">Кошелек</span>
-                                 <span className="font-black text-purple-700">{data.prices.wallet_purple} ₽</span>
-                             </div>
-                             <div className="flex justify-between p-3 bg-slate-50 rounded-xl">
-                                 <span className="text-slate-600">Обычная</span>
-                                 <span className="font-bold">{data.prices.standard_black} ₽</span>
-                             </div>
-                             <div className="flex justify-between p-3">
-                                 <span className="text-slate-400">Базовая</span>
-                                 <span className="text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
-                             </div>
-                        </div>
-                    ) : (
-                        <pre className="text-xs bg-slate-50 p-4 rounded-xl overflow-auto max-h-64 whitespace-pre-wrap">
-                            {JSON.stringify(data, null, 2)}
-                        </pre>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
-    return (
-        <div className="p-4 space-y-4 pb-24 animate-in fade-in slide-in-from-bottom-4">
-            <div className="flex justify-between items-center px-2">
-                <h2 className="text-xl font-bold text-slate-800">История запросов</h2>
-                {history.length > 0 && (
-                    <button onClick={clearHistory} className="text-red-500 text-xs font-bold uppercase active:scale-95 transition-transform">Очистить</button>
-                )}
-            </div>
-            
-            <div className="space-y-3">
-                {loading ? <div className="text-center p-10"><Loader2 className="animate-spin text-slate-400 mx-auto"/></div> : 
-                 history.length === 0 ? (
-                    <div className="text-center p-12 bg-white rounded-3xl border border-dashed border-slate-200">
-                        <p className="text-slate-400 font-bold text-sm">История пуста</p>
-                    </div>
-                ) : (
-                    history.map((h) => (
-                        <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-white p-4 rounded-2xl flex items-center gap-4 shadow-sm border border-slate-100 active:scale-[0.98] transition-all cursor-pointer">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${getTypeColor(h.type)}`}>
-                                {getTypeIcon(h.type)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <div className="font-bold text-sm">SKU {h.sku}</div>
-                                <div className="text-xs text-slate-500 truncate">{h.title}</div>
-                                <div className="text-[10px] text-slate-300 mt-1">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
-                            </div>
-                        </div>
-                    ))
-                )}
-            </div>
-            {selectedItem && <HistoryDetailsModal item={selectedItem} onClose={() => setSelectedItem(null)} />}
         </div>
     );
 };
@@ -1501,7 +1398,6 @@ export default function App() {
           case 'bidder': return <BidderPage />; 
           case 'supply': return <SupplyPage />; 
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
-          case 'history': return <HistoryPage />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;
           default: return <DashboardPage onNavigate={setActiveTab} user={user} />;
       }

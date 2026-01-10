@@ -29,13 +29,12 @@ logging.getLogger('WDM').setLevel(logging.ERROR)
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v14.1 (Robust Selenium).
+    Микросервис парсинга Wildberries v14.3.
     - Исправлен поиск корзин (до 50).
     - Оптимизированное ожидание загрузки цен (WebDriverWait).
-    - 3 попытки парсинга с увеличенными таймаутами.
-    - Добавлен сбор SEO данных.
+    - Улучшенный сбор SEO данных (Smart Keyword Extraction).
     - Добавлен парсинг позиций в поиске (SERP).
-    - [FIX] Фоллбэк парсинга остатков через Selenium.
+    - Фоллбэк парсинга остатков через Selenium.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -292,7 +291,6 @@ class SeleniumWBParser:
             ]
             
             feed_data = None
-            # [FIX] Используем ротацию UA из класса
             headers = {"User-Agent": random.choice(self.user_agents)}
             
             for url in endpoints:
@@ -300,7 +298,6 @@ class SeleniumWBParser:
                     r = requests.get(url, headers=headers, timeout=10)
                     if r.status_code == 200:
                         feed_data = r.json()
-                        logger.info(f"Отзывы получены через: {url}")
                         break
                 except: continue
             
@@ -330,112 +327,108 @@ class SeleniumWBParser:
 
     async def get_seo_data(self, sku: int):
         """
-        Извлечение данных для SEO: Название, Категория, Опции (Характеристики).
-        Асинхронный метод для работы внутри FastAPI.
+        Умное извлечение ключевых слов из card.json (v14.3).
+        Фильтрует мусор, собирает данные из params, options и grouped_options.
         """
         logger.info(f"--- SEO PARSE SKU: {sku} ---")
         try:
-            # Используем прямой await, так как метод вызывается в async контексте FastAPI
             card_data = await self._find_card_json(sku)
+            if not card_data: return {"status": "error", "message": "Card not found"}
 
-            if not card_data:
-                return {"status": "error", "message": "Card not found"}
-
-            # Извлечение базовых слов
             keywords = []
             
-            # 1. Название
+            # 1. Название и Категория
             name = card_data.get('imt_name') or card_data.get('subj_name')
             if name: keywords.append(name)
-            
-            # 2. Категория
             subj = card_data.get('subj_name')
-            if subj and subj not in keywords: keywords.append(subj)
+            if subj and subj != name: keywords.append(subj)
             
-            # 3. Характеристики (options)
+            # 2. Опции (Характеристики)
             options = card_data.get('options', [])
-            if not options:
-                # Иногда опции лежат внутри grouped_options
-                grouped = card_data.get('grouped_options', [])
-                if grouped:
-                    options = grouped[0].get('options', []) if len(grouped) > 0 else []
-
-            for opt in options:
-                val = opt.get('value', '')
-                if val:
-                    # Чистим от лишних символов, если нужно, но пока берем как есть
-                    keywords.append(val)
             
-            # Убираем дубликаты сохраняя порядок
-            clean_keywords = list(dict.fromkeys(keywords))
+            # Если нет options, ищем в grouped_options (новая структура WB)
+            if not options:
+                grouped = card_data.get('grouped_options', [])
+                for group in grouped:
+                    if group.get('options'):
+                        options.extend(group.get('options'))
+
+            # Список стоп-слов и значений для фильтрации
+            stop_values = ['нет', 'да', 'отсутствует', 'без рисунка', 'китай', 'россия', '0', '1', '2', '3']
+            
+            for opt in options:
+                val = str(opt.get('value', '')).strip()
+                name_param = str(opt.get('name', '')).lower()
+                
+                if not val: continue
+                
+                # Фильтрация мусорных значений
+                if val.lower() in stop_values: continue
+                if len(val) < 2: continue # Слишком короткие слова
+                if val.isdigit() and "год" not in name_param: continue # Пропускаем просто цифры, если это не год
+                
+                # Приоритет важным полям (состав, назначение и т.д.)
+                if "состав" in name_param or "назначение" in name_param or "рисунок" in name_param or "фактура" in name_param:
+                    # Разбиваем через запятую или слеш
+                    parts = re.split(r'[,/]', val)
+                    for p in parts:
+                        keywords.append(p.strip())
+                else:
+                    keywords.append(val)
+
+            # Чистка дубликатов (case-insensitive) и спецсимволов
+            clean_keywords = []
+            seen = set()
+            for k in keywords:
+                k_clean = re.sub(r'[^\w\s-]', '', k).strip() # Убираем спецсимволы, оставляем буквы, цифры, дефис
+                if k_clean and k_clean.lower() not in seen:
+                    seen.add(k_clean.lower())
+                    clean_keywords.append(k_clean)
 
             return {
                 "sku": sku,
                 "name": name,
                 "image": card_data.get('image_url'),
-                "keywords": clean_keywords,
+                "keywords": clean_keywords[:40], # Ограничиваем топ-40 для релевантности
                 "status": "success"
             }
-
         except Exception as e:
             logger.error(f"SEO Parse Error: {e}")
             return {"status": "error", "message": str(e)}
 
     def get_search_position(self, query: str, target_sku: int):
-        """
-        Парсинг выдачи WB для поиска позиции товара.
-        Возвращает позицию (1-100) или 0, если не найдено на первой странице.
-        """
         logger.info(f"--- SERP CHECK: {query} for {target_sku} ---")
         driver = None
         try:
             driver = self._init_driver()
-            # Кодируем запрос в URL
             encoded_query = requests.utils.quote(query)
             url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded_query}"
             driver.get(url)
-            
-            # Ждем прогрузки карточек
             try:
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card"))
-                )
-            except:
-                logger.warning("Timeout waiting for SERP cards")
-                return 0
+                WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card")))
+            except: return 0
 
-            # Скроллим немного, чтобы подгрузились (lazy load)
             for _ in range(3):
                 driver.execute_script("window.scrollBy(0, 800);")
                 time.sleep(1)
 
-            # Собираем ID всех карточек на странице
-            # WB использует разные классы, пробуем универсальный поиск по атрибутам
             cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
-            if not cards:
-                cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
+            if not cards: cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
             
             position = 0
             for index, card in enumerate(cards):
                 try:
-                    # id карточки обычно в id элемента или data-nm-id
                     card_id = card.get_attribute("id") 
                     if not card_id:
-                        # Fallback на data-popup-nm-id и подобные
                         data_nm = card.get_attribute("data-nm-id")
                         if data_nm: card_id = data_nm
-                    
-                    # id обычно вида 'c123456', берем цифры
                     if card_id:
                         sku_str = re.sub(r'[^\d]', '', card_id)
                         if sku_str and int(sku_str) == int(target_sku):
                             position = index + 1
                             break
                 except: continue
-                
-            logger.info(f"Found SKU {target_sku} at pos {position}")
             return position
-
         except Exception as e:
             logger.error(f"SERP Error: {e}")
             return 0
