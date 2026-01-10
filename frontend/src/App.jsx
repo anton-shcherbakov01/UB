@@ -126,7 +126,23 @@ const CostEditModal = ({ item, onClose, onSave }) => {
     );
 };
 
-// --- NEW: History Modal Module ---
+// --- History Components ---
+
+const CopyableBlock = ({ label, text }) => (
+  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-3 group relative">
+    <div className="flex justify-between items-center mb-2">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
+        <button 
+            onClick={() => { navigator.clipboard.writeText(text); alert('Скопировано'); }} 
+            className="p-2 text-slate-300 hover:text-indigo-600 transition-colors bg-white rounded-lg shadow-sm"
+        >
+            <Copy size={14}/>
+        </button>
+    </div>
+    <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{text}</div>
+  </div>
+);
+
 const HistoryModule = ({ type, isOpen, onClose }) => {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -154,51 +170,96 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
         }
     };
 
+    const renderDetails = (item) => {
+        const data = item.data;
+        
+        // --- SEO History ---
+        if (item.type === 'seo' && data.generated_content) {
+            return (
+                <div className="space-y-2 animate-in fade-in">
+                    <div className="flex flex-wrap gap-1 mb-4">
+                        {data.keywords?.map((k, i) => (
+                            <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg text-[10px] font-bold">{k}</span>
+                        ))}
+                    </div>
+                    <CopyableBlock label="Заголовок" text={data.generated_content.title} />
+                    <CopyableBlock label="Описание" text={data.generated_content.description} />
+                </div>
+            )
+        }
+
+        // --- AI Analysis History ---
+        if (item.type === 'ai' && data.ai_analysis) {
+            return (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="flex gap-4 items-center bg-white border border-slate-100 p-3 rounded-2xl">
+                         {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
+                         <div>
+                             <div className="font-bold text-lg flex items-center gap-1 text-amber-500"><Star size={16} fill="currentColor"/> {data.rating}</div>
+                             <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
+                         </div>
+                    </div>
+                    <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+                         <h4 className="font-bold text-red-600 text-sm mb-2 flex items-center gap-2"><ThumbsDown size={14}/> Жалобы</h4>
+                         <ul className="text-sm space-y-2 text-slate-700">
+                             {data.ai_analysis.flaws?.map((f,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">⛔ {f}</li>)}
+                         </ul>
+                    </div>
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                         <h4 className="font-bold text-indigo-600 text-sm mb-2 flex items-center gap-2"><Crown size={14}/> Стратегия</h4>
+                         <ul className="text-sm space-y-2 text-slate-700">
+                             {data.ai_analysis.strategy?.map((s,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">{s}</li>)}
+                         </ul>
+                    </div>
+                </div>
+            )
+        }
+
+        // --- Fallback (JSON) ---
+        return (
+            <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto max-h-[60vh] text-slate-600 font-mono">
+                {JSON.stringify(data, null, 2)}
+            </pre>
+        );
+    };
+
     return (
         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-lg sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl relative max-h-[85vh] flex flex-col">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg">История запросов</h3>
-                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500"><X size={20} /></button>
+                    <h3 className="font-bold text-lg">История</h3>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20} /></button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-3 pb-4">
-                    {loading ? (
-                        <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
-                    ) : history.length === 0 ? (
-                        <div className="text-center p-10 text-slate-400 border border-dashed border-slate-200 rounded-2xl">Пусто</div>
-                    ) : (
-                        history.map(h => (
-                            <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-slate-50 p-3 rounded-xl flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform">
-                                <div className="bg-white p-2 rounded-lg text-indigo-600 shadow-sm">{getTypeIcon(h.type)}</div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="font-bold text-sm truncate">{h.title || `SKU ${h.sku}`}</div>
-                                    <div className="text-[10px] text-slate-400">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-            
-            {selectedItem && (
-                <div className="absolute inset-0 z-[70] bg-white sm:rounded-[32px] rounded-t-[32px] p-6 overflow-y-auto">
-                    <button onClick={() => setSelectedItem(null)} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full text-slate-500"><ChevronLeft size={20} /></button>
-                    <h3 className="font-bold text-xl mb-4 mt-2">{selectedItem.title}</h3>
-                    <div className="whitespace-pre-wrap text-sm text-slate-700">
-                        {selectedItem.type === 'seo' && selectedItem.data.generated_content ? (
-                            <>
-                                <div className="font-bold mb-1">Заголовок:</div>
-                                <div className="bg-slate-50 p-3 rounded-xl mb-3">{selectedItem.data.generated_content.title}</div>
-                                <div className="font-bold mb-1">Описание:</div>
-                                <div className="bg-slate-50 p-3 rounded-xl">{selectedItem.data.generated_content.description}</div>
-                            </>
+                {!selectedItem ? (
+                    <div className="flex-1 overflow-y-auto space-y-3 pb-4">
+                        {loading ? (
+                            <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
+                        ) : history.length === 0 ? (
+                            <div className="text-center p-10 text-slate-400 border border-dashed border-slate-200 rounded-2xl">Пусто</div>
                         ) : (
-                            <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto">{JSON.stringify(selectedItem.data, null, 2)}</pre>
+                            history.map(h => (
+                                <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-slate-50 p-3 rounded-xl flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform hover:bg-slate-100">
+                                    <div className="bg-white p-2 rounded-lg text-indigo-600 shadow-sm">{getTypeIcon(h.type)}</div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="font-bold text-sm truncate">{h.title || `SKU ${h.sku}`}</div>
+                                        <div className="text-[10px] text-slate-400">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
+                                    </div>
+                                    <ChevronLeft className="rotate-180 text-slate-300" size={16}/>
+                                </div>
+                            ))
                         )}
                     </div>
-                </div>
-            )}
+                ) : (
+                    <div className="flex-1 overflow-y-auto pb-4">
+                        <button onClick={() => setSelectedItem(null)} className="flex items-center gap-1 text-xs font-bold text-slate-400 mb-4 hover:text-indigo-600 transition-colors">
+                            <ChevronLeft size={14}/> Назад к списку
+                        </button>
+                        <h3 className="font-bold text-xl mb-4 leading-tight">{selectedItem.title}</h3>
+                        {renderDetails(selectedItem)}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
@@ -829,7 +890,7 @@ const SeoGeneratorPage = () => {
     const [error, setError] = useState('');
     const [historyOpen, setHistoryOpen] = useState(false);
 
-    const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный"];
+    const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
 
     const fetchKeywords = async () => {
         if (!sku) return;
@@ -1377,15 +1438,7 @@ const AdminPage = ({ onBack }) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [user, setUser] = useState(null);
-
-  useEffect(() => {
-      const tgData = window.Telegram?.WebApp?.initData || "";
-      fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} })
-          .then(r => r.json())
-          .then(setUser)
-          .catch(console.error);
-  }, [activeTab]); 
-
+  useEffect(() => { const tgData = window.Telegram?.WebApp?.initData || ""; fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r => r.json()).then(setUser).catch(console.error); }, [activeTab]); 
   const renderContent = () => {
       switch(activeTab) {
           case 'home': return <DashboardPage onNavigate={setActiveTab} user={user} />;
@@ -1402,11 +1455,5 @@ export default function App() {
           default: return <DashboardPage onNavigate={setActiveTab} user={user} />;
       }
   };
-
-  return (
-    <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">
-      {renderContent()}
-      <TabNav active={activeTab} setTab={setActiveTab} isAdmin={user?.is_admin} />
-    </div>
-  );
+  return (<div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">{renderContent()}<TabNav active={activeTab} setTab={setActiveTab} isAdmin={user?.is_admin} /></div>);
 }
