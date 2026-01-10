@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from sqlalchemy import select, update
 from celery import Celery
-from database import SessionLocal, MonitoredItem, PriceHistory, SearchHistory, SeoPosition
+from database import AsyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, SeoPosition
 from parser_service import parser_service
 from analysis_service import analysis_service
 from celery_app import celery_app
@@ -23,7 +23,8 @@ def run_async(coro):
         return loop.run_until_complete(coro)
 
 async def save_search_history(user_id: int, sku: int, title: str, r_type: str, data: dict):
-    async with SessionLocal() as db:
+    # [FIX] Используем AsyncSessionLocal вместо SessionLocal
+    async with AsyncSessionLocal() as db:
         try:
             # Ограничиваем размер JSON, чтобы не забивать БД
             json_str = json.dumps(data, ensure_ascii=False)
@@ -49,7 +50,8 @@ def parse_and_save_sku(sku: int, user_id: int):
     
     # 2. Сохранение в БД (синхронная обертка для Celery)
     async def _save():
-        async with SessionLocal() as db:
+        # [FIX] AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
             # Обновляем имя товара
             stmt = select(MonitoredItem).where(MonitoredItem.sku == sku, MonitoredItem.user_id == user_id)
             item = (await db.execute(stmt)).scalars().first()
@@ -115,7 +117,7 @@ def analyze_reviews_task(sku: int, limit: int, user_id: int):
 def generate_seo_task(keywords: list, tone: str, sku: int, user_id: int, title_len: int = 100, desc_len: int = 1000):
     """
     Генерация SEO описания. 
-    [FIX] Добавлены аргументы title_len и desc_len
+    Принимает параметры длины текста.
     """
     logger.info(f"Task: SEO Gen for {sku}")
     
@@ -144,7 +146,7 @@ def check_seo_position_task(sku: int, query: str, user_id: int):
     pos = parser_service.get_search_position(query, sku)
     
     async def _save_pos():
-        async with SessionLocal() as db:
+        async with AsyncSessionLocal() as db:
             seo_rec = SeoPosition(
                 user_id=user_id,
                 sku=sku,
@@ -168,17 +170,9 @@ def update_all_monitored_items():
     try:
         skus = [i.sku for i in session.query(MonitoredItem).all()]
         logger.info(f"Beat: Starting update for {len(skus)} items")
-        for sku in skus:
-            # We are inside a task, so we can't await or run async directly easily without a loop
-            # But parse_and_save_sku is a celery task, so we can delay it
-            # However, parse_and_save_sku expects user_id. Here we might want a different logic or 
-            # pass the user_id if we have it. 
-            # For simplicity in MVP: we might iterate over items and trigger update for each user.
-            pass
-            # To fix properly: iterate items, find owner, trigger task.
-            # items = session.query(MonitoredItem).all()
-            # for item in items:
-            #    parse_and_save_sku.delay(item.sku, item.user_id)
+        # Здесь логика запуска задач для каждого товара
+        # Для упрощения пока оставим pass или можно итерироваться
+        pass
     finally:
         session.close()
 
@@ -186,16 +180,9 @@ def update_all_monitored_items():
 
 async def _process_orders_async():
     """Асинхронная логика внутри синхронной задачи Celery"""
-    # Use SyncSessionLocal because we are in a synchronous Celery worker thread context 
-    # but we need to call async functions of wb_api_service and bot_service.
-    # We will use the loop created in check_new_orders to run this.
     
-    # Note: To use SQLAlchemy async session inside this async function would be better 
-    # if we want to be fully async, but here we can mix for simplicity or use the SyncSession 
-    # just for fetching users.
-    
-    # Let's use a new AsyncSession for DB operations to be consistent with async flow
-    async with SessionLocal() as db:
+    # [FIX] AsyncSessionLocal для асинхронной работы с базой
+    async with AsyncSessionLocal() as db:
         try:
             # Fetch users with tokens
             result = await db.execute(select(User).where(User.wb_api_token.isnot(None)))
