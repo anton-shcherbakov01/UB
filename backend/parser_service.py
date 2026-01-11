@@ -54,7 +54,9 @@ class SeleniumWBParser:
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         ]
 
     # --- ЛОГИКА ПОИСКА КОРЗИН (Legacy/Core) ---
@@ -382,104 +384,66 @@ class SeleniumWBParser:
     # --- ADVANCED GEO SEARCH (NEW API IMPLEMENTATION) ---
 
     async def get_search_position_v2(self, query: str, target_sku: int, dest: str = GEO_ZONES["moscow"]):
-        """
-        Асинхронный поиск позиции через API WB (catalog/search).
-        
-        Args:
-            query (str): Поисковый запрос.
-            target_sku (int): Артикул товара.
-            dest (str): ID региона (координаты/склад).
-            
-        Returns:
-            dict: { "organic_pos": int, "ad_pos": int, "is_boosted": bool }
-        """
         target_sku = int(target_sku)
-        # URL может меняться, используем актуальный для v7/v5
-        # Используем exactmatch/ru/common/v7/search или catalog.wb.ru/search
         url = "https://search.wb.ru/exactmatch/ru/common/v7/search"
+        params = {"ab_testing": "false", "appType": "1", "curr": "rub", "dest": dest, "query": query, "resultset": "catalog", "sort": "popular", "spp": "30", "suppressSpellcheck": "false"}
         
-        params = {
-            "ab_testing": "false",
-            "appType": "1",
-            "curr": "rub",
-            "dest": dest,
-            "query": query,
-            "resultset": "catalog",
-            "sort": "popular",
-            "spp": "30",
-            "suppressSpellcheck": "false"
-        }
-        
-        headers = {
-            "User-Agent": random.choice(self.user_agents),
-            "Accept": "*/*"
-        }
+        # Retry loop for 429/Network errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            # Rotate User-Agent per attempt
+            headers = {"User-Agent": random.choice(self.user_agents), "Accept": "*/*"}
+            
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, headers=headers, timeout=10) as resp:
+                        if resp.status == 429:
+                            wait_time = (attempt + 1) * 2 + random.uniform(0, 1)
+                            logger.warning(f"Search 429 for '{query}' (Att: {attempt+1}). Sleeping {wait_time:.2f}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        
+                        if resp.status != 200:
+                            logger.error(f"Search API Status {resp.status} for {query}")
+                            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                        
+                        data = await resp.json()
+                        products = data.get("data", {}).get("products") or data.get("products", [])
+                        
+                        if not products:
+                            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, headers=headers, timeout=10) as resp:
-                    if resp.status != 200:
-                        logger.error(f"Search API Error {resp.status} for {query}")
-                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
-                    
-                    data = await resp.json()
-                    
-                    # Извлекаем продукты
-                    products = data.get("data", {}).get("products", [])
-                    if not products:
-                         # Fallback структура
-                         products = data.get("products", [])
-                    
-                    if not products:
-                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
-
-                    # Логика подсчета позиций
-                    organic_counter = 0
-                    
-                    for index, item in enumerate(products):
-                        item_id = int(item.get("id", 0))
-                        
-                        # --- AD DETECTION STRATEGY ---
-                        # 1. Наличие поля 'log' (стандартный маркер рекламы в поиске WB)
-                        # 2. Наличие 'adId' или 'promoText'
-                        # 3. Иногда 'time1'/'time2' паттерны, но 'log' надежнее
-                        is_ad = bool(item.get("log") or item.get("adId") or item.get("cpm"))
-                        
-                        if not is_ad:
-                            organic_counter += 1
-                        
-                        if item_id == target_sku:
-                            # Товар найден!
-                            return {
-                                "organic_pos": organic_counter if not is_ad else 0,
-                                "ad_pos": (index + 1) if is_ad else 0,
-                                "is_boosted": is_ad,
-                                "total_pos": index + 1
-                            }
+                        organic_counter = 0
+                        for index, item in enumerate(products):
+                            item_id = int(item.get("id", 0))
+                            is_ad = bool(item.get("log") or item.get("adId") or item.get("cpm"))
                             
-            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                            if not is_ad:
+                                organic_counter += 1
+                            
+                            if item_id == target_sku:
+                                return {
+                                    "organic_pos": organic_counter if not is_ad else 0,
+                                    "ad_pos": (index + 1) if is_ad else 0,
+                                    "is_boosted": is_ad,
+                                    "total_pos": index + 1
+                                }
+                        # Product not found in top N
+                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
-        except Exception as e:
-            logger.error(f"Geo Search Error ({dest}): {e}")
-            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+            except Exception as e:
+                logger.error(f"Geo Search Connection Error ({dest}): {e}")
+                await asyncio.sleep(1)
+        
+        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
-    # Wrapper для совместимости со старым синхронным вызовом (для задач, которые не обновлены)
     def get_search_position(self, query: str, target_sku: int):
-        """Legacy synchronous wrapper calling async v2 implementation"""
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            # Default to Moscow for legacy calls
             result = loop.run_until_complete(self.get_search_position_v2(query, target_sku))
             loop.close()
-            
-            # Legacy expected return: just int position (prefer organic, fallback to total)
-            if result["organic_pos"] > 0:
-                return result["organic_pos"]
-            elif result["ad_pos"] > 0:
-                # Если товар найден только как реклама, возвращаем позицию рекламы (как раньше)
-                return result["ad_pos"]
-            return 0
+            return result["organic_pos"] if result["organic_pos"] > 0 else (result["ad_pos"] if result["ad_pos"] > 0 else 0)
         except Exception as e:
             logger.error(f"Legacy Search Error: {e}")
             return 0
