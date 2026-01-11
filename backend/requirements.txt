@@ -12,3 +12,5 @@ aiohttp
 requests
 fpdf2
 greenlet
+clickhouse-connect
+pandas

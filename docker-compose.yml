@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # --- База данных ---
+  # --- База данных (Postgres) ---
   db:
     image: postgres:15-alpine
     container_name: wb_postgres
@@ -19,6 +19,22 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # --- ClickHouse (OLAP) ---
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: wb_clickhouse
+    restart: always
+    ports:
+      - "8123:8123" # HTTP порт (для Python клиента clickhouse-connect и DBeaver)
+      - "9000:9000" # Нативный порт (для clickhouse-client и DBeaver)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
 
   # --- Redis ---
   redis:
@@ -39,19 +55,23 @@ services:
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
     ports: ["8000:8000"]
-    # ДОБАВЛЕНО: Прямое чтение файла .env
     env_file:
       - .env
     environment:
-      # Оставляем только те переменные, которых нет в .env или которые жестко заданы
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - HEADLESS=True
-      # Остальные переменные (AI_API_KEY, BOT_TOKEN, PROXY_*) подтянутся из env_file
+      # Настройки ClickHouse
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
     depends_on: 
       db:
         condition: service_healthy
       redis:
+        condition: service_started
+      clickhouse:
         condition: service_started
 
   # --- Celery Worker ---
@@ -64,7 +84,6 @@ services:
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
-    # ДОБАВЛЕНО: Прямое чтение файла .env
     env_file:
       - .env
     environment:
@@ -72,10 +91,15 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - HEADLESS=True
+      # Настройки ClickHouse
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
     depends_on: 
       db:
         condition: service_healthy
       redis:
+        condition: service_started
+      clickhouse:
         condition: service_started
 
   # --- Celery Beat (Планировщик) ---
@@ -96,3 +120,5 @@ services:
 
 volumes:
   postgres_data:
+  clickhouse_data:
+  clickhouse_logs:
