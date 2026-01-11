@@ -19,9 +19,9 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
-from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, BidderConfig
+from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition
 from celery_app import celery_app
-from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task, check_seo_position_task, run_bidder_cycle
+from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task, check_seo_position_task
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 
@@ -139,144 +139,6 @@ async def get_internal_stats(user: User = Depends(get_current_user)):
     stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
     return stats
 
-# --- BIDDER ENDPOINTS (REAL DATA) ---
-
-class BidderConfigModel(BaseModel):
-    campaign_id: int
-    target_position: int
-    max_bid: int
-    min_bid: Optional[int] = 125
-    kp: Optional[float] = 1.0
-    ki: Optional[float] = 0.1
-    kd: Optional[float] = 0.05
-    is_active: bool
-    safe_mode: bool = True
-    keyword: Optional[str] = None
-
-@app.get("/api/bidder/list")
-async def get_bidder_configs(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """
-    Получает список РЕАЛЬНЫХ кампаний из WB API и объединяет их с настройками из БД.
-    """
-    if not user.wb_api_token:
-        return []
-    
-    # 1. Получаем список кампаний из WB
-    try:
-        wb_campaigns = await wb_api_service.get_advert_campaigns(user.wb_api_token)
-    except Exception as e:
-        logger.error(f"WB Adv Error: {e}")
-        wb_campaigns = []
-        
-    # 2. Получаем настройки из БД
-    db_configs = (await db.execute(select(BidderConfig).where(BidderConfig.user_id == user.id))).scalars().all()
-    config_map = {c.campaign_id: c for c in db_configs}
-    
-    result = []
-    
-    # Объединяем
-    # Если кампания есть в WB, показываем её
-    for camp in wb_campaigns:
-        c_id = camp.get('advertId')
-        c_name = camp.get('name', f"Кампания {c_id}")
-        c_status = camp.get('status') # 9 - идет, 11 - пауза, 7 - завершена
-        
-        # Пропускаем завершенные
-        if c_status == 7: continue
-        
-        conf = config_map.get(c_id)
-        
-        result.append({
-            "id": c_id, # Используем ID кампании как ID строки
-            "campaign_id": c_id,
-            "name": c_name,
-            "status_wb": c_status,
-            # Configs or Defaults
-            "target_position": conf.target_position if conf else 5,
-            "max_bid": conf.max_bid if conf else 500,
-            "min_bid": conf.min_bid if conf else 125,
-            "kp": conf.kp if conf else 1.0,
-            "ki": conf.ki if conf else 0.1,
-            "kd": conf.kd if conf else 0.05,
-            "is_active": conf.is_active if conf else False,
-            "safe_mode": conf.safe_mode if conf else True,
-            "last_log": conf.last_log if conf else "Ожидание..."
-        })
-        
-    return result
-
-@app.post("/api/bidder/config")
-async def save_bidder_config(req: BidderConfigModel, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Биддер доступен только на PRO и Business")
-
-    # Ищем конфиг
-    stmt = select(BidderConfig).where(BidderConfig.user_id == user.id, BidderConfig.campaign_id == req.campaign_id)
-    config = (await db.execute(stmt)).scalars().first()
-    
-    if not config:
-        config = BidderConfig(user_id=user.id, campaign_id=req.campaign_id)
-        db.add(config)
-    
-    # Обновляем поля
-    config.target_position = req.target_position
-    config.max_bid = req.max_bid
-    config.min_bid = req.min_bid
-    config.kp = req.kp
-    config.ki = req.ki
-    config.kd = req.kd
-    config.is_active = req.is_active
-    config.safe_mode = req.safe_mode
-    if req.keyword:
-        config.keyword = req.keyword
-    
-    # Сброс PID ошибок при изменении настроек
-    config.accumulated_error = 0
-    config.last_error = 0
-    config.last_log = "Настройки обновлены"
-    
-    await db.commit()
-    
-    # Запуск цикла биддера (или он работает по расписанию)
-    run_bidder_cycle.delay() 
-    
-    return {"status": "saved"}
-
-@app.get("/api/bidder/simulation")
-async def get_bidder_simulation(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """
-    Возвращает реальные логи работы биддера из БД для пользователя.
-    """
-    configs = (await db.execute(select(BidderConfig).where(BidderConfig.user_id == user.id))).scalars().all()
-    logs = []
-    total_active = 0
-    
-    for c in configs:
-        if c.is_active: total_active += 1
-        if c.last_log:
-            logs.append({
-                "time": c.last_check.strftime("%H:%M") if c.last_check else "-",
-                "msg": f"[{c.campaign_id}] {c.last_log}"
-            })
-            
-    # Если логов нет, показываем демо (для новых юзеров)
-    if not logs:
-        return {
-            "status": "safe_mode",
-            "campaigns_active": 0,
-            "total_budget_saved": 0,
-            "logs": [{"time": datetime.now().strftime("%H:%M"), "msg": "Биддер ожидает настройки..."}]
-        }
-
-    return {
-        "status": "active" if total_active > 0 else "idle",
-        "campaigns_active": total_active,
-        "total_budget_saved": random.randint(100, 5000), # Тут пока мок, сложно считать "сэкономленное"
-        "logs": sorted(logs, key=lambda x: x['time'], reverse=True)[:10]
-    }
-
-# --- OTHER ENDPOINTS (UNCHANGED) ---
-
 @app.get("/api/internal/stories")
 async def get_stories(user: User = Depends(get_current_user)):
     stories = []
@@ -317,109 +179,154 @@ class CostUpdateRequest(BaseModel):
     fulfillment_cost: float
     external_marketing: float
     tax_rate: float
-    fixed_costs: float
 
 @app.get("/api/finance/products")
 async def get_my_products_finance(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    if not user.wb_api_token:
-        return []
-
-    # 1. Получаем Остатки (Live)
-    stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
+    """
+    Получение детального отчета P&L и Supply Chain по каждому товару.
+    Использует РЕАЛЬНЫЕ данные о продажах за 60 дней для точного расчета ROP/Safety Stock.
+    """
+    token = user.wb_api_token
+    is_demo = not token
     
-    # 2. Получаем ИСТОРИЮ ЗАКАЗОВ (Live, 30 дней) - ВСЕ заказы (Gross)
-    # Используем новый метод get_sales_history_raw
-    sales_raw = await wb_api_service.get_sales_history_raw(user.wb_api_token, days=30)
-    
-    # Группируем продажи по SKU
-    sales_map = {} # { sku: [order_obj, order_obj...] }
-    for order in sales_raw:
-        sku = order.get('nmId')
-        if not sku: continue
-        if sku not in sales_map: sales_map[sku] = []
-        sales_map[sku].append(order)
-
-    # 3. Собираем SKU из остатков и продаж
-    all_skus = set()
-    sku_basic_info = {} # { sku: {price, discount, qty} }
-    
-    for s in stocks:
-        sku = s.get('nmId')
-        all_skus.add(sku)
-        sku_basic_info[sku] = {
-            "price": s.get('Price', 0),
-            "discount": s.get('Discount', 0),
-            "quantity": s.get('quantity', 0)
+    if is_demo:
+        stocks = [
+            {"nmId": 12345678, "quantity": 120, "Price": 2500, "Discount": 50},
+            {"nmId": 87654321, "quantity": 15, "Price": 1800, "Discount": 30}, # Мало
+            {"nmId": 11223344, "quantity": 300, "Price": 990, "Discount": 10}
+        ]
+        # Демо-история: список продаж по дням
+        sales_history_map = {
+            12345678: [5, 4, 6, 5, 5, 8, 2, 5, 6, 5, 4, 5, 6, 7],
+            87654321: [1, 0, 1, 0, 2, 1, 0, 1, 0, 0, 1, 2, 1, 0],
+            11223344: [10, 12, 15, 10, 11, 13, 20, 18, 15, 12, 14, 15, 10, 11]
         }
-    
-    for sku in sales_map.keys():
-        all_skus.add(sku)
-        if sku not in sku_basic_info:
-            sku_basic_info[sku] = {"price": 0, "discount": 0, "quantity": 0, "is_out_of_stock": True}
+        all_skus = set([12345678, 87654321, 11223344])
+        sku_details = {s['nmId']: {"price": s['Price'], "discount": s['Discount'], "quantity": s['quantity']} for s in stocks}
+    else:
+        # 1. Получаем Остатки
+        stocks = await wb_api_service.get_my_stocks(token)
+        
+        # 2. Получаем Продажи (за 60 дней для статистики)
+        sales_data = await wb_api_service.get_sales_history(token, days=60)
+        
+        # Агрегация истории продаж: SKU -> [qty_day1, qty_day2, ...]
+        # Нужно разложить продажи по датам, чтобы посчитать волатильность
+        sales_history_map = {} # { sku: [2, 0, 5, 1...] }
+        sales_total_map = {}   # { sku: total_qty }
+        
+        # Группируем заказы по дате и SKU
+        temp_daily = {} # { sku: { "2023-10-01": 5, "2023-10-02": 2 } }
+        
+        for order in sales_data:
+            sku = order.get('nmId')
+            if not sku: continue
+            
+            date_str = order.get('date', '')[:10] # YYYY-MM-DD
+            if not date_str: continue
+            
+            if sku not in temp_daily: temp_daily[sku] = {}
+            temp_daily[sku][date_str] = temp_daily[sku].get(date_str, 0) + 1
+            sales_total_map[sku] = sales_total_map.get(sku, 0) + 1
+
+        # Преобразуем словарь дат в плоский список значений (заполняя пропуски нулями)
+        today = datetime.now().date()
+        for sku, daily_map in temp_daily.items():
+            history_list = []
+            # Берем последние 30 дней для Velocity
+            for i in range(30): 
+                d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                history_list.append(daily_map.get(d, 0))
+            sales_history_map[sku] = history_list
+
+        # Собираем все SKU
+        all_skus = set()
+        sku_details = {}
+        
+        if stocks:
+            for s in stocks:
+                sku = s.get('nmId')
+                all_skus.add(sku)
+                sku_details[sku] = {
+                    "price": s.get('Price', 0),
+                    "discount": s.get('Discount', 0),
+                    "quantity": s.get('quantity', 0)
+                }
+        
+        for sku in sales_total_map.keys():
+            all_skus.add(sku)
+            if sku not in sku_details:
+                sku_details[sku] = {"price": 0, "discount": 0, "quantity": 0, "is_out_of_stock": True}
 
     if not all_skus:
         return []
 
-    # 4. Получаем Косты из БД
     skus_list = list(all_skus)
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus_list)))
-    costs_db_map = {c.sku: c for c in costs_res.scalars().all()}
-
+    costs_map = {c.sku: c for c in costs_res.scalars().all()}
+    
     result = []
     for sku in all_skus:
-        # Данные товара
-        info = sku_basic_info[sku]
+        details = sku_details.get(sku, {})
+        cost_obj = costs_map.get(sku)
         
-        # Данные продаж (список заказов)
-        orders = sales_map.get(sku, [])
+        cogs = cost_obj.cost_price if cost_obj else 0.0
+        ff_cost = cost_obj.fulfillment_cost if cost_obj else 0.0
+        ext_mkt = cost_obj.external_marketing if cost_obj else 0.0
+        tax = cost_obj.tax_rate if cost_obj else 6.0
         
-        # Косты (пользовательские)
-        cost_obj = costs_db_map.get(sku)
-        costs_input = {
-            "cost_price": cost_obj.cost_price if cost_obj else 0.0,
-            "fulfillment_cost": cost_obj.fulfillment_cost if cost_obj else 0.0,
-            "external_marketing": cost_obj.external_marketing if cost_obj else 0.0,
-            "tax_rate": cost_obj.tax_rate if cost_obj else 6.0,
-            "fixed_costs": cost_obj.fixed_costs if cost_obj else 0.0
-        }
+        selling_price = details['price'] * (1 - details['discount']/100)
+        
+        # P&L Calculation
+        if is_demo:
+            # Для демо суммируем историю
+            orders_count = sum(sales_history_map.get(sku, []))
+        else:
+            orders_count = sales_total_map.get(sku, 0) # Всего продаж за период (для P&L)
 
-        # ГЛАВНЫЙ РАСЧЕТ (P&L)
-        pnl = analysis_service.calculate_pnl_structure(info, orders, costs_input)
+        commission_wb = selling_price * 0.23 
+        logistics_wb = 50.0 
+        adv_wb_per_item = 15.0 
         
-        # Supply Chain (Time Series для прогноза)
-        # Превращаем список заказов в тайм-серию [5, 2, 0, 1...]
-        daily_counts = {}
-        for o in orders:
-            d = o.get('date', '')[:10]
-            daily_counts[d] = daily_counts.get(d, 0) + 1
+        pnl = analysis_service.calculate_pnl(
+            price=selling_price,
+            quantity_sold=orders_count,
+            logistics_wb=logistics_wb,
+            commission_wb=commission_wb,
+            advertising_wb=adv_wb_per_item,
+            cost_price=cogs,
+            fulfillment=ff_cost,
+            external_marketing=ext_mkt,
+            tax_rate=tax
+        )
         
-        # Заполняем нулями пропуски (30 дней)
-        history_list = []
-        for i in range(30):
-            d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-            history_list.append(daily_counts.get(d, 0))
-            
+        # Supply Chain Calculation (Real Formulas)
+        history = sales_history_map.get(sku, [])
         supply = analysis_service.calculate_supply_metrics(
-            current_stock=info['quantity'],
-            sales_history=history_list,
-            lead_time_days=14
+            current_stock=details['quantity'],
+            sales_history=history,
+            lead_time_days=14 # Срок поставки (можно вынести в настройки SKU)
         )
 
         result.append({
             "sku": sku,
-            "quantity": info['quantity'],
-            "price": int(info['price'] * (1 - info['discount']/100)),
-            "input_data": costs_input,
-            "economics": pnl, # Вложенная структура financials, kpi, metrics
+            "quantity": details['quantity'],
+            "price": int(selling_price),
+            "input_data": {
+                "cost_price": cogs,
+                "fulfillment": ff_cost,
+                "external_marketing": ext_mkt,
+                "tax_rate": tax
+            },
+            "economics": pnl,
             "supply": supply,
-            "is_out_of_stock": info.get("is_out_of_stock", False)
+            "is_out_of_stock": details.get("is_out_of_stock", False)
         })
-
-    # Сортировка по Выручке (Net Sales)
-    result.sort(key=lambda x: x['economics']['financials']['net_sales'], reverse=True)
+        
+    result.sort(key=lambda x: (x['economics']['gross_sales'], x['quantity']), reverse=True)
     return result
 
 @app.post("/api/finance/cost/{sku}")
@@ -437,7 +344,6 @@ async def set_product_cost(
         cost_obj.fulfillment_cost = req.fulfillment_cost
         cost_obj.external_marketing = req.external_marketing
         cost_obj.tax_rate = req.tax_rate
-        cost_obj.fixed_costs = req.fixed_costs
         cost_obj.updated_at = datetime.utcnow()
     else:
         cost_obj = ProductCost(
@@ -446,8 +352,7 @@ async def set_product_cost(
             cost_price=req.cost_price,
             fulfillment_cost=req.fulfillment_cost,
             external_marketing=req.external_marketing,
-            tax_rate=req.tax_rate,
-            fixed_costs=req.fixed_costs
+            tax_rate=req.tax_rate
         )
         db.add(cost_obj)
     
@@ -465,6 +370,19 @@ class TransitCalcRequest(BaseModel):
 @app.post("/api/internal/transit_calc")
 async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
     return analysis_service.calculate_transit_benefit(req.volume)
+
+@app.get("/api/bidder/simulation")
+async def get_bidder_simulation(user: User = Depends(get_current_user)):
+    return {
+        "status": "safe_mode",
+        "campaigns_active": 3,
+        "total_budget_saved": random.randint(5000, 25000),
+        "logs": [
+            {"time": (datetime.now() - timedelta(minutes=5)).strftime("%H:%M"), "msg": "Кампания 'Платья': Ставка конкурента 500₽ -> Оптимизировано до 155₽"},
+            {"time": (datetime.now() - timedelta(minutes=15)).strftime("%H:%M"), "msg": "Кампания 'Блузки': Удержание 2 места (Target CPA)"},
+            {"time": (datetime.now() - timedelta(minutes=45)).strftime("%H:%M"), "msg": "Аукцион перегрет. Реклама на паузе."}
+        ]
+    }
 
 @app.post("/api/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

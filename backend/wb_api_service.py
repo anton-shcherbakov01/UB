@@ -86,26 +86,65 @@ class WBApiService:
                 "stocks": stocks_res
             }
 
-    async def get_advert_campaigns(self, token: str):
-        url = f"{self.ADV_URL}/adverts"
-        headers = {"Authorization": token}
-        async with aiohttp.ClientSession() as session:
-            return (await self._request_with_retry(session, url, headers, params={"status": 9, "type": 9})) or []
+    # --- МЕТОДЫ РЕКЛАМЫ (BIDDER) ---
 
-    async def get_campaign_info(self, token: str, cid: int):
+    async def get_advert_campaigns(self, token: str):
+        """Получение списка рекламных кампаний"""
+        url = f"{self.ADV_URL}/adverts" # Получение списка РК
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession() as session:
+            # Получаем список (статусы: 9 - идут, 11 - пауза)
+            # Берем статус 9 (активные) и 11 (пауза)
+            params = {"status": 9, "type": 9} # type 9 = Поиск + Каталог (самые частые)
+            data = await self._request_with_retry(session, url, headers, params=params)
+            
+            if not data: return []
+            
+            # Если вернулся список ID, нужно получить детали
+            # API может вернуть просто список объектов или список ID в зависимости от версии
+            return data if isinstance(data, list) else []
+
+    async def get_campaign_info(self, token: str, campaign_id: int):
+        """Получение детальной инфо о ставке и статусе"""
         url = f"{self.ADV_URL}/advert"
         headers = {"Authorization": token}
+        params = {"id": campaign_id}
+        
         async with aiohttp.ClientSession() as session:
-            return await self._request_with_retry(session, url, headers, params={"id": cid})
+            return await self._request_with_retry(session, url, headers, params=params)
 
-    async def set_campaign_bid(self, token: str, cid: int, bid: int):
+    async def set_campaign_bid(self, token: str, campaign_id: int, bid: int, param_type: int = 6):
+        """
+        Установка ставки (CPM).
+        param_type: 6 (Поиск), 7 (Каталог). Обычно меняем 6 для поиска.
+        """
         url = f"{self.ADV_URL}/cpm"
-        headers = {"Authorization": token}
+        headers = {"Authorization": token, "Content-Type": "application/json"}
+        payload = {
+            "advertId": campaign_id,
+            "type": param_type, 
+            "cpm": bid
+        }
+        
         async with aiohttp.ClientSession() as session:
-            return await self._request_with_retry(session, url, headers, json_data={"advertId": cid, "type": 6, "cpm": bid}, method='POST')
+            res = await self._request_with_retry(session, url, headers, json_data=payload, method='POST')
+            return res is not None
 
-    async def get_new_orders_since(self, token, last_check):
-        return []
+    # --- EXISTING METHODS ---
+    async def get_new_orders_since(self, token: str, last_check: datetime):
+        if not last_check: last_check = datetime.now() - timedelta(hours=1)
+        date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        async with aiohttp.ClientSession() as session:
+            orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
+            if not orders_data or "items" not in orders_data: return []
+            new_orders = []
+            for order in orders_data["items"]:
+                try:
+                    order_date = datetime.strptime(order["date"], "%Y-%m-%dT%H:%M:%S")
+                    if order_date > last_check: new_orders.append(order)
+                except: continue
+            return new_orders
 
     async def get_my_stocks(self, token: str):
         if not token: return []
@@ -117,10 +156,7 @@ class WBApiService:
              data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              return data if isinstance(data, list) else []
 
-    async def get_sales_history_raw(self, token: str, days: int = 30):
-        """
-        Возвращает ВСЕ заказы (включая отмены) для точного расчета Unit-экономики.
-        """
+    async def get_sales_history(self, token: str, days: int = 30):
         if not token: return []
         date_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00")
         async with aiohttp.ClientSession() as session:
@@ -128,19 +164,21 @@ class WBApiService:
             return data.get("items", [])
 
     async def get_warehouse_coeffs(self, token: str):
-        return [{"warehouse": "Коледино", "coefficient": 1, "transit_time": "1 день", "price_per_liter": 30}]
+        return [
+            {"warehouse": "Коледино", "coefficient": 1, "transit_time": "1 день", "price_per_liter": 30},
+            {"warehouse": "Электросталь", "coefficient": 5, "transit_time": "1 день", "price_per_liter": 150},
+            {"warehouse": "Казань", "coefficient": 0, "transit_time": "2 дня", "price_per_liter": 20},
+            {"warehouse": "Тула", "coefficient": 2, "transit_time": "1 день", "price_per_liter": 60},
+            {"warehouse": "Краснодар", "coefficient": 0, "transit_time": "3 дня", "price_per_liter": 25},
+            {"warehouse": "Санкт-Петербург", "coefficient": 1, "transit_time": "2 дня", "price_per_liter": 35},
+        ]
 
     async def calculate_transit(self, liters: int, destination: str = "Koledino"):
-        direct_cost = 1500 + liters * 30
-        transit_cost = 1500 + liters * 10
+        direct_base = 1500; direct_rate = 30; transit_base = 500; transit_rate = 10; transit_logistics = 1000 
         return {
-            "direct": {"total": direct_cost},
-            "transit_kazan": {"total": transit_cost},
-            "is_profitable": True,
-            "recommendation": "Транзит",
-            "direct_cost": direct_cost,
-            "transit_cost": transit_cost,
-            "benefit": 200
+            "destination": destination,
+            "direct": {"rate": direct_rate, "total": direct_base + (liters * direct_rate)},
+            "transit_kazan": {"rate": transit_rate, "logistics": transit_logistics, "total": transit_base + (liters * transit_rate) + transit_logistics}
         }
 
     async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
@@ -150,9 +188,10 @@ class WBApiService:
         data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
         if not data: return {"count": 0, "sum": 0, "items": []}
         if isinstance(data, list):
-            # Возвращаем ВСЕ заказы, фильтрация будет на уровне бизнес-логики
-            return {"count": len(data), "items": data}
-        return {"count": 0, "items": []}
+            valid_orders = [x for x in data if not x.get("isCancel")]
+            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            return {"count": len(valid_orders), "sum": int(total_sum), "items": valid_orders}
+        return {"count": 0, "sum": 0, "items": []}
 
     async def _get_stocks(self, session, token: str, date_from: str, use_cache=True):
         url = f"{self.BASE_URL}/stocks"
