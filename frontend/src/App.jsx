@@ -1,16 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Search, Wallet, CreditCard, AlertCircle, Loader2, Sparkles, BarChart3, 
   ArrowUpRight, Plus, User, Shield, Brain, Star, ThumbsDown, CheckCircle2, 
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
   ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
-  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, Scale, Target, PlayCircle, ShieldCheck, Clock
+  Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, 
+  Scale, Target, PlayCircle, ShieldCheck, Clock, Settings, Save, Info, AlertTriangle
 } from 'lucide-react';
 import { 
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid 
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid,
+  BarChart, Bar, Cell
 } from 'recharts';
 
+// Адрес API (в продакшене лучше вынести в .env)
 const API_URL = "https://api.ulike-bot.ru"; 
+
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+const formatMoney = (val) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
+const formatPercent = (val) => `${val}%`;
 
 // --- КОМПОНЕНТЫ UI ---
 
@@ -60,7 +68,7 @@ const StoriesBar = () => {
     return (
         <div className="flex gap-3 overflow-x-auto pb-4 px-2 scrollbar-hide">
             {stories.map(s => (
-                <div key={s.id} className="flex flex-col items-center gap-1 min-w-[64px]">
+                <div key={s.id} className="flex flex-col items-center gap-1 min-w-[64px] animate-in slide-in-from-right duration-500" style={{animationDelay: `${s.id * 100}ms`}}>
                     <div className={`w-14 h-14 rounded-full p-[2px] ${s.color}`}>
                         <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center flex-col">
                              <span className="text-[10px] font-bold text-center leading-tight">{s.val}</span>
@@ -104,22 +112,100 @@ const TariffCard = ({ plan, onPay }) => (
   </div>
 );
 
+// --- MODAL: DETAILED COST EDITING (Unit Economics) ---
+
 const CostEditModal = ({ item, onClose, onSave }) => {
-    const [cost, setCost] = useState(item.cost_price || 0);
+    // State for all cost components
+    const [formData, setFormData] = useState({
+        cost_price: item.input_data?.cost_price || 0,
+        logistics_fwd: item.input_data?.logistics_fwd || 50,
+        logistics_ret: item.input_data?.logistics_ret || 33,
+        tax_rate: item.input_data?.tax || 6,
+        adv_cost: item.input_data?.adv || 0
+    });
+
+    const handleChange = (field, value) => {
+        setFormData(prev => ({...prev, [field]: Number(value)}));
+    };
+
     return (
-        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-            <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl">
-                <h3 className="font-bold text-lg mb-2">Себестоимость</h3>
-                <p className="text-xs text-slate-400 mb-4">Для расчета чистой прибыли SKU {item.sku}</p>
-                <input 
-                    type="number" 
-                    value={cost} 
-                    onChange={e => setCost(e.target.value)}
-                    className="w-full bg-slate-50 text-2xl font-black text-center p-4 rounded-2xl outline-none focus:ring-2 ring-indigo-500 mb-4"
-                />
-                <div className="flex gap-2">
-                    <button onClick={onClose} className="flex-1 py-3 bg-slate-100 font-bold rounded-xl text-slate-600">Отмена</button>
-                    <button onClick={() => onSave(item.sku, cost)} className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-200">Сохранить</button>
+        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
+            <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                         <h3 className="font-bold text-lg">Unit-экономика</h3>
+                         <p className="text-xs text-slate-400">SKU {item.sku}</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase ml-1">Себестоимость (COGS)</label>
+                        <div className="relative mt-1">
+                             <input 
+                                type="number" 
+                                value={formData.cost_price} 
+                                onChange={e => handleChange('cost_price', e.target.value)}
+                                className="w-full bg-slate-50 p-4 rounded-2xl font-black text-xl outline-none focus:ring-2 ring-indigo-500"
+                            />
+                            <span className="absolute right-4 top-4 text-slate-400 font-bold">₽</span>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Клиент)</label>
+                            <input 
+                                type="number" 
+                                value={formData.logistics_fwd} 
+                                onChange={e => handleChange('logistics_fwd', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Возврат)</label>
+                            <input 
+                                type="number" 
+                                value={formData.logistics_ret} 
+                                onChange={e => handleChange('logistics_ret', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label>
+                            <input 
+                                type="number" 
+                                value={formData.tax_rate} 
+                                onChange={e => handleChange('tax_rate', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Реклама (на шт)</label>
+                            <input 
+                                type="number" 
+                                value={formData.adv_cost} 
+                                onChange={e => handleChange('adv_cost', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-sm text-indigo-800">
+                        <Info size={16} className="inline mr-1 relative -top-0.5"/>
+                        Комиссия WB берется автоматически из API (23% для примера).
+                    </div>
+
+                    <button 
+                        onClick={() => onSave(item.sku, formData)} 
+                        className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform"
+                    >
+                        Сохранить и пересчитать
+                    </button>
                 </div>
             </div>
         </div>
@@ -485,7 +571,7 @@ const SupplyPage = () => {
                                 x{c.coefficient}
                              </span>
                         </div>
-                        <p className="text-[10px] text-slate-400">Транзит: {c.transit_time}</p>
+                        <p className="text-10px text-slate-400">Транзит: {c.transit_time}</p>
                     </div>
                 ))}
             </div>
@@ -513,36 +599,73 @@ const SupplyPage = () => {
                  </button>
 
                  {calculation && (
-                     <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
-                         <div className="flex justify-between text-sm mb-1">
-                             <span className="text-slate-500">Прямая (Коледино):</span>
-                             <span className="font-bold">{calculation.direct_cost} ₽</span>
-                         </div>
-                         <div className="flex justify-between text-sm mb-3">
-                             <span className="text-slate-500">Транзит (Казань):</span>
-                             <span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span>
-                         </div>
-                         <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
-                             {calculation.recommendation}
-                             {calculation.is_profitable && <div className="mt-1">Выгода: {calculation.benefit} ₽</div>}
-                         </div>
-                     </div>
+                      <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
+                          <div className="flex justify-between text-sm mb-1">
+                              <span className="text-slate-500">Прямая (Коледино):</span>
+                              <span className="font-bold">{calculation.direct_cost} ₽</span>
+                          </div>
+                          <div className="flex justify-between text-sm mb-3">
+                              <span className="text-slate-500">Транзит (Казань):</span>
+                              <span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span>
+                          </div>
+                          <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
+                              {calculation.recommendation}
+                              {calculation.is_profitable && <div className="mt-1">Выгода: {calculation.benefit} ₽</div>}
+                          </div>
+                      </div>
                  )}
             </div>
         </div>
     )
 }
 
-const BidderPage = () => {
-    const [isSafeMode, setIsSafeMode] = useState(true);
-    const [logs, setLogs] = useState([]);
-    const [stats, setStats] = useState(null);
+// --- BIDDER PAGE (CONFIG & SIMULATION) ---
 
-    const startSimulation = async () => {
+const BidderPage = () => {
+    const [configs, setConfigs] = useState([]);
+    const [simLogs, setSimLogs] = useState([]);
+    const [simStats, setSimStats] = useState(null);
+    const [activeTab, setActiveTab] = useState('config'); // config | simulation
+    
+    // Config State
+    const [editingId, setEditingId] = useState(null);
+    const [editForm, setEditForm] = useState({
+        campaign_id: '',
+        target_position: 5,
+        max_bid: 300,
+        kp: 1.0, ki: 0.1, kd: 0.05,
+        is_active: true
+    });
+
+    const loadConfigs = async () => {
+        const res = await fetch(`${API_URL}/api/bidder/list`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+        if(res.ok) setConfigs(await res.json());
+    };
+
+    const loadSim = async () => {
         const res = await fetch(`${API_URL}/api/bidder/simulation`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
         const data = await res.json();
-        setStats(data);
-        setLogs(data.logs);
+        setSimStats(data);
+        setSimLogs(data.logs);
+    };
+
+    useEffect(() => { loadConfigs(); loadSim(); }, []);
+
+    const handleSaveConfig = async () => {
+        try {
+            const res = await fetch(`${API_URL}/api/bidder/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" },
+                body: JSON.stringify({...editForm, campaign_id: Number(editForm.campaign_id)})
+            });
+            if (!res.ok) {
+                 if(res.status === 403) alert("Нужен тариф Business");
+                 return;
+            }
+            alert("Настройки сохранены!");
+            setEditingId(null);
+            loadConfigs();
+        } catch(e) { console.error(e); }
     };
 
     return (
@@ -551,46 +674,99 @@ const BidderPage = () => {
                 <h1 className="text-2xl font-black flex items-center gap-2">
                     <Target className="text-white" /> Автобиддер
                 </h1>
-                <p className="text-sm opacity-90 mt-2">Управление рекламой. Защита бюджета.</p>
+                <p className="text-sm opacity-90 mt-2">PID-регулятор ставок. Защита бюджета.</p>
             </div>
 
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg">Статус</h3>
-                    <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-full">
-                        <div className={`w-2 h-2 rounded-full ${isSafeMode ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-                        <span className="text-xs font-bold text-slate-600">{isSafeMode ? 'Safe Mode' : 'Active'}</span>
-                    </div>
-                </div>
-                <div className="flex gap-2">
-                     <button onClick={() => setIsSafeMode(true)} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${isSafeMode ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-50 text-slate-400'}`}>
-                        <ShieldCheck size={16} className="inline mr-2"/> Safe Mode
-                     </button>
-                     <button onClick={() => setIsSafeMode(false)} className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${!isSafeMode ? 'bg-red-500 text-white' : 'bg-slate-50 text-slate-400'}`}>
-                        <PlayCircle size={16} className="inline mr-2"/> Run
-                     </button>
-                </div>
-                <button onClick={startSimulation} className="w-full mt-4 bg-slate-900 text-white py-3 rounded-xl font-bold">Обновить отчет</button>
+            <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                 <button onClick={()=>setActiveTab('config')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'config' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Настройки</button>
+                 <button onClick={()=>setActiveTab('simulation')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'simulation' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Логи (Live)</button>
             </div>
 
-            {stats && (
-                <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 animate-in slide-in-from-bottom-4">
-                    <h3 className="font-bold text-emerald-800">Экономия (Прогноз)</h3>
-                    <p className="text-3xl font-black text-emerald-600 my-2">{stats.total_budget_saved} ₽</p>
-                    <p className="text-xs text-emerald-700">За последние 24 часа в Safe Mode</p>
-                </div>
-            )}
+            {activeTab === 'config' ? (
+                <div className="space-y-4">
+                    <button onClick={() => setEditingId('new')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2">
+                        <Plus size={20}/> Добавить кампанию
+                    </button>
 
-            {logs.length > 0 && (
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                    <h3 className="font-bold text-lg mb-4">Лог операций</h3>
-                    <div className="space-y-3">
-                        {logs.map((l, i) => (
-                            <div key={i} className="text-xs border-b border-slate-50 pb-2 last:border-0">
-                                <span className="font-bold text-slate-400 mr-2">{l.time}</span>
-                                <span className="text-slate-700">{l.msg}</span>
+                    {(editingId === 'new' || editingId) && (
+                        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-lg animate-in slide-in-from-top-4">
+                            <h3 className="font-bold mb-4">{editingId === 'new' ? 'Новая кампания' : 'Редактирование'}</h3>
+                            <div className="space-y-3">
+                                <input placeholder="ID Кампании WB" value={editForm.campaign_id} onChange={e=>setEditForm({...editForm, campaign_id: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
+                                
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Целевая поз.</label>
+                                        <input type="number" value={editForm.target_position} onChange={e=>setEditForm({...editForm, target_position: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Макс. ставка</label>
+                                        <input type="number" value={editForm.max_bid} onChange={e=>setEditForm({...editForm, max_bid: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-50 p-3 rounded-xl">
+                                    <p className="text-xs font-bold text-slate-400 mb-2">PID Коэффициенты (Advanced)</p>
+                                    <div className="flex gap-2">
+                                        <input placeholder="Kp" value={editForm.kp} onChange={e=>setEditForm({...editForm, kp: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
+                                        <input placeholder="Ki" value={editForm.ki} onChange={e=>setEditForm({...editForm, ki: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
+                                        <input placeholder="Kd" value={editForm.kd} onChange={e=>setEditForm({...editForm, kd: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex items-center gap-3">
+                                    <span className="font-bold text-sm">Активен</span>
+                                    <input type="checkbox" checked={editForm.is_active} onChange={e=>setEditForm({...editForm, is_active: e.target.checked})} className="w-5 h-5 accent-indigo-600"/>
+                                </div>
+
+                                <div className="flex gap-2 pt-2">
+                                    <button onClick={()=>setEditingId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-500">Отмена</button>
+                                    <button onClick={handleSaveConfig} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold">Сохранить</button>
+                                </div>
                             </div>
-                        ))}
+                        </div>
+                    )}
+
+                    {configs.map(c => (
+                        <div key={c.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
+                            <div>
+                                <div className="font-bold text-sm">ID {c.campaign_id}</div>
+                                <div className="text-xs text-slate-400 mt-1">
+                                    Target: #{c.target_position} | Max: {c.max_bid}₽
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className={`text-[10px] font-bold px-2 py-1 rounded ${c.is_active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                                    {c.is_active ? 'ON' : 'OFF'}
+                                </span>
+                                <button onClick={()=>{setEditingId(c.id); setEditForm(c)}} className="p-2 bg-slate-50 rounded-lg text-slate-400 hover:text-indigo-600"><Settings size={16}/></button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="space-y-4">
+                     {simStats && (
+                        <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 animate-in slide-in-from-bottom-4">
+                            <h3 className="font-bold text-emerald-800">Экономия (Прогноз)</h3>
+                            <p className="text-3xl font-black text-emerald-600 my-2">{simStats.total_budget_saved} ₽</p>
+                            <p className="text-xs text-emerald-700">За последние 24 часа в Safe Mode</p>
+                        </div>
+                    )}
+
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg">Лог операций</h3>
+                            <button onClick={loadSim} className="text-indigo-600"><RefreshCw size={16}/></button>
+                        </div>
+                        <div className="space-y-3">
+                            {simLogs.map((l, i) => (
+                                <div key={i} className="text-xs border-b border-slate-50 pb-2 last:border-0 flex gap-2">
+                                    <span className="font-bold text-slate-400 whitespace-nowrap">{l.time}</span>
+                                    <span className="text-slate-700">{l.msg}</span>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
             )}
@@ -674,7 +850,7 @@ const FinancePage = ({ onNavigate }) => {
     const fetchProducts = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/internal/products`, {
+            const res = await fetch(`${API_URL}/api/finance/products`, {
                 headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
             });
             if (res.ok) setProducts(await res.json());
@@ -683,15 +859,15 @@ const FinancePage = ({ onNavigate }) => {
 
     useEffect(() => { fetchProducts(); }, []);
 
-    const handleUpdateCost = async (sku, cost) => {
+    const handleUpdateCost = async (sku, formData) => {
         try {
-            await fetch(`${API_URL}/api/internal/cost/${sku}`, {
+            await fetch(`${API_URL}/api/finance/cost/${sku}`, {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
                     'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
                 },
-                body: JSON.stringify({ cost_price: Number(cost) })
+                body: JSON.stringify(formData)
             });
             setEditingCost(null);
             fetchProducts();
@@ -737,10 +913,17 @@ const FinancePage = ({ onNavigate }) => {
                             </div>
                         </div>
                         
+                        {/* Waterfall / Progress */}
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full flex overflow-hidden mb-3">
+                            <div className="bg-slate-400 h-full" style={{width: `${(item.input_data.cost_price / item.price)*100}%`}}/>
+                            <div className="bg-indigo-300 h-full" style={{width: `${(item.economics.costs_breakdown.logistics / item.price)*100}%`}}/>
+                            <div className="bg-emerald-500 h-full flex-1"/>
+                        </div>
+
                         <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
                              <div>
                                 <span className="block text-[9px] text-slate-400 uppercase font-bold">Себестоимость</span>
-                                <span className="font-bold text-slate-700">{item.cost_price} ₽</span>
+                                <span className="font-bold text-slate-700">{item.input_data.cost_price} ₽</span>
                              </div>
                              <div className="text-center">
                                 <span className="block text-[9px] text-slate-400 uppercase font-bold">Цена</span>
@@ -748,17 +931,17 @@ const FinancePage = ({ onNavigate }) => {
                              </div>
                              <div className="text-right">
                                 <span className="block text-[9px] text-slate-400 uppercase font-bold">Прибыль</span>
-                                <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                                    {item.unit_economy.profit} ₽
+                                <span className={`font-black ${item.economics.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                    {item.economics.profit} ₽
                                 </span>
                              </div>
                         </div>
                         <div className="mt-2 flex gap-2">
-                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.unit_economy.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                                 ROI: {item.unit_economy.roi}%
+                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                 ROI: {item.economics.roi}%
                              </span>
                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
-                                 Маржа: {item.unit_economy.margin}%
+                                 Маржа: {item.economics.margin_percent}%
                              </span>
                         </div>
                     </div>
@@ -842,8 +1025,8 @@ const MonitorPage = () => {
     <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
       <div className="flex justify-between items-center px-2">
         <div>
-             <h2 className="text-xl font-bold text-slate-800">Конкуренты</h2>
-             <p className="text-xs text-slate-400">Мониторинг цен (Внешний)</p>
+              <h2 className="text-xl font-bold text-slate-800">Конкуренты</h2>
+              <p className="text-xs text-slate-400">Мониторинг цен (Внешний)</p>
         </div>
         <div className="flex gap-2">
             <button onClick={() => setHistoryOpen(true)} className="p-2 bg-indigo-50 text-indigo-600 rounded-full shadow-sm active:scale-95"><Clock size={18}/></button>
@@ -901,7 +1084,7 @@ const MonitorPage = () => {
             <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-600"/></div>
         ) : list.length === 0 ? (
           <div className="text-center p-10 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
-              Список пуст. Добавьте товары через сканер.
+               Список пуст. Добавьте товары через сканер.
           </div>
         ) : (
           list.map((item) => (
@@ -1486,7 +1669,17 @@ const AdminPage = ({ onBack }) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [user, setUser] = useState(null);
-  useEffect(() => { const tgData = window.Telegram?.WebApp?.initData || ""; fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r => r.json()).then(setUser).catch(console.error); }, [activeTab]); 
+
+  useEffect(() => { 
+      const tgData = window.Telegram?.WebApp?.initData || ""; 
+      // Инициализация телеграма
+      if(window.Telegram?.WebApp) {
+          window.Telegram.WebApp.ready();
+          window.Telegram.WebApp.expand();
+      }
+      fetch(`${API_URL}/api/user/me`, { headers: {'X-TG-Data': tgData} }).then(r => r.json()).then(setUser).catch(console.error); 
+  }, [activeTab]); 
+
   const renderContent = () => {
       switch(activeTab) {
           case 'home': return <DashboardPage onNavigate={setActiveTab} user={user} />;
@@ -1503,5 +1696,11 @@ export default function App() {
           default: return <DashboardPage onNavigate={setActiveTab} user={user} />;
       }
   };
-  return (<div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">{renderContent()}<TabNav active={activeTab} setTab={setActiveTab} isAdmin={user?.is_admin} /></div>);
+
+  return (
+    <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">
+        {renderContent()}
+        <TabNav active={activeTab} setTab={setActiveTab} isAdmin={user?.is_admin} />
+    </div>
+  );
 }
