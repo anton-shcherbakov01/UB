@@ -32,6 +32,8 @@ services:
       - "9000:9000" # Нативный клиент
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+    env_file:
+      - ./backend/.env
     ulimits:
       nofile:
         soft: 262144
