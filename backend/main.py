@@ -587,7 +587,7 @@ async def get_admin_stats(user: User = Depends(get_current_user), db: AsyncSessi
     items = (await db.execute(select(func.count(MonitoredItem.id)))).scalar()
     return {"total_users": users, "total_items_monitored": items, "server_status": "Online (v2.0)"}
 
-# --- PDF REPORT ---
+# --- PDF REPORT (PRICE HISTORY) ---
 @app.get("/api/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if user.subscription_plan == "free":
@@ -647,6 +647,128 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         io.BytesIO(pdf_bytes), 
         media_type='application/pdf', 
         headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
+    )
+
+# --- PDF REPORT (AI ANALYSIS) ---
+@app.get("/api/report/ai-pdf/{sku}")
+async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """
+    Генерация PDF отчета по результатам последнего AI анализа отзывов.
+    Только для PRO/BUSINESS тарифов.
+    """
+    if user.subscription_plan == "free":
+        raise HTTPException(403, "Upgrade to PRO")
+
+    # 1. Получаем последнюю запись истории типа 'ai' для данного SKU
+    stmt = select(SearchHistory).where(
+        SearchHistory.user_id == user.id, 
+        SearchHistory.sku == sku, 
+        SearchHistory.request_type == 'ai'
+    ).order_by(SearchHistory.created_at.desc()).limit(1)
+    
+    history_item = (await db.execute(stmt)).scalars().first()
+    
+    if not history_item or not history_item.result_json:
+        raise HTTPException(404, "Анализ не найден. Сначала запустите AI анализ.")
+
+    try:
+        data = json.loads(history_item.result_json)
+    except:
+        raise HTTPException(500, "Ошибка данных анализа")
+
+    ai_data = data.get('ai_analysis', {})
+    if not ai_data:
+        raise HTTPException(500, "Некорректная структура данных")
+
+    # 2. Генерация PDF
+    pdf = FPDF()
+    pdf.add_page()
+
+    # Шрифты
+    font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    try:
+        if os.path.exists(font_path):
+            pdf.add_font('DejaVu', '', font_path, uni=True)
+            pdf.set_font('DejaVu', '', 14)
+            pdf.add_font('DejaVuBold', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', uni=True)
+        else:
+             # Локальный fallback
+             local_font = "fonts/DejaVuSans.ttf"
+             if os.path.exists(local_font):
+                 pdf.add_font('DejaVu', '', local_font, uni=True)
+                 pdf.set_font('DejaVu', '', 14)
+             else:
+                 pdf.set_font("Arial", size=12)
+    except Exception as e:
+        logger.error(f"Font error: {e}")
+        pdf.set_font("Arial", size=12)
+
+    # --- Header ---
+    pdf.set_font_size(20)
+    pdf.cell(0, 10, txt=f"AI Отчет: {sku}", ln=1, align='C')
+    pdf.set_font_size(12)
+    pdf.cell(0, 10, txt=f"Товар: {data.get('product_name', 'Без названия')[:50]}...", ln=1, align='C')
+    pdf.ln(5)
+
+    # --- Summary ---
+    if ai_data.get('global_summary'):
+        pdf.set_font('DejaVu', '', 12) # Use non-bold for body
+        # pdf.set_font('DejaVuBold', '', 12) # Use bold for header if available
+        pdf.cell(0, 10, txt="Резюме:", ln=1)
+        pdf.set_font('DejaVu', '', 10)
+        pdf.multi_cell(0, 8, txt=ai_data['global_summary'])
+        pdf.ln(5)
+
+    # --- Audience ---
+    if ai_data.get('audience_stats'):
+        stats = ai_data['audience_stats']
+        pdf.set_font('DejaVu', '', 12)
+        pdf.cell(0, 10, txt="Аудитория:", ln=1)
+        pdf.set_font('DejaVu', '', 10)
+        pdf.cell(0, 8, txt=f"- Рационалы: {stats.get('rational_percent')}%", ln=1)
+        pdf.cell(0, 8, txt=f"- Эмоционалы: {stats.get('emotional_percent')}%", ln=1)
+        pdf.cell(0, 8, txt=f"- Скептики: {stats.get('skeptic_percent')}%", ln=1)
+        pdf.ln(5)
+        
+        if ai_data.get('infographic_recommendation'):
+             pdf.set_font('DejaVu', '', 10)
+             pdf.multi_cell(0, 8, txt=f"Совет для инфографики: {ai_data['infographic_recommendation']}")
+             pdf.ln(5)
+
+    # --- Aspects ---
+    if ai_data.get('aspects'):
+        pdf.set_font('DejaVu', '', 12)
+        pdf.cell(0, 10, txt="Ключевые аспекты:", ln=1)
+        pdf.set_font('DejaVu', '', 10)
+        
+        for asp in ai_data['aspects'][:10]: # Top 10
+            score = asp.get('sentiment_score', 0)
+            pdf.cell(0, 8, txt=f"{asp.get('aspect')} ({score}/9.0)", ln=1)
+            pdf.set_font_size(8)
+            pdf.multi_cell(0, 5, txt=f"Цитата: {asp.get('snippet')}")
+            pdf.ln(2)
+            pdf.set_font_size(10)
+    
+    # --- Strategy ---
+    if ai_data.get('strategy'):
+        pdf.ln(5)
+        pdf.set_font('DejaVu', '', 12)
+        pdf.cell(0, 10, txt="Стратегия роста:", ln=1)
+        pdf.set_font('DejaVu', '', 10)
+        for s in ai_data['strategy']:
+            pdf.multi_cell(0, 8, txt=f"- {s}")
+
+    pdf_content = pdf.output(dest='S')
+    
+    if isinstance(pdf_content, str):
+        pdf_bytes = pdf_content.encode('latin-1') 
+    else:
+        pdf_bytes = pdf_content
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes), 
+        media_type='application/pdf', 
+        headers={'Content-Disposition': f'attachment; filename="ai_analysis_{sku}.pdf"'}
     )
 
 if __name__ == "__main__":

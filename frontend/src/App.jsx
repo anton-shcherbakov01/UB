@@ -32,7 +32,7 @@ export default function App() {
           case 'scanner': return <ScannerPage onNavigate={setActiveTab} />;
           case 'monitor': return <MonitorPage />;
           case 'finance': return <FinancePage onNavigate={setActiveTab} />;
-          case 'ai': return <AIAnalysisPage />;
+          case 'ai': return <AIAnalysisPage user={user} />;
           case 'seo': return <SeoGeneratorPage />;
           case 'seo_tracker': return <SeoTrackerPage />; 
           case 'bidder': return <BidderPage />; 

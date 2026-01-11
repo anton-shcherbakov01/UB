@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, Crown, BarChart3, Quote, Lightbulb, TrendingUp, Users, BrainCircuit, ShieldCheck, Heart } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, Crown, BarChart3, Quote, Lightbulb, TrendingUp, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
-const AIAnalysisPage = () => {
+const AIAnalysisPage = ({ user }) => {
     const [sku, setSku] = useState('');
     const [loading, setLoading] = useState(false);
+    const [downloading, setDownloading] = useState(false);
     const [status, setStatus] = useState('');
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
@@ -41,6 +42,52 @@ const AIAnalysisPage = () => {
             alert(e.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDownloadPDF = async () => {
+        if (!sku && !result?.sku) return;
+        const targetSku = sku || result.sku;
+
+        if (user?.plan === 'free') {
+            alert("Скачивание PDF доступно только на тарифе PRO или Business");
+            return;
+        }
+
+        setDownloading(true);
+        try {
+            const token = window.Telegram?.WebApp?.initData || "";
+            const response = await fetch(`${API_URL}/api/report/ai-pdf/${targetSku}`, {
+                headers: { 'X-TG-Data': token }
+            });
+
+            if (response.status === 403) {
+                alert("Эта функция доступна только в тарифе PRO или Business");
+                setDownloading(false);
+                return;
+            }
+            
+            if (response.status === 404) {
+                alert("Анализ не найден. Попробуйте запустить анализ заново.");
+                setDownloading(false);
+                return;
+            }
+
+            if (!response.ok) throw new Error("Ошибка загрузки");
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ai_analysis_${targetSku}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            alert("Не удалось скачать отчет: " + e.message);
+        } finally {
+            setDownloading(false);
         }
     };
 
@@ -88,6 +135,21 @@ const AIAnalysisPage = () => {
 
             {result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
+                    {/* Actions Header */}
+                    <div className="flex justify-end">
+                        <button 
+                            onClick={handleDownloadPDF} 
+                            disabled={downloading}
+                            className={`
+                                flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95
+                                ${user?.plan === 'free' ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white shadow-lg'}
+                            `}
+                        >
+                            {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'free' ? <Lock size={14}/> : <FileDown size={14}/>)}
+                            {user?.plan === 'free' ? 'PDF (доступно в PRO)' : 'Скачать PDF'}
+                        </button>
+                    </div>
+
                     {/* Product Header */}
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
