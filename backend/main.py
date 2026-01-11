@@ -317,128 +317,109 @@ class CostUpdateRequest(BaseModel):
     fulfillment_cost: float
     external_marketing: float
     tax_rate: float
+    fixed_costs: float
 
 @app.get("/api/finance/products")
 async def get_my_products_finance(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    token = user.wb_api_token
-    is_demo = not token
+    if not user.wb_api_token:
+        return []
+
+    # 1. Получаем Остатки (Live)
+    stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
     
-    if is_demo:
-        stocks = [
-            {"nmId": 12345678, "quantity": 120, "Price": 2500, "Discount": 50},
-            {"nmId": 87654321, "quantity": 15, "Price": 1800, "Discount": 30},
-            {"nmId": 11223344, "quantity": 300, "Price": 990, "Discount": 10}
-        ]
-        sales_history_map = {
-            12345678: [5, 4, 6, 5, 5, 8, 2, 5, 6, 5, 4, 5, 6, 7],
-            87654321: [1, 0, 1, 0, 2, 1, 0, 1, 0, 0, 1, 2, 1, 0],
-            11223344: [10, 12, 15, 10, 11, 13, 20, 18, 15, 12, 14, 15, 10, 11]
+    # 2. Получаем ИСТОРИЮ ЗАКАЗОВ (Live, 30 дней) - ВСЕ заказы (Gross)
+    # Используем новый метод get_sales_history_raw
+    sales_raw = await wb_api_service.get_sales_history_raw(user.wb_api_token, days=30)
+    
+    # Группируем продажи по SKU
+    sales_map = {} # { sku: [order_obj, order_obj...] }
+    for order in sales_raw:
+        sku = order.get('nmId')
+        if not sku: continue
+        if sku not in sales_map: sales_map[sku] = []
+        sales_map[sku].append(order)
+
+    # 3. Собираем SKU из остатков и продаж
+    all_skus = set()
+    sku_basic_info = {} # { sku: {price, discount, qty} }
+    
+    for s in stocks:
+        sku = s.get('nmId')
+        all_skus.add(sku)
+        sku_basic_info[sku] = {
+            "price": s.get('Price', 0),
+            "discount": s.get('Discount', 0),
+            "quantity": s.get('quantity', 0)
         }
-        all_skus = set([12345678, 87654321, 11223344])
-        sku_details = {s['nmId']: {"price": s['Price'], "discount": s['Discount'], "quantity": s['quantity']} for s in stocks}
-    else:
-        stocks = await wb_api_service.get_my_stocks(token)
-        sales_data = await wb_api_service.get_sales_history(token, days=60)
-        sales_history_map = {}
-        sales_total_map = {}   
-        temp_daily = {} 
-        for order in sales_data:
-            sku = order.get('nmId')
-            if not sku: continue
-            date_str = order.get('date', '')[:10]
-            if not date_str: continue
-            if sku not in temp_daily: temp_daily[sku] = {}
-            temp_daily[sku][date_str] = temp_daily[sku].get(date_str, 0) + 1
-            sales_total_map[sku] = sales_total_map.get(sku, 0) + 1
-        today = datetime.now().date()
-        for sku, daily_map in temp_daily.items():
-            history_list = []
-            for i in range(30): 
-                d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-                history_list.append(daily_map.get(d, 0))
-            sales_history_map[sku] = history_list
-        all_skus = set()
-        sku_details = {}
-        if stocks:
-            for s in stocks:
-                sku = s.get('nmId')
-                all_skus.add(sku)
-                sku_details[sku] = {
-                    "price": s.get('Price', 0),
-                    "discount": s.get('Discount', 0),
-                    "quantity": s.get('quantity', 0)
-                }
-        for sku in sales_total_map.keys():
-            all_skus.add(sku)
-            if sku not in sku_details:
-                sku_details[sku] = {"price": 0, "discount": 0, "quantity": 0, "is_out_of_stock": True}
+    
+    for sku in sales_map.keys():
+        all_skus.add(sku)
+        if sku not in sku_basic_info:
+            sku_basic_info[sku] = {"price": 0, "discount": 0, "quantity": 0, "is_out_of_stock": True}
 
     if not all_skus:
         return []
 
+    # 4. Получаем Косты из БД
     skus_list = list(all_skus)
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus_list)))
-    costs_map = {c.sku: c for c in costs_res.scalars().all()}
-    
+    costs_db_map = {c.sku: c for c in costs_res.scalars().all()}
+
     result = []
     for sku in all_skus:
-        details = sku_details.get(sku, {})
-        cost_obj = costs_map.get(sku)
+        # Данные товара
+        info = sku_basic_info[sku]
         
-        cogs = cost_obj.cost_price if cost_obj else 0.0
-        ff_cost = cost_obj.fulfillment_cost if cost_obj else 0.0
-        ext_mkt = cost_obj.external_marketing if cost_obj else 0.0
-        tax = cost_obj.tax_rate if cost_obj else 6.0
+        # Данные продаж (список заказов)
+        orders = sales_map.get(sku, [])
         
-        selling_price = details['price'] * (1 - details['discount']/100)
-        
-        if is_demo:
-            orders_count = sum(sales_history_map.get(sku, []))
-        else:
-            orders_count = sales_total_map.get(sku, 0)
+        # Косты (пользовательские)
+        cost_obj = costs_db_map.get(sku)
+        costs_input = {
+            "cost_price": cost_obj.cost_price if cost_obj else 0.0,
+            "fulfillment_cost": cost_obj.fulfillment_cost if cost_obj else 0.0,
+            "external_marketing": cost_obj.external_marketing if cost_obj else 0.0,
+            "tax_rate": cost_obj.tax_rate if cost_obj else 6.0,
+            "fixed_costs": cost_obj.fixed_costs if cost_obj else 0.0
+        }
 
-        commission_wb = selling_price * 0.23 
-        logistics_wb = 50.0 
-        adv_wb_per_item = 15.0 
+        # ГЛАВНЫЙ РАСЧЕТ (P&L)
+        pnl = analysis_service.calculate_pnl_structure(info, orders, costs_input)
         
-        pnl = analysis_service.calculate_pnl(
-            price=selling_price,
-            quantity_sold=orders_count,
-            logistics_wb=logistics_wb,
-            commission_wb=commission_wb,
-            advertising_wb=adv_wb_per_item,
-            cost_price=cogs,
-            fulfillment=ff_cost,
-            external_marketing=ext_mkt,
-            tax_rate=tax
-        )
+        # Supply Chain (Time Series для прогноза)
+        # Превращаем список заказов в тайм-серию [5, 2, 0, 1...]
+        daily_counts = {}
+        for o in orders:
+            d = o.get('date', '')[:10]
+            daily_counts[d] = daily_counts.get(d, 0) + 1
         
-        history = sales_history_map.get(sku, [])
+        # Заполняем нулями пропуски (30 дней)
+        history_list = []
+        for i in range(30):
+            d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            history_list.append(daily_counts.get(d, 0))
+            
         supply = analysis_service.calculate_supply_metrics(
-            current_stock=details['quantity'],
-            sales_history=history,
-            lead_time_days=14 
+            current_stock=info['quantity'],
+            sales_history=history_list,
+            lead_time_days=14
         )
 
         result.append({
             "sku": sku,
-            "quantity": details['quantity'],
-            "price": int(selling_price),
-            "input_data": {
-                "cost_price": cogs,
-                "fulfillment": ff_cost,
-                "external_marketing": ext_mkt,
-                "tax_rate": tax
-            },
-            "economics": pnl,
+            "quantity": info['quantity'],
+            "price": int(info['price'] * (1 - info['discount']/100)),
+            "input_data": costs_input,
+            "economics": pnl, # Вложенная структура financials, kpi, metrics
             "supply": supply,
-            "is_out_of_stock": details.get("is_out_of_stock", False)
+            "is_out_of_stock": info.get("is_out_of_stock", False)
         })
-        
-    result.sort(key=lambda x: (x['economics']['gross_sales'], x['quantity']), reverse=True)
+
+    # Сортировка по Выручке (Net Sales)
+    result.sort(key=lambda x: x['economics']['financials']['net_sales'], reverse=True)
     return result
 
 @app.post("/api/finance/cost/{sku}")
@@ -456,6 +437,7 @@ async def set_product_cost(
         cost_obj.fulfillment_cost = req.fulfillment_cost
         cost_obj.external_marketing = req.external_marketing
         cost_obj.tax_rate = req.tax_rate
+        cost_obj.fixed_costs = req.fixed_costs
         cost_obj.updated_at = datetime.utcnow()
     else:
         cost_obj = ProductCost(
@@ -464,7 +446,8 @@ async def set_product_cost(
             cost_price=req.cost_price,
             fulfillment_cost=req.fulfillment_cost,
             external_marketing=req.external_marketing,
-            tax_rate=req.tax_rate
+            tax_rate=req.tax_rate,
+            fixed_costs=req.fixed_costs
         )
         db.add(cost_obj)
     

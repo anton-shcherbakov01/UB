@@ -307,102 +307,74 @@ const TariffCard = ({ plan, onPay }) => (
 // --- MODAL: DETAILED COST EDITING (Unit Economics) ---
 
 const CostEditModal = ({ item, onClose, onSave }) => {
-    // State for all cost components
-    const [formData, setFormData] = useState({
-        cost_price: item.input_data?.cost_price || 0,
-        logistics_fwd: item.input_data?.logistics_fwd || 50,
-        logistics_ret: item.input_data?.logistics_ret || 33,
-        tax_rate: item.input_data?.tax || 6,
-        adv_cost: item.input_data?.adv || 0
-    });
+  const [formData, setFormData] = useState({
+      cost_price: item.input_data?.cost_price || 0,
+      fulfillment_cost: item.input_data?.fulfillment_cost || 0,
+      external_marketing: item.input_data?.external_marketing || 0,
+      tax_rate: item.input_data?.tax_rate || 6,
+      fixed_costs: item.input_data?.fixed_costs || 0
+  });
 
-    const handleChange = (field, value) => {
-        setFormData(prev => ({...prev, [field]: Number(value)}));
-    };
+  const handleChange = (field, value) => {
+      setFormData(prev => ({...prev, [field]: parseFloat(value) || 0}));
+  };
 
-    return (
-        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
-            <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
-                <div className="flex justify-between items-center mb-4">
-                    <div>
-                         <h3 className="font-bold text-lg">Unit-экономика</h3>
-                         <p className="text-xs text-slate-400">SKU {item.sku}</p>
-                    </div>
-                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
-                </div>
+  return (
+      <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
+          <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+              <div className="flex justify-between items-center mb-4">
+                  <div>
+                       <h3 className="font-bold text-lg">Unit-экономика</h3>
+                       <p className="text-xs text-slate-400">SKU {item.sku}</p>
+                  </div>
+                  <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+              </div>
 
-                <div className="space-y-4">
-                    <div>
-                        <label className="text-xs font-bold text-slate-400 uppercase ml-1">Себестоимость (COGS)</label>
-                        <div className="relative mt-1">
-                             <input 
-                                type="number" 
-                                value={formData.cost_price} 
-                                onChange={e => handleChange('cost_price', e.target.value)}
-                                className="w-full bg-slate-50 p-4 rounded-2xl font-black text-xl outline-none focus:ring-2 ring-indigo-500"
-                            />
-                            <span className="absolute right-4 top-4 text-slate-400 font-bold">₽</span>
-                        </div>
-                    </div>
+              <div className="space-y-4">
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Себестоимость (COGS)</label>
+                      <div className="flex items-center gap-2">
+                           <input type="number" value={formData.cost_price} onChange={e => handleChange('cost_price', e.target.value)} className="w-full bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800"/>
+                          <span className="font-bold text-slate-400">₽</span>
+                      </div>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Клиент)</label>
-                            <input 
-                                type="number" 
-                                value={formData.logistics_fwd} 
-                                onChange={e => handleChange('logistics_fwd', e.target.value)}
-                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
-                            />
-                        </div>
-                        <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Возврат)</label>
-                            <input 
-                                type="number" 
-                                value={formData.logistics_ret} 
-                                onChange={e => handleChange('logistics_ret', e.target.value)}
-                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
-                            />
-                        </div>
-                    </div>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фулфилмент (ед)</label>
+                          <input type="number" value={formData.fulfillment_cost} onChange={e => handleChange('fulfillment_cost', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/>
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label>
+                          <input type="number" value={formData.tax_rate} onChange={e => handleChange('tax_rate', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/>
+                      </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Внеш. Реклама</label>
+                          <input type="number" value={formData.external_marketing} onChange={e => handleChange('external_marketing', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/>
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фикс. расходы</label>
+                          <input type="number" value={formData.fixed_costs} onChange={e => handleChange('fixed_costs', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/>
+                      </div>
+                  </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label>
-                            <input 
-                                type="number" 
-                                value={formData.tax_rate} 
-                                onChange={e => handleChange('tax_rate', e.target.value)}
-                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
-                            />
-                        </div>
-                        <div>
-                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Реклама (на шт)</label>
-                            <input 
-                                type="number" 
-                                value={formData.adv_cost} 
-                                onChange={e => handleChange('adv_cost', e.target.value)}
-                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
-                            />
-                        </div>
-                    </div>
+                  <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-xs text-indigo-800 flex gap-2">
+                      <Info size={16} className="shrink-0"/>
+                      <span>Комиссия, логистика и внутр. реклама считаются автоматически (Provisional).</span>
+                  </div>
 
-                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-sm text-indigo-800">
-                        <Info size={16} className="inline mr-1 relative -top-0.5"/>
-                        Комиссия WB берется автоматически из API (23% для примера).
-                    </div>
-
-                    <button 
-                        onClick={() => onSave(item.sku, formData)} 
-                        className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform"
-                    >
-                        Сохранить и пересчитать
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
+                  <button onClick={() => onSave(item.sku, formData)} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-transform">
+                      Сохранить и пересчитать
+                  </button>
+              </div>
+          </div>
+      </div>
+  );
 };
+
 
 // --- History Components ---
 
@@ -940,33 +912,114 @@ const FinancePage = ({ onNavigate }) => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingCost, setEditingCost] = useState(null);
+
   const fetchProducts = async () => {
       setLoading(true);
-      try { const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }); if (res.ok) setProducts(await res.json()); } catch(e) { console.error(e); } finally { setLoading(false); }
+      try {
+          const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+          if (res.ok) setProducts(await res.json());
+      } catch(e) { console.error(e); } finally { setLoading(false); }
   };
+
   useEffect(() => { fetchProducts(); }, []);
+
   const handleUpdateCost = async (sku, formData) => {
-      try { await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) }); setEditingCost(null); fetchProducts(); } catch(e) { alert("Ошибка"); }
+      try {
+          await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) });
+          setEditingCost(null);
+          fetchProducts();
+      } catch(e) { alert("Ошибка обновления"); }
   };
+
   return (
       <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
-           <div className="flex justify-between items-center px-2"><div><h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2><p className="text-xs text-slate-400">Unit-экономика</p></div><button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button></div>
+           <div className="flex justify-between items-center px-2">
+              <div>
+                  <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2>
+                  <p className="text-xs text-slate-400">Иерархия маржинальности</p>
+              </div>
+              <button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
+          </div>
+
           {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
+
           {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div> : products.map((item) => (
-                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm mb-4 overflow-hidden">
-                      <div className="p-5 pb-2"><div className="flex justify-between items-start mb-4"><div><div className="font-black text-lg">SKU {item.sku}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Цена: {item.price} ₽ • Остаток: {item.quantity} шт</div></div><button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button></div>
-                          <div className="bg-slate-50 rounded-2xl p-4 space-y-3 mb-2">
-                              <div className="flex justify-between items-center border-b border-slate-200 pb-2"><span className="text-xs font-bold text-slate-500">Gross Sales</span><span className="font-black text-slate-800">{item.economics.gross_sales} ₽</span></div>
-                              <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100"><span className="text-xs font-bold text-purple-600">CM2 (Операционная)</span><span className="font-bold">{item.economics.cm2} ₽</span></div>
-                              <div className={`flex justify-between items-center p-3 rounded-xl ${item.economics.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}><span className="font-black text-sm uppercase">Чистая прибыль</span><span className="font-black text-lg">{item.economics.cm3} ₽</span></div>
+                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm relative group mb-4 overflow-hidden">
+                      <div className="p-5 pb-2">
+                          <div className="flex justify-between items-start mb-4">
+                              <div>
+                                  <div className="font-black text-lg">SKU {item.sku}</div>
+                                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                                      Продаж: {item.economics.metrics?.orders_total} ({item.economics.metrics?.buyout_rate}%) • Остаток: {item.quantity}
+                                  </div>
+                              </div>
+                              <button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button>
+                          </div>
+
+                          {/* WATERFALL CHART UI */}
+                          <div className="space-y-2 mb-3">
+                              {/* Gross */}
+                              <div className="flex justify-between text-xs text-slate-400">
+                                  <span>Gross Sales</span>
+                                  <span>{item.economics.financials.gross_sales} ₽</span>
+                              </div>
+                              {/* Returns */}
+                              <div className="flex justify-between text-[10px] text-red-400 pl-2 border-l-2 border-slate-100">
+                                  <span>- Возвраты/Отмены</span>
+                                  <span>-{item.economics.financials.returns_loss} ₽</span>
+                              </div>
+                              {/* Net Sales */}
+                              <div className="flex justify-between font-bold text-sm text-slate-800 border-b border-slate-100 pb-1">
+                                  <span>Net Sales</span>
+                                  <span>{item.economics.financials.net_sales} ₽</span>
+                              </div>
+                              
+                              {/* Costs Block 1 */}
+                              <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-500 mt-2">
+                                  <div className="bg-slate-50 p-2 rounded-lg">
+                                      <div className="uppercase font-bold opacity-50">COGS</div>
+                                      <div>-{item.economics.financials.cogs} ₽</div>
+                                  </div>
+                                  <div className="bg-slate-50 p-2 rounded-lg">
+                                      <div className="uppercase font-bold opacity-50">Логистика+Комиссия</div>
+                                      <div>-{item.economics.financials.costs_breakdown.logistics + item.economics.financials.costs_breakdown.commission} ₽</div>
+                                  </div>
+                              </div>
+
+                              {/* CM2 Result */}
+                              <div className="flex justify-between items-center bg-indigo-50 p-2 rounded-lg border border-indigo-100">
+                                  <span className="text-xs font-bold text-indigo-700">CM2 (Операционная)</span>
+                                  <span className="font-bold text-indigo-900">{item.economics.financials.cm2} ₽</span>
+                              </div>
+
+                              {/* Marketing & Fixed */}
+                              <div className="flex justify-between text-[10px] text-slate-400 px-1">
+                                  <span>- Маркетинг: {item.economics.financials.marketing.internal + item.economics.financials.marketing.external} ₽</span>
+                                  <span>- Фикс: {item.economics.financials.fixed_costs} ₽</span>
+                              </div>
+
+                              {/* EBITDA Result */}
+                              <div className={`flex justify-between items-center p-3 rounded-xl mt-1 ${item.economics.kpi.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  <span className="font-black text-sm uppercase">EBITDA</span>
+                                  <span className="font-black text-lg">{item.economics.financials.ebitda} ₽</span>
+                              </div>
                           </div>
                       </div>
-                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center"><div className="flex gap-2"><span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.roi}%</span></div>{item.economics.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}</div>
+
+                      {/* Footer Metrics */}
+                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center">
+                          <div className="flex gap-2">
+                              <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.kpi.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.kpi.roi}%</span>
+                              <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-500">Маржа: {item.economics.kpi.margin}%</span>
+                          </div>
+                          {item.economics.kpi.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}
+                      </div>
                   </div>
           ))}
       </div>
   );
 }
+
 
 const MonitorPage = () => {
   const [list, setList] = useState([]);

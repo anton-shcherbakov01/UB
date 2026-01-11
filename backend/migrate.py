@@ -7,48 +7,53 @@ logger = logging.getLogger("DB_Migration")
 
 def migrate():
     """
-    Миграция v3.1: Исправление структуры BidderConfig.
-    Добавляет колонку campaign_name, если её нет.
+    Миграция v4.0 (Unit Economics 2025).
     """
-    logger.info("🚀 Запуск миграции базы данных...")
+    logger.info("🚀 Запуск миграции...")
     
     try:
-        # 1. Создаем новые таблицы (если их вообще нет)
+        # 1. Создаем таблицы если нет
         Base.metadata.create_all(bind=engine_sync)
-        logger.info("✅ create_all выполнен.")
         
-        # 2. Обновляем существующие таблицы (ALTER TABLE)
+        # 2. Обновляем ProductCost для поддержки EBITDA и P&L
         with engine_sync.connect() as conn:
             trans = conn.begin()
             try:
-                # Добавляем campaign_name в bidder_configs
+                # fixed_costs (для EBITDA)
+                try:
+                    conn.execute(text("ALTER TABLE product_costs ADD COLUMN IF NOT EXISTS fixed_costs FLOAT DEFAULT 0"))
+                    logger.info("✅ product_costs: +fixed_costs")
+                except Exception as e:
+                    if "duplicate" not in str(e).lower(): logger.warning(f"Error: {e}")
+
+                # external_marketing (для CM3)
+                try:
+                    conn.execute(text("ALTER TABLE product_costs ADD COLUMN IF NOT EXISTS external_marketing FLOAT DEFAULT 0"))
+                    logger.info("✅ product_costs: +external_marketing")
+                except Exception as e:
+                    if "duplicate" not in str(e).lower(): logger.warning(f"Error: {e}")
+
+                # fulfillment_cost (для CM2)
+                try:
+                    conn.execute(text("ALTER TABLE product_costs ADD COLUMN IF NOT EXISTS fulfillment_cost FLOAT DEFAULT 0"))
+                    logger.info("✅ product_costs: +fulfillment_cost")
+                except Exception as e:
+                    if "duplicate" not in str(e).lower(): logger.warning(f"Error: {e}")
+
+                # Campaign Name для биддера (на всякий случай)
                 try:
                     conn.execute(text("ALTER TABLE bidder_configs ADD COLUMN IF NOT EXISTS campaign_name VARCHAR"))
-                    logger.info("✅ bidder_configs: добавлена колонка 'campaign_name'")
-                except Exception as e:
-                    # Обработка для старых версий PG где нет IF NOT EXISTS в ADD COLUMN
-                    if "duplicate column" in str(e).lower():
-                        logger.info("ℹ️ Колонка 'campaign_name' уже существует.")
-                    else:
-                        logger.warning(f"⚠️ Ошибка campaign_name: {e}")
-
-                # Добавляем keyword (на всякий случай, если тоже забыли)
-                try:
-                    conn.execute(text("ALTER TABLE bidder_configs ADD COLUMN IF NOT EXISTS keyword VARCHAR"))
-                    logger.info("✅ bidder_configs: добавлена колонка 'keyword'")
-                except Exception as e:
-                    if "duplicate column" in str(e).lower(): pass
-                    else: logger.warning(f"⚠️ Ошибка keyword: {e}")
+                except: pass
 
                 trans.commit()
             except Exception as e:
                 trans.rollback()
-                logger.error(f"Error executing ALTER statements: {e}")
+                logger.error(f"Migration error: {e}")
 
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка миграции: {e}")
+        logger.error(f"Critical error: {e}")
 
-    logger.info("🎉 Миграция завершена!")
+    logger.info("🎉 Готово!")
 
 if __name__ == "__main__":
     migrate()

@@ -5,15 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
 
-# Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
-# 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)
 AsyncSessionLocal = sessionmaker(bind=engine_async, class_=AsyncSession, expire_on_commit=False)
 
-# 2. Синхронный движок (Celery)
 engine_sync = create_engine(DATABASE_URL_SYNC, echo=False)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_sync)
 
@@ -27,7 +24,6 @@ class User(Base):
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
-    
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -38,52 +34,52 @@ class User(Base):
     seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
     bidder_configs = relationship("BidderConfig", back_populates="user", cascade="all, delete-orphan")
 
-class BidderConfig(Base):
-    """
-    Конфигурация автобиддера для конкретной кампании.
-    Хранит настройки PID-регулятора и текущее состояние.
-    """
-    __tablename__ = "bidder_configs"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    
-    campaign_id = Column(BigInteger, index=True) # ID кампании на WB
-    campaign_name = Column(String, nullable=True)
-    
-    # Настройки стратегии
-    target_position = Column(Integer, default=5) # Целевое место
-    max_bid = Column(Integer, default=500)       # Максимальная ставка
-    min_bid = Column(Integer, default=125)       # Минимальная ставка
-    keyword = Column(String, nullable=True)      # Ключевое слово для проверки позиций
-    
-    # PID коэффициенты (настраиваемые)
-    kp = Column(Float, default=1.0)
-    ki = Column(Float, default=0.1)
-    kd = Column(Float, default=0.05)
-    
-    # Состояние PID (для интегральной составляющей)
-    accumulated_error = Column(Float, default=0.0)
-    last_error = Column(Float, default=0.0)
-    
-    is_active = Column(Boolean, default=False)   # Включен ли биддер
-    safe_mode = Column(Boolean, default=True)    # Safe Mode: только логирование, без реальной ставки
-    
-    last_check = Column(DateTime, default=datetime.utcnow)
-    last_log = Column(Text, nullable=True)       # Последнее действие (текстом)
-
-    user = relationship("User", back_populates="bidder_configs")
-
 class ProductCost(Base):
+    """
+    Таблица Unit-экономики.
+    Хранит все косты для расчета P&L по каждому артикулу.
+    """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
-    cost_price = Column(Float, default=0.0)
-    fulfillment_cost = Column(Float, default=0.0)
-    external_marketing = Column(Float, default=0.0)
-    tax_rate = Column(Float, default=6.0)
+    
+    # Прямые переменные расходы (COGS)
+    cost_price = Column(Float, default=0.0)      # Себестоимость товара
+    
+    # Операционные расходы (CM2)
+    fulfillment_cost = Column(Float, default=0.0) # Упаковка/ФФ (на единицу)
+    tax_rate = Column(Float, default=6.0)        # Налог (УСН)
+    
+    # Маркетинг (CM3)
+    external_marketing = Column(Float, default=0.0) # Бюджет на внешнюю рекламу (на единицу или распределенный)
+    
+    # Фиксированные расходы (EBITDA)
+    fixed_costs = Column(Float, default=0.0)     # Зарплаты, ПО, аренда (распределенные на артикул)
+    
     updated_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="costs")
+
+class BidderConfig(Base):
+    __tablename__ = "bidder_configs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    campaign_id = Column(BigInteger, index=True)
+    campaign_name = Column(String, nullable=True)
+    target_position = Column(Integer, default=5)
+    max_bid = Column(Integer, default=500)
+    min_bid = Column(Integer, default=125)
+    keyword = Column(String, nullable=True)
+    kp = Column(Float, default=1.0)
+    ki = Column(Float, default=0.1)
+    kd = Column(Float, default=0.05)
+    accumulated_error = Column(Float, default=0.0)
+    last_error = Column(Float, default=0.0)
+    is_active = Column(Boolean, default=False)
+    safe_mode = Column(Boolean, default=True)
+    last_check = Column(DateTime, default=datetime.utcnow)
+    last_log = Column(Text, nullable=True)
+    user = relationship("User", back_populates="bidder_configs")
 
 class MonitoredItem(Base):
     __tablename__ = "monitored_items"
