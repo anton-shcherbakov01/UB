@@ -571,32 +571,42 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
 
 @celery_app.task(bind=True, name="analyze_reviews_task")
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
-    self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов...'})
+    """
+    Refactored Orchestration:
+    1. Calls Parser to get reviews and product metadata.
+    2. Passes everything to AnalysisService (even if empty, for a graceful ABSA response).
+    3. Saves enriched history.
+    """
+    self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
     
+    # [AUDIT] Парсер вызывается здесь. Мы получаем и отзывы, и название товара.
     product_info = parser_service.get_full_product_info(sku, limit)
     
     if product_info.get("status") == "error":
+        # Если даже карточка не найдена - тогда возвращаем ошибку
         return {"status": "error", "error": product_info.get("message")}
     
-    self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
+    self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
     
     reviews = product_info.get('reviews', [])
-    if not reviews:
-        return {"status": "error", "error": "Нет отзывов"}
-
-    ai_result = analysis_service.analyze_reviews_with_ai(reviews, f"Товар {sku}")
+    product_name = product_info.get('name', f"Товар {sku}")
+    
+    # [AUDIT] Передаем данные в сервис аналитики. 
+    # Даже если reviews=[], сервис вернет структуру с советами "Как получить первые отзывы".
+    ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
 
     final_result = {
         "status": "success",
         "sku": sku,
+        "product_name": product_name,
         "image": product_info.get('image'),
         "rating": product_info.get('rating'),
-        "reviews_count": product_info.get('reviews_count'),
+        "reviews_count": len(reviews),
         "ai_analysis": ai_result
     }
 
     if user_id:
-        title = f"AI Отзывы: {product_info.get('rating')}★"
+        title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
         save_history_sync(user_id, sku, 'ai', title, final_result)
 
     return final_result
