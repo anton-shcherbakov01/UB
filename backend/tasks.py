@@ -11,7 +11,7 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
-from bidder_engine import PIDController
+from bidder_engine import PIDController, StrategyManager, StrategyInput
 from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderConfig, BidderLog
 from clickhouse_models import ch_client
 from sqlalchemy import select
@@ -149,21 +149,35 @@ async def _process_bidder_async(campaign_id: int):
         # В реальной реализации здесь должен быть запрос: await wb_api_service.get_campaign_stats(...)
         ctr = 2.0 # Заглушка, так как API статистики тяжелое. В prod нужно раскомментировать запрос.
         
+        # --- NEW: Strategy Manager Initialization ---
+        # Инициализируем менеджер стратегий с данными из конфига и статистики
+        strategy_input = StrategyInput(
+            target_cpa=config.max_cpa,
+            max_cpm=config.max_bid,
+            current_conversion_rate=0.05, # Fallback/Mock (Нужно брать из API статистики)
+            click_to_order_ratio=None,    # Auto-calculate based on CR
+            competitor_bid=None           # Можно добавить парсинг ставки конкурента
+        )
+        strategy_manager = StrategyManager(strategy_input)
+
         applied_bid = current_bid
         log_action = "hold"
         money_saved = 0.0
-        new_bid = current_bid
+        pid_suggested_bid = current_bid
         pid_components = {"P": 0, "I": 0, "D": 0}
+        
+        # Получаем safety cap для логирования
+        safety_cap = strategy_manager.calculate_safety_cap()
 
-        # ЛОГИКА ЗАЩИТЫ БЮДЖЕТА
+        # ЛОГИКА ЗАЩИТЫ БЮДЖЕТА (CTR)
         if ctr < config.min_ctr:
              logger.info(f"Low CTR ({ctr}%) for {campaign_id}. Lowering to min bid.")
-             new_bid = config.min_bid
+             final_bid = config.min_bid
              log_action = "paused_low_ctr"
              
              if not config.safe_mode and current_bid > config.min_bid:
-                 await wb_api_service.set_campaign_bid(user_token, campaign_id, new_bid)
-                 applied_bid = new_bid
+                 await wb_api_service.set_campaign_bid(user_token, campaign_id, final_bid)
+                 applied_bid = final_bid
         else:
             # 5. Получаем состояние PID из Redis
             redis_key = f"{BIDDER_STATE_PREFIX}{campaign_id}"
@@ -190,26 +204,42 @@ async def _process_bidder_async(campaign_id: int):
                 last_measurement=last_measurement
             )
             
-            new_bid = result["new_bid"]
-            action = result["action"]
+            pid_suggested_bid = result["new_bid"]
+            pid_action = result["action"]
             pid_components = result["components"]
 
-            # 7. Execution
-            log_action = action
+            # --- NEW: Final Decision via Strategy Manager ---
+            decision = strategy_manager.decide_bid(
+                pid_suggested_bid=pid_suggested_bid,
+                user_max_bid=config.max_bid
+            )
             
+            final_bid = decision["final_bid"]
+            
+            # Если PID хотел обновить ставку, или если сработала защита (safety cap < current)
+            if pid_action == "update" or final_bid != current_bid:
+                log_action = "update"
+                if decision["status"] != "OK":
+                     log_action = "capped" # Помечаем, что сработала защита
+            
+            # 7. Execution
             if config.safe_mode:
                 log_action = "safe_mode"
-                if new_bid < current_bid:
-                    money_saved = current_bid - new_bid
+                if final_bid < current_bid:
+                    money_saved = current_bid - final_bid
             else:
-                if action == "update":
-                    success = await wb_api_service.set_campaign_bid(user_token, campaign_id, new_bid)
-                    if success:
-                        applied_bid = new_bid
-                        if new_bid < current_bid:
-                            money_saved = current_bid - new_bid
+                if log_action in ["update", "capped"]:
+                    # Отправляем ставку только если она отличается
+                    if final_bid != current_bid:
+                        success = await wb_api_service.set_campaign_bid(user_token, campaign_id, final_bid)
+                        if success:
+                            applied_bid = final_bid
+                            if final_bid < current_bid:
+                                money_saved = current_bid - final_bid
+                        else:
+                            log_action = "error_api"
                     else:
-                        log_action = "error_api"
+                        log_action = "hold" # Ставка не изменилась после всех проверок
 
             # 8. Сохраняем состояние PID
             new_state = {
@@ -222,16 +252,21 @@ async def _process_bidder_async(campaign_id: int):
             redis_client.expire(redis_key, 86400)
 
         # 9. Логируем в БД
+        # Формируем сообщение с деталями стратегии
+        log_msg = f"P:{pid_components.get('P',0):.1f} I:{pid_components.get('I',0):.1f} Cap:{safety_cap}"
+        if log_action == "capped":
+            log_msg += " [CAPPED]"
+            
         log_entry = BidderLog(
             config_id=config.id,
             current_pos=current_pos,
             target_pos=config.target_position,
             old_bid=current_bid,
-            calculated_bid=new_bid,
-            applied_bid=applied_bid,
+            calculated_bid=pid_suggested_bid, # То, что насчитал чистый PID
+            applied_bid=applied_bid,          # То, что реально отправили (или final_bid в safe mode)
             money_saved=money_saved,
             action_type=log_action,
-            message=f"P:{pid_components.get('P',0):.1f} I:{pid_components.get('I',0):.1f} CTR:{ctr}"
+            message=log_msg
         )
         session.add(log_entry)
         config.last_check = datetime.utcnow()
