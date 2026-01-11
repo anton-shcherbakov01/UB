@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # --- База данных ---
+  # --- База данных Postgres ---
   db:
     image: postgres:15-alpine
     container_name: wb_postgres
@@ -22,6 +22,21 @@ services:
       timeout: 5s
       retries: 5
 
+  # --- ClickHouse (Для аналитики P&L) ---
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: wb_clickhouse
+    restart: always
+    ports:
+      - "8123:8123" # HTTP порт
+      - "9000:9000" # Нативный клиент
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
   # --- Redis ---
   redis:
     image: redis:alpine
@@ -37,28 +52,26 @@ services:
       dockerfile: Dockerfile
     container_name: wb_api
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    # ВАЖНО: Монтируем ./backend прямо в /app, чтобы main.py был в корне
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
     ports: ["8000:8000"]
+    # 1. Загружаем переменные из файла внутри папки backend
     env_file:
-      - .env
+      - ./backend/.env
+    # 2. Здесь оставляем только системные настройки Docker-сети
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # Переменные теперь читаются из .env благодаря env_file
-      - PROXY_USER=${PROXY_USER}
-      - PROXY_PASS=${PROXY_PASS}
-      - PROXY_HOST=${PROXY_HOST}
-      - PROXY_PORT=${PROXY_PORT}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
-      - BOT_TOKEN=${BOT_TOKEN}
-      - AI_API_KEY=${AI_API_KEY}
     depends_on: 
       db:
         condition: service_healthy
       redis:
+        condition: service_started
+      clickhouse:
         condition: service_started
 
   # --- Celery Worker ---
@@ -72,21 +85,20 @@ services:
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
     env_file:
-      - .env
+      - ./backend/.env
     environment:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      - PROXY_USER=${PROXY_USER}
-      - PROXY_PASS=${PROXY_PASS}
-      - PROXY_HOST=${PROXY_HOST}
-      - PROXY_PORT=${PROXY_PORT}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
-      - AI_API_KEY=${AI_API_KEY}
     depends_on: 
       db:
         condition: service_healthy
       redis:
+        condition: service_started
+      clickhouse:
         condition: service_started
 
   # --- Celery Beat (Планировщик) ---
@@ -99,7 +111,7 @@ services:
     volumes: 
       - ./backend:/app
     env_file:
-      - .env
+      - ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
@@ -109,3 +121,4 @@ services:
 
 volumes:
   postgres_data:
+  clickhouse_data:
