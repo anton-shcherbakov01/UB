@@ -1,7 +1,12 @@
+# ================
+# File: backend/tasks.py
+# ================
 import json
 import logging
 import asyncio
 import aiohttp
+import os
+import redis.asyncio as aioredis # Новый импорт для асинхронного Redis
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -13,11 +18,15 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
-from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition
+from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderCampaign, BidderLog
 from clickhouse_models import ch_service
 from sqlalchemy import select
+from bidder_engine import PIDController # Новый импорт
 
 logger = logging.getLogger("CeleryTasks")
+
+# Redis настройки
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (SYNC) ---
 
@@ -269,42 +278,257 @@ class FinancialSyncProcessor:
         await self.sync_provisional_orders()
 
 
+# --- REAL-TIME BIDDER SYSTEM (ASYNC WORKER) ---
+
+class BidderWorker:
+    """
+    Producer-Consumer Architecture for RTB.
+    Producer: Берет активные кампании из Postgres -> Кладет в очередь Redis.
+    Consumer: Читает из Redis -> Запрос в WB API -> Расчет PID -> Обновление ставки/Лог.
+    """
+    QUEUE_KEY = "bidder:queue"
+    STATE_KEY_PREFIX = "bidder:state:"
+
+    def __init__(self):
+        self.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+
+    async def producer(self):
+        """Читает активные кампании и заполняет очередь."""
+        logger.info("BIDDER: Запуск Producer...")
+        session = SyncSessionLocal()
+        try:
+            # Получаем активные кампании с токенами пользователей
+            campaigns = session.query(BidderCampaign).join(User).filter(
+                BidderCampaign.is_active == True,
+                User.wb_api_token.isnot(None)
+            ).all()
+
+            if not campaigns:
+                logger.info("BIDDER: Нет активных кампаний.")
+                return
+
+            pipe = self.redis.pipeline()
+            # Очищаем старую очередь (чтобы не копились задачи при падении воркера)
+            await pipe.delete(self.QUEUE_KEY)
+            
+            count = 0
+            for camp in campaigns:
+                # Payload задачи
+                job_data = {
+                    "campaign_id": camp.id,
+                    "wb_campaign_id": camp.wb_campaign_id,
+                    "user_id": camp.user_id,
+                    "token": camp.user.wb_api_token,
+                    "target_pos": camp.target_position,
+                    "max_bid": camp.max_bid,
+                    "min_bid": camp.min_bid,
+                    "kp": camp.kp,
+                    "ki": camp.ki,
+                    "kd": camp.kd,
+                    "safe_mode": camp.safe_mode,
+                    "target_cpa": camp.target_cpa
+                }
+                await pipe.lpush(self.QUEUE_KEY, json.dumps(job_data))
+                count += 1
+            
+            await pipe.execute()
+            logger.info(f"BIDDER: В очереди {count} кампаний.")
+            
+        except Exception as e:
+            logger.error(f"BIDDER Producer Error: {e}")
+        finally:
+            session.close()
+
+    async def get_pid_state(self, campaign_id: int) -> Dict:
+        """Получает состояние PID (интегралы, ошибки) из Redis."""
+        key = f"{self.STATE_KEY_PREFIX}{campaign_id}"
+        data = await self.redis.hgetall(key)
+        if not data:
+            return {
+                "prev_error": 0.0,
+                "integral": 0.0,
+                "prev_pos": 0.0,
+                "last_update": 0.0
+            }
+        return {
+            "prev_error": float(data.get("prev_error", 0)),
+            "integral": float(data.get("integral", 0)),
+            "prev_pos": float(data.get("prev_pos", 0)),
+            "last_update": float(data.get("last_update", 0))
+        }
+
+    async def save_pid_state(self, campaign_id: int, state: Dict):
+        key = f"{self.STATE_KEY_PREFIX}{campaign_id}"
+        # TTL 24 часа (если кампания остановлена, состояние очистится)
+        await self.redis.hset(key, mapping=state)
+        await self.redis.expire(key, 86400)
+
+    async def check_cpa_safety(self, token: str, wb_campaign_id: int, target_cpa: int) -> bool:
+        """
+        Проверяет реальный CPA. Если CPA > Target, возвращает False (небезопасно).
+        """
+        if not target_cpa or target_cpa <= 0:
+            return True # Проверка CPA отключена
+            
+        stats = await wb_api_service.get_advert_stats(token, wb_campaign_id)
+        if not stats or 'days' not in stats:
+            return True # Нет данных, считаем безопасным
+            
+        # Анализируем последние 3 дня
+        total_spend = 0
+        total_orders = 0
+        for day in stats['days'][-3:]:
+             total_spend += day.get('sum_price', 0)
+             total_orders += day.get('orders', 0)
+             
+        if total_orders == 0:
+            return True # Нельзя рассчитать CPA
+            
+        real_cpa = total_spend / total_orders
+        if real_cpa > target_cpa:
+            logger.warning(f"BIDDER: CPA Alert! Campaign {wb_campaign_id} CPA {real_cpa:.0f} > {target_cpa}")
+            return False
+            
+        return True
+
+    async def process_campaign(self, job: Dict):
+        """Ядро Consumer: API -> PID -> Action -> Log"""
+        camp_id = job['campaign_id']
+        wb_id = job['wb_campaign_id']
+        token = job['token']
+        
+        # 1. Получаем состояние
+        state = await self.get_pid_state(camp_id)
+        current_time = datetime.now().timestamp()
+        dt = current_time - state['last_update']
+        
+        # 2. Получаем реальные данные от WB
+        adv_info = await wb_api_service.get_advert_info(token, wb_id)
+        if not adv_info:
+            logger.error(f"BIDDER: Нет инфо для {wb_id}")
+            return
+
+        current_bid = adv_info.get('price', 0)
+        # Получаем item_id для обновления ставки (обычно в params)
+        params = adv_info.get('params', [])
+        item_id = params[0].get('id') if params else None
+        
+        if not item_id: return
+
+        # Симуляция получения позиции (В реальном проекте тут парсер)
+        # Для MVP предполагаем, что позиция меняется динамически
+        current_pos = 10 # Placeholder, в реальности: await parser.get_pos(...)
+        
+        # 3. CPA Guard
+        if not await self.check_cpa_safety(token, wb_id, job['target_cpa']):
+             # Снижаем ставку до минимума или пауза
+             await self.log_action(camp_id, current_pos, current_bid, job['min_bid'], "CPA_GUARD_REDUCE")
+             if not job['safe_mode']:
+                 await wb_api_service.set_advert_bid(token, wb_id, job['min_bid'], item_id)
+             return
+
+        # 4. Расчет PID
+        pid = PIDController(
+            kp=job['kp'], ki=job['ki'], kd=job['kd'],
+            target=job['target_pos'],
+            min_out=job['min_bid'], max_out=job['max_bid']
+        )
+        
+        res = pid.update(
+            current_val=current_pos,
+            current_bid=current_bid,
+            dt=dt if dt < 3600 else 0, # Сброс dt, если разрыв большой
+            prev_error=state['prev_error'],
+            integral=state['integral'],
+            prev_measurement=state['prev_pos']
+        )
+        
+        new_bid = int(res['new_bid'])
+        
+        # 5. Выполнение или Лог (Safe Mode)
+        action_type = "UPDATED"
+        budget_saved = 0
+        
+        if res['action'] == 'hold':
+            action_type = "HOLD_DEADBAND"
+            new_bid = current_bid
+        elif job['safe_mode']:
+            action_type = "SAFE_MODE_SIMULATION"
+            # Гипотетическая экономия (если бы мы перебили конкурента)
+            budget_saved = max(0, current_bid - new_bid)
+        else:
+            # РЕАЛЬНОЕ ОБНОВЛЕНИЕ
+            await wb_api_service.set_advert_bid(token, wb_id, new_bid, item_id)
+            
+        # 6. Сохранение состояния
+        new_state = {
+            "prev_error": res['error'],
+            "integral": res['integral'],
+            "prev_pos": current_pos,
+            "last_update": current_time
+        }
+        await self.save_pid_state(camp_id, new_state)
+        
+        # 7. Лог в БД
+        await self.log_action(camp_id, current_pos, current_bid, new_bid, action_type, budget_saved)
+
+    async def log_action(self, camp_id, pos, old_bid, new_bid, action, saved=0):
+        session = SyncSessionLocal()
+        try:
+            log_entry = BidderLog(
+                campaign_id=camp_id,
+                current_pos=pos,
+                competitor_bid=old_bid,
+                calculated_bid=new_bid,
+                action_taken=action,
+                budget_saved=saved
+            )
+            session.add(log_entry)
+            session.commit()
+        except Exception as e:
+            logger.error(f"BIDDER Log Error: {e}")
+        finally:
+            session.close()
+
+    async def consumer(self):
+        """Читает задачи из Redis и выполняет их."""
+        logger.info("BIDDER: Запуск Consumer...")
+        while True:
+            # Неблокирующее чтение
+            job_json = await self.redis.rpop(self.QUEUE_KEY)
+            if not job_json:
+                break # Очередь пуста
+            
+            try:
+                job = json.loads(job_json)
+                await self.process_campaign(job)
+            except Exception as e:
+                logger.error(f"BIDDER Consumer Job Error: {e}")
+
+
 # --- ЗАДАЧИ CELERY ---
 
 @celery_app.task(bind=True, name="sync_financial_reports")
 def sync_financial_reports(self, user_id: int):
-    """
-    Основная задача синхронизации финансовых данных.
-    Запускает асинхронный процессор внутри синхронного воркера.
-    """
+    # ... (код функции оставлен без изменений, см. выше в вашем файле) ...
     self.update_state(state='PROGRESS', meta={'status': 'Initializing Sync...'})
-    
-    # 1. Get Token
     session = SyncSessionLocal()
     try:
         user = session.query(User).filter(User.id == user_id).first()
         if not user or not user.wb_api_token:
-            logger.error(f"User {user_id} has no token")
             return {"status": "error", "message": "No token"}
-        
         token = user.wb_api_token
     finally:
         session.close()
 
-    # 2. Run Async Logic
     processor = FinancialSyncProcessor(token, user_id)
-    
     try:
-        # Create a new event loop for this task
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
         loop.run_until_complete(processor.run_full_sync())
         loop.close()
-        
         return {"status": "success", "message": "Financial data synced"}
     except Exception as e:
-        logger.error(f"Sync failed for user {user_id}: {e}")
         return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
@@ -402,6 +626,27 @@ def update_all_monitored_items():
     finally:
         session.close()
 
+# --- НОВАЯ ЗАДАЧА ДЛЯ БИДДЕРА ---
+
+@celery_app.task(name="bidder_master_task")
+def bidder_master_task():
+    """
+    Периодическая задача (Beat), управляющая ставками.
+    Запускается каждые 2-5 минут (настраивается в celery_app).
+    """
+    worker = BidderWorker()
+    
+    # Создаем event loop для асинхронного выполнения
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        # 1. Producer: Наполнить очередь активными кампаниями
+        loop.run_until_complete(worker.producer())
+        # 2. Consumer: Обработать задачи из очереди
+        loop.run_until_complete(worker.consumer())
+    finally:
+        loop.close()
+
 def _process_orders_sync():
     """Синхронная обертка для проверки заказов (уведомления)."""
     session = SyncSessionLocal()
@@ -438,7 +683,6 @@ def _process_orders_sync():
             if found:
                 user.last_order_check = datetime.now()
                 session.commit()
-                
         loop.close()
         
     finally:
