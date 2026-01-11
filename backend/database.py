@@ -1,6 +1,8 @@
 import os
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text, Float
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+import enum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text, Float, Enum
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship, foreign
+from sqlalchemy.sql import and_
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
@@ -19,6 +21,12 @@ SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_s
 
 Base = declarative_base()
 
+class TaxScheme(str, enum.Enum):
+    USN_6 = "USN_6"
+    USN_15 = "USN_15"
+    OSNO = "OSNO"
+    USN_1 = "USN_1"
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
@@ -28,6 +36,9 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
     
+    # Новое поле налоговой схемы
+    tax_scheme = Column(Enum(TaxScheme), default=TaxScheme.USN_6)
+    
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -35,6 +46,7 @@ class User(Base):
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
+    cost_history_records = relationship("CostHistory", back_populates="user", cascade="all, delete-orphan")
     seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
     bidder_configs = relationship("BidderConfig", back_populates="user", cascade="all, delete-orphan")
 
@@ -76,7 +88,6 @@ class BidderConfig(Base):
 class BidderLog(Base):
     """
     Лог операций биддера.
-    Используется для аналитики и демонстрации работы Safe Mode.
     """
     __tablename__ = "bidder_logs"
     id = Column(Integer, primary_key=True, index=True)
@@ -96,18 +107,52 @@ class BidderLog(Base):
     
     config = relationship("BidderConfig", back_populates="logs")
 
+class CostHistory(Base):
+    """
+    История изменений себестоимости.
+    """
+    __tablename__ = "cost_history"
+    id = Column(Integer, primary_key=True, index=True)
+    sku = Column(BigInteger, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    cost_price = Column(Float, nullable=False, default=0.0)
+    fulfillment_cost = Column(Float, default=0.0)
+    
+    valid_from = Column(DateTime, default=datetime.utcnow)
+    valid_to = Column(DateTime, nullable=True) # Если NULL, значит актуально по сей день
+    
+    user = relationship("User", back_populates="cost_history_records")
+
 class ProductCost(Base):
+    """
+    Текущие настройки товара (маркетинг, постоянные расходы).
+    Себестоимость вынесена в CostHistory.
+    """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
-    cost_price = Column(Float, default=0.0)
-    fulfillment_cost = Column(Float, default=0.0)
+    
+    # cost_price удален (историчность)
+    # fulfillment_cost перенесен в history, но здесь можно хранить "текущий план" или просто убрать
+    # По ТЗ удаляем static cost_price, реализуем 1-to-many.
+    
     external_marketing = Column(Float, default=0.0)
-    tax_rate = Column(Float, default=6.0)
+    tax_rate = Column(Float, default=6.0) # Deprecated, use User.tax_scheme
     fixed_costs = Column(Float, default=0.0)
+    
     updated_at = Column(DateTime, default=datetime.utcnow)
+    
     user = relationship("User", back_populates="costs")
+    
+    # Виртуальная связь для удобства, но основная логика через сервис
+    history = relationship(
+        "CostHistory",
+        primaryjoin="and_(ProductCost.sku==foreign(CostHistory.sku), ProductCost.user_id==foreign(CostHistory.user_id))",
+        uselist=True,
+        viewonly=True
+    )
 
 class MonitoredItem(Base):
     __tablename__ = "monitored_items"
