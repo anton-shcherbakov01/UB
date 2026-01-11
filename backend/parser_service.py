@@ -381,45 +381,134 @@ class SeleniumWBParser:
             logger.error(f"SEO Parse Error: {e}")
             return {"status": "error", "message": str(e)}
 
-    # --- ADVANCED GEO SEARCH (NEW API IMPLEMENTATION) ---
+    # --- ADVANCED GEO SEARCH (HYBRID: API + SELENIUM FALLBACK) ---
+
+    async def get_search_position_selenium_fallback(self, query: str, target_sku: int):
+        """
+        Медленный, но надежный метод через Selenium (если API заблокирован).
+        """
+        logger.info(f"⚡ FALLBACK: Starting Selenium Search for '{query}'...")
+        driver = None
+        try:
+            # Запускаем в отдельном потоке, так как Selenium синхронный
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._run_selenium_search_sync, query, target_sku)
+        except Exception as e:
+            logger.error(f"Selenium Fallback Error: {e}")
+            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+
+    def _run_selenium_search_sync(self, query: str, target_sku: int):
+        driver = None
+        try:
+            driver = self._init_driver()
+            # Прямой URL поиска
+            url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}"
+            driver.get(url)
+            
+            # Ждем загрузки карточек
+            try:
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".product-card, .product-card__wrapper"))
+                )
+                time.sleep(3) # Небольшая пауза для рендеринга JS
+            except:
+                logger.warning("Selenium: Timeout waiting for cards")
+                return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+
+            # Парсим DOM
+            cards = driver.find_elements(By.CSS_SELECTOR, ".product-card__wrapper, .product-card")
+            
+            organic_counter = 0
+            for i, card in enumerate(cards):
+                try:
+                    # Пытаемся найти ID
+                    link = card.find_element(By.TAG_NAME, "a")
+                    href = link.get_attribute("href")
+                    
+                    # Извлекаем ID из ссылки (catalog/12345/detail)
+                    match = re.search(r'catalog/(\d+)/detail', href)
+                    if not match: continue
+                    
+                    sku_found = int(match.group(1))
+                    
+                    # Проверяем на рекламу (метка "Реклама" или класс)
+                    text_content = card.get_attribute("textContent").lower()
+                    is_ad = "реклама" in text_content
+                    
+                    if not is_ad:
+                        organic_counter += 1
+                        
+                    if sku_found == int(target_sku):
+                        logger.info(f"✅ Selenium Found SKU {target_sku} at pos {i+1}")
+                        return {
+                            "organic_pos": organic_counter if not is_ad else 0,
+                            "ad_pos": (i + 1) if is_ad else 0,
+                            "is_boosted": is_ad,
+                            "total_pos": i + 1
+                        }
+                    
+                    # Ограничиваем глубину (топ 100)
+                    if i > 100: break
+                    
+                except Exception as inner_e:
+                    continue
+
+            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+            
+        except Exception as e:
+            logger.error(f"Selenium Sync Error: {e}")
+            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+        finally:
+            if driver:
+                try: driver.quit()
+                except: pass
 
     async def get_search_position_v2(self, query: str, target_sku: int, dest: str = GEO_ZONES["moscow"]):
+        """
+        Гибридный поиск: API (с прокси) -> если Fail/429 -> Selenium
+        """
         target_sku = int(target_sku)
         url = "https://search.wb.ru/exactmatch/ru/common/v7/search"
         params = {"ab_testing": "false", "appType": "1", "curr": "rub", "dest": dest, "query": query, "resultset": "catalog", "sort": "popular", "spp": "30", "suppressSpellcheck": "false"}
         
-        # Retry loop for 429/Network errors
-        max_retries = 3
+        proxy_url = self._get_aiohttp_proxy()
+        
+        # 1. Попытка через API (быстро)
+        max_retries = 2
+        api_failed = False
+        
         for attempt in range(max_retries):
-            # Rotate User-Agent per attempt
             headers = {"User-Agent": random.choice(self.user_agents), "Accept": "*/*"}
-            
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, params=params, headers=headers, timeout=10) as resp:
-                        if resp.status == 429:
-                            wait_time = (attempt + 1) * 2 + random.uniform(0, 1)
-                            logger.warning(f"Search 429 for '{query}' (Att: {attempt+1}). Sleeping {wait_time:.2f}s...")
-                            await asyncio.sleep(wait_time)
-                            continue
+                    # ВАЖНО: Передаем proxy
+                    async with session.get(url, params=params, headers=headers, proxy=proxy_url, timeout=10) as resp:
                         
+                        if resp.status == 429:
+                            logger.warning(f"API 429 (Att {attempt+1}).")
+                            await asyncio.sleep(random.uniform(1, 3))
+                            continue
+                            
                         if resp.status != 200:
-                            logger.error(f"Search API Status {resp.status} for {query}")
-                            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                            api_failed = True
+                            break
                         
                         data = await resp.json()
                         products = data.get("data", {}).get("products") or data.get("products", [])
                         
                         if not products:
-                            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                            # Пустой ответ API часто означает бот-блок, пробуем Selenium
+                            logger.warning("API returned empty products list. Switching to Fallback.")
+                            api_failed = True
+                            break
 
                         organic_counter = 0
+                        found = False
                         for index, item in enumerate(products):
                             item_id = int(item.get("id", 0))
                             is_ad = bool(item.get("log") or item.get("adId") or item.get("cpm"))
                             
-                            if not is_ad:
-                                organic_counter += 1
+                            if not is_ad: organic_counter += 1
                             
                             if item_id == target_sku:
                                 return {
@@ -428,13 +517,20 @@ class SeleniumWBParser:
                                     "is_boosted": is_ad,
                                     "total_pos": index + 1
                                 }
-                        # Product not found in top N
-                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                        
+                        # Если прошли весь список API и не нашли, значит товара реально нет в топе
+                        if not found:
+                             return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
             except Exception as e:
-                logger.error(f"Geo Search Connection Error ({dest}): {e}")
-                await asyncio.sleep(1)
+                logger.error(f"API Connection Error: {e}")
+                api_failed = True
+                break
         
+        # 2. Fallback to Selenium (если API заблочили или вернул пустоту)
+        if api_failed:
+            return await self.get_search_position_selenium_fallback(query, target_sku)
+            
         return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
     def get_search_position(self, query: str, target_sku: int):
