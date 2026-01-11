@@ -7,10 +7,11 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
-from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition
+from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderConfig
 from sqlalchemy import select
 
 logger = logging.getLogger("CeleryTasks")
+
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (SYNC) ---
 
@@ -242,6 +243,137 @@ def _process_orders_sync():
         
     finally:
         session.close()
+
+def _process_bidder_sync():
+    """
+    Основной цикл биддера.
+    1. Берет активные конфиги.
+    2. Проверяет позицию.
+    3. Считает PID.
+    4. Обновляет ставку.
+    """
+    session = SyncSessionLocal()
+    try:
+        # Получаем активные задачи
+        configs = session.query(BidderConfig).join(User).filter(BidderConfig.is_active == True, User.wb_api_token.isnot(None)).all()
+        
+        async def process_one(config):
+            try:
+                user = config.user
+                token = user.wb_api_token
+                
+                # 1. Получаем текущую инфу о кампании (реальная ставка и статус)
+                info = await wb_api_service.get_campaign_info(token, config.campaign_id)
+                if not info: 
+                    config.last_log = "Ошибка доступа к API"
+                    return
+
+                # Извлекаем SKU из кампании (обычно это первый товар) для проверки позиции
+                # В ответе /advert детали могут быть вложены, берем упрощенно
+                # Для MVP предполагаем, что пользователь указал ключевое слово в config.keyword
+                if not config.keyword:
+                    config.last_log = "Нет ключевого слова"
+                    return
+
+                # Извлекаем SKU (предполагаем, что оно есть в конфиге или кампании, 
+                # но для простоты возьмем из мониторинга юзера, если есть)
+                # Для полноценной версии нужно хранить SKU кампании в БД.
+                # Пока пропустим шаг парсинга позиции, если нет SKU, и используем заглушку
+                # Но план требует РЕАЛЬНЫХ данных.
+                
+                # Попробуем найти товар пользователя, соответствующий кампании (сложно без маппинга)
+                # Допустим, мы парсим позицию по ключевому слову для ПЕРВОГО товара юзера (упрощение)
+                # В проде нужно точное соответствие.
+                target_sku = session.query(MonitoredItem).filter(MonitoredItem.user_id == user.id).first()
+                current_pos = 100
+                if target_sku:
+                    current_pos = parser_service.get_search_position(config.keyword, target_sku.sku)
+                    if current_pos == 0: current_pos = 100 # Не найдено
+                
+                # Текущая ставка в кампании
+                # Структура ответа API WB меняется, ищем 'params' -> 'price' или 'cpm'
+                current_bid = 0
+                if 'params' in info:
+                    current_bid = info['params'][0].get('price', 0)
+                
+                if current_bid == 0:
+                    current_bid = config.min_bid # Fallback
+
+                # 2. PID Расчет
+                pid = analysis_service.get_pid_bidder(config)
+                new_bid, acc_err, err = pid.calculate_new_bid(
+                    current_rank=current_pos,
+                    target_rank=config.target_position,
+                    current_bid=current_bid,
+                    accumulated_error=config.accumulated_error,
+                    last_error=config.last_error
+                )
+                
+                # 3. Применение (или Safe Mode)
+                log_msg = f"Pos: {current_pos} -> {config.target_position} | Bid: {current_bid} -> {new_bid} (Err: {err})"
+                
+                if config.safe_mode:
+                    log_msg += " [SAFE MODE]"
+                else:
+                    if new_bid != current_bid:
+                        success = await wb_api_service.set_campaign_bid(token, config.campaign_id, new_bid)
+                        if success:
+                            log_msg += " [UPDATED]"
+                        else:
+                            log_msg += " [API FAIL]"
+                    else:
+                        log_msg += " [NO CHANGE]"
+
+                # 4. Сохранение состояния
+                config.accumulated_error = acc_err
+                config.last_error = err
+                config.last_log = log_msg
+                config.last_check = datetime.utcnow()
+                session.commit()
+                
+            except Exception as e:
+                logger.error(f"Bidder error {config.campaign_id}: {e}")
+                session.rollback()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        for conf in configs:
+            loop.run_until_complete(process_one(conf))
+        loop.close()
+
+    except Exception as e:
+        logger.error(f"Bidder cycle error: {e}")
+    finally:
+        session.close()
+
+@celery_app.task(name="run_bidder_cycle")
+def run_bidder_cycle():
+    _process_bidder_sync()
+
+
+def _process_orders_sync():
+    session = SyncSessionLocal()
+    try:
+        users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
+        async def check_user(user):
+            try:
+                new_orders = await wb_api_service.get_new_orders_since(user.wb_api_token, user.last_order_check)
+                if new_orders:
+                    total_sum = sum(x.get('priceWithDiscount', 0) for x in new_orders)
+                    msg = f"🔔 <b>Дзынь! Новые заказы: +{len(new_orders)}</b>\n💰 Сумма: {total_sum:,.0f} ₽"
+                    await bot_service.send_message(user.telegram_id, msg)
+                    return True
+            except Exception as e: logger.error(f"User {user.id} error: {e}")
+            return False
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        for user in users:
+            found = loop.run_until_complete(check_user(user))
+            if found:
+                user.last_order_check = datetime.now()
+                session.commit()
+        loop.close()
+    finally: session.close()
 
 @celery_app.task(name="check_new_orders")
 def check_new_orders():

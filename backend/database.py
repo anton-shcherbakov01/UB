@@ -28,41 +28,64 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
     
-    # Поля для API WB и уведомлений
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
-    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
     seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
+    bidder_configs = relationship("BidderConfig", back_populates="user", cascade="all, delete-orphan")
+
+class BidderConfig(Base):
+    """
+    Конфигурация автобиддера для конкретной кампании.
+    Хранит настройки PID-регулятора и текущее состояние.
+    """
+    __tablename__ = "bidder_configs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    campaign_id = Column(BigInteger, index=True) # ID кампании на WB
+    campaign_name = Column(String, nullable=True)
+    
+    # Настройки стратегии
+    target_position = Column(Integer, default=5) # Целевое место
+    max_bid = Column(Integer, default=500)       # Максимальная ставка
+    min_bid = Column(Integer, default=125)       # Минимальная ставка
+    keyword = Column(String, nullable=True)      # Ключевое слово для проверки позиций
+    
+    # PID коэффициенты (настраиваемые)
+    kp = Column(Float, default=1.0)
+    ki = Column(Float, default=0.1)
+    kd = Column(Float, default=0.05)
+    
+    # Состояние PID (для интегральной составляющей)
+    accumulated_error = Column(Float, default=0.0)
+    last_error = Column(Float, default=0.0)
+    
+    is_active = Column(Boolean, default=False)   # Включен ли биддер
+    safe_mode = Column(Boolean, default=True)    # Safe Mode: только логирование, без реальной ставки
+    
+    last_check = Column(DateTime, default=datetime.utcnow)
+    last_log = Column(Text, nullable=True)       # Последнее действие (текстом)
+
+    user = relationship("User", back_populates="bidder_configs")
 
 class ProductCost(Base):
-    """
-    Таблица для хранения себестоимости и параметров Unit-экономики.
-    Расширена для расчета P&L (CM1, CM2, CM3).
-    """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
-    
-    # Экономические параметры (вводимые пользователем)
-    cost_price = Column(Float, default=0.0)      # Себестоимость закупки/производства
-    fulfillment_cost = Column(Float, default=0.0) # Фулфилмент/Упаковка (на единицу)
-    external_marketing = Column(Float, default=0.0) # Внешняя реклама (бюджет на артикул)
-    tax_rate = Column(Float, default=6.0)        # Налоговая ставка (по умолчанию УСН 6%)
-    
+    cost_price = Column(Float, default=0.0)
+    fulfillment_cost = Column(Float, default=0.0)
+    external_marketing = Column(Float, default=0.0)
+    tax_rate = Column(Float, default=6.0)
     updated_at = Column(DateTime, default=datetime.utcnow)
-    
     user = relationship("User", back_populates="costs")
 
 class MonitoredItem(Base):
-    """
-    Таблица для ВНЕШНЕГО мониторинга (конкуренты).
-    """
     __tablename__ = "monitored_items"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -70,7 +93,6 @@ class MonitoredItem(Base):
     name = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
     owner = relationship("User", back_populates="items")
     prices = relationship("PriceHistory", back_populates="item", cascade="all, delete-orphan")
 
@@ -101,14 +123,12 @@ class SeoPosition(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger)
     keyword = Column(String)
-    position = Column(Integer, default=0) # 0 - не найдено в топ-100
+    position = Column(Integer, default=0)
     last_check = Column(DateTime, default=datetime.utcnow)
-    
     user = relationship("User", back_populates="seo_keywords")
 
 async def init_db():
     async with engine_async.begin() as conn:
-        # В продакшене лучше использовать Alembic для миграций
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db():
