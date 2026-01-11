@@ -3,6 +3,7 @@ import json
 import io
 import logging
 import random
+import redis
 from urllib.parse import parse_qsl
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body, Request
 from fastapi.responses import StreamingResponse
@@ -20,13 +21,19 @@ from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
 from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition
-from celery_app import celery_app
-from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task, check_seo_position_task
+from celery_app import celery_app, REDIS_URL
+from tasks import parse_and_save_sku, analyze_reviews_task, generate_seo_task, check_seo_position_task, sync_financial_reports
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger("API")
+
+# Init Redis for direct reads
+try:
+    r_client = redis.from_url(REDIS_URL, decode_responses=True)
+except:
+    r_client = None
 
 app = FastAPI(title="WB Analytics Platform")
 
@@ -140,7 +147,9 @@ async def save_wb_token(
     user.wb_api_token = req.token
     db.add(user)
     await db.commit()
-    return {"status": "saved", "message": "Токен успешно сохранен"}
+    # Trigger initial sync
+    sync_financial_reports.delay(user.id)
+    return {"status": "saved", "message": "Токен успешно сохранен, запущена синхронизация"}
 
 @app.delete("/api/user/token")
 async def delete_wb_token(
@@ -225,6 +234,7 @@ async def get_my_products_finance(
 ):
     """
     Получение списка СВОИХ товаров для Unit-экономики.
+    Теперь интегрирует прогноз Prophet из Redis.
     """
     if not user.wb_api_token: 
         return []
@@ -266,9 +276,24 @@ async def get_my_products_finance(
         roi = round((profit / cost * 100), 1) if cost > 0 else 0
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
         
-        # Supply Chain Prediction
-        sales_velocity = random.uniform(0.5, 5.0) # Mock для MVP
-        supply = analysis_service.calculate_supply_prediction(data['quantity'], sales_velocity)
+        # Supply Chain Prediction (Redis Forecast + AnalysisService)
+        supply_data = None
+        if r_client:
+            cached_forecast = r_client.get(f"forecast:{user.id}:{sku}")
+            if cached_forecast:
+                forecast_json = json.loads(cached_forecast)
+                # Calculate ROP/SS using new service logic
+                supply_data = analysis_service.calculate_supply_metrics(
+                    current_stock=data['quantity'],
+                    sales_history=[], # History is baked into forecast inside Redis or we trust the forecast
+                    forecast_data=forecast_json
+                )
+        
+        # Fallback if no forecast (use simple velocity simulation)
+        if not supply_data:
+            sales_velocity = random.uniform(0.5, 5.0) # Mock для MVP
+            supply_data = analysis_service.calculate_supply_prediction(data['quantity'], sales_velocity)
+            # Override for Prophet consistency if needed, but for MVP keep legacy fallback
 
         result.append({
             "sku": sku,
@@ -280,7 +305,7 @@ async def get_my_products_finance(
                 "roi": roi,
                 "margin": margin
             },
-            "supply": supply
+            "supply": supply_data
         })
         
     return result

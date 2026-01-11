@@ -14,3 +14,7 @@ fpdf2
 greenlet
 clickhouse-connect
 pandas
+prophet
+holidays
+numpy
+scipy

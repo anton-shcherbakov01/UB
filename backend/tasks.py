@@ -14,14 +14,15 @@ from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
-from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderLog
+from forecasting import forecast_demand
+from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderLog, ProductCost
 from clickhouse_models import ch_service
 from sqlalchemy import select
 from bidder_engine import PIDController
 
 logger = logging.getLogger("CeleryTasks")
 
-# Redis Client for Bidder State
+# Redis Client for Bidder State and Forecasting
 try:
     # Parsing "redis://host:port/0"
     r_client = redis.from_url(REDIS_URL, decode_responses=True)
@@ -123,6 +124,64 @@ def log_bidder_action_sync(user_id, campaign_id, current_pos, target_pos, prev_b
         logger.error(f"Bidder Log DB Error: {e}")
     finally:
         session.close()
+
+# --- FORECASTING TRAIN TASK (NEW) ---
+
+@celery_app.task(name="train_forecasting_models")
+def train_forecasting_models():
+    """
+    Ежесуточная задача:
+    1. Берет все товары, у которых есть продажи в ClickHouse.
+    2. Обучает Prophet модель.
+    3. Сохраняет прогноз на 30 дней в Redis (для мгновенной отдачи в API).
+    """
+    logger.info("Starting forecasting training cycle...")
+    
+    # 1. Получаем уникальные пары user_id, nm_id из ClickHouse за последние 90 дней
+    try:
+        ch_client = ch_service.get_client()
+        # Выбираем товары, у которых были продажи
+        query_items = """
+        SELECT DISTINCT supplier_id, nm_id 
+        FROM wb_analytics.realization_reports 
+        WHERE sale_dt > now() - INTERVAL 90 DAY
+        """
+        result = ch_client.query(query_items)
+        items = result.result_rows
+        
+        logger.info(f"Found {len(items)} items to forecast.")
+        
+        for row in items:
+            supplier_id, sku = row
+            
+            # 2. Получаем историю продаж для SKU
+            query_history = """
+            SELECT toDate(sale_dt) as ds, sum(quantity) as y
+            FROM wb_analytics.realization_reports
+            WHERE supplier_id = %(uid)s AND nm_id = %(sku)s AND doc_type_name = 'Продажа'
+            GROUP BY ds
+            ORDER BY ds ASC
+            """
+            history_res = ch_client.query(query_history, parameters={'uid': supplier_id, 'sku': sku})
+            history_rows = history_res.result_rows
+            
+            if not history_rows: continue
+            
+            # Преобразуем в формат списка словарей
+            sales_history = [{"date": str(h[0]), "qty": int(h[1])} for h in history_rows]
+            
+            # 3. Запускаем Prophet
+            forecast_result = forecast_demand(sales_history, horizon_days=30)
+            
+            # 4. Сохраняем в Redis (TTL 25 часов - 90000 сек)
+            if r_client and forecast_result.get("status") == "success":
+                key = f"forecast:{supplier_id}:{sku}"
+                # Сохраняем JSON строку
+                r_client.set(key, json.dumps(forecast_result), ex=90000)
+                # logger.info(f"Forecast saved for {sku}")
+                
+    except Exception as e:
+        logger.error(f"Forecasting cycle failed: {e}")
 
 # --- REAL-TIME BIDDER LOGIC (ASYNC WORKER) ---
 
@@ -233,8 +292,6 @@ def bidder_producer_task():
         
         for user in users:
             # For each user, trigger consumer
-            # Ideally we fetch campaign list here or inside consumer
-            # Here we just trigger consumer to manage user's campaigns
             bidder_consumer_task.delay(user.id, user.wb_api_token)
             
     finally:
@@ -248,13 +305,13 @@ def bidder_consumer_task(self, user_id: int, token: str):
     Worker process: Async wrapper to handle multiple campaigns for a user.
     """
     async def run_cycle():
-        # 1. Get Campaigns (Mock or Real)
+        # 1. Get Campaigns
         campaigns = await wb_api_service.get_advert_campaigns(token)
         worker = BidderWorker(user_id, token)
         
         tasks = []
         for camp in campaigns:
-            # Filter only active campaigns (status 9 = Active usually, just example)
+            # Filter only active campaigns (status 9 = Active usually)
             if camp.get('status') in [9, 11]: 
                 tasks.append(worker.process_campaign(camp['id']))
         
@@ -331,7 +388,6 @@ class FinancialSyncProcessor:
                     df[col] = pd.to_datetime(df[col], errors='coerce').fillna(datetime.now())
 
             # Convert back to list of dicts for the existing ClickHouse service interface
-            # (In a purely optimized scenario, we would use client.insert_df, but we stick to the service contract)
             records = df.to_dict('records')
             
             ch_service.insert_reports(records)
