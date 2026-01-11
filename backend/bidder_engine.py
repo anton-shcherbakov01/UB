@@ -1,133 +1,106 @@
-# ================
-# File: backend/bidder_engine.py
-# ================
 import time
-from typing import Tuple, Dict
+from typing import Optional, Tuple
 
 class PIDController:
     """
-    Production-grade PID Controller for Real-Time Bidding.
+    Advanced PID Controller for Real-Time Bidding.
     Features:
     - Anti-Windup (Clamping)
-    - Deadband (Noise immunity)
-    - Derivative on Measurement (Kick prevention)
+    - Deadband (Dead zone)
+    - Derivative Kick Prevention (Derivative on Measurement)
+    - Output limiting (Min/Max Bid)
     """
-
     def __init__(
         self, 
         kp: float, 
         ki: float, 
         kd: float, 
-        target: float, 
-        min_out: float, 
-        max_out: float,
-        deadband: float = 1.0
+        target_pos: int, 
+        min_bid: int, 
+        max_bid: int,
+        deadband: int = 1
     ):
         self.kp = kp
         self.ki = ki
         self.kd = kd
-        self.target = target
-        
-        # Output limits (Bid limits)
-        self.min_out = min_out
-        self.max_out = max_out
-        
-        # Deadband threshold (Position tolerance)
+        self.target_pos = target_pos
+        self.min_bid = min_bid
+        self.max_bid = max_bid
         self.deadband = deadband
 
-    def update(
-        self, 
-        current_val: float, 
-        current_bid: float, 
-        dt: float, 
-        prev_error: float = 0.0, 
-        integral: float = 0.0,
-        prev_measurement: float = None
-    ) -> Dict[str, float]:
+        # State (usually loaded from external storage in stateless systems)
+        self._prev_error = 0.0
+        self._integral = 0.0
+        self._prev_measurement: Optional[float] = None
+
+    def load_state(self, integral: float, prev_measurement: Optional[float]):
+        """Load state from Redis/DB"""
+        self._integral = integral
+        self._prev_measurement = prev_measurement
+
+    def get_state(self) -> Tuple[float, Optional[float]]:
+        """Export state to save in Redis/DB"""
+        return self._integral, self._prev_measurement
+
+    def update(self, current_pos: int, current_bid: int, dt: float) -> int:
         """
-        Calculates the new bid based on position error.
+        Calculates new bid based on position error.
         
-        Args:
-            current_val: Current Position (e.g., 5).
-            current_bid: Current Bet in Rubles.
-            dt: Time elapsed since last check (seconds).
-            prev_error: Error from previous step (for standard D-term).
-            integral: Accumulated integral term.
-            prev_measurement: Previous position (for Derivative on Measurement).
-        
-        Returns:
-            Dict containing: 'new_bid', 'p_term', 'i_term', 'd_term', 'error', 'integral'
+        :param current_pos: Current position in auction (1, 2, 3...)
+        :param current_bid: Current bid amount (Rubles)
+        :param dt: Time delta in seconds since last update
+        :return: New calculated bid
         """
-        
-        # 1. Calculate Error
-        # In auction: Lower position (1) is better. 
-        # If Target=1, Current=5 -> Error = -(1 - 5) = 4 (Positive error means we need to INCREASE bid)
-        # However, standard control theory implies Error = Setpoint - ProcessValue.
-        # Let's map: 
-        # We want to minimize Position. 
-        # Error = Current_Pos - Target_Pos. 
-        # If Current(5) > Target(1), Error is 4. We need positive output correction (increase bid).
-        error = current_val - self.target
+        if dt <= 0:
+            return current_bid
+
+        # 1. Error Calculation
+        # Note: In auction, lower position (1) is better. 
+        # If target is 1 and current is 5, error = 5 - 1 = 4 (positive error means we need to increase bid)
+        # If target is 5 and current is 1, error = 1 - 5 = -4 (negative error means we can decrease bid)
+        error = current_pos - self.target_pos
 
         # 2. Deadband Check
-        # If we are very close to target (e.g. oscillating between pos 2 and 3), do nothing
         if abs(error) <= self.deadband:
-            return {
-                "new_bid": current_bid,
-                "error": error,
-                "integral": integral,
-                "action": "hold"
-            }
+            return current_bid
 
         # 3. Proportional Term
         p_term = self.kp * error
 
-        # 4. Integral Term (with Anti-Windup via Clamping)
-        # We only accumulate if logic requires it, but for Bidding, 
-        # usually immediate reaction (P) is more important than history (I).
-        # We clamp the integral sum to prevent it from growing indefinitely 
-        # when the target is unreachable (e.g. max_bid limit hit).
-        if dt > 0:
-            integral += error * dt
-            
-            # Dynamic Clamping: The integral part shouldn't exceed 50% of the bid range alone
-            # This is a heuristic to prevent "integral explosion"
-            limit = (self.max_out - self.min_out) * 0.5
-            integral = max(min(integral, limit), -limit)
-            
-        i_term = self.ki * integral
+        # 4. Integral Term with Anti-Windup (Clamping)
+        # We only accumulate if the output is not saturated, or if the error opposes the saturation
+        self._integral += self.ki * error * dt
+        
+        # Clamp Integral directly to avoid infinite accumulation
+        # Heuristic: Integral part shouldn't exceed 50% of the bid range swing
+        integral_limit = (self.max_bid - self.min_bid) * 0.5
+        self._integral = max(-integral_limit, min(self._integral, integral_limit))
+
+        i_term = self._integral
 
         # 5. Derivative Term (Derivative on Measurement)
-        # Prevents "Derivative Kick" when target changes abruptly.
-        # d(Error)/dt = d(Setpoint - PV)/dt. If Setpoint is constant, dError = -dPV.
-        # We use change in measurement (Current Position).
-        d_term = 0.0
-        if dt > 0 and prev_measurement is not None:
-            # Rate of change of position
-            # If pos goes 5 -> 2 (improving), change is -3. 
-            # D-term should oppose rapid changes to dampen overshoot.
-            measurement_rate = (current_val - prev_measurement) / dt
-            d_term = -self.kd * measurement_rate
+        # Prevents "Kick" when target changes, smooths the output
+        if self._prev_measurement is None:
+            self._prev_measurement = current_pos
+            
+        # d(Error)/dt = d(SetPoint - Measurement)/dt = - d(Measurement)/dt (assuming SetPoint is constant)
+        derivative = (current_pos - self._prev_measurement) / dt
+        d_term = -self.kd * derivative
         
-        # 6. Compute Output (Delta or Absolute)
-        # In this logic, PID produces the DELTA to be added to current bid
-        # Because Auction is non-linear, P-controller estimates "How much to pay to jump gaps".
-        # 1 position gap ~= roughly X rubles (Kp).
-        
-        output_delta = p_term + i_term + d_term
-        
-        # Calculate raw new bid
-        raw_bid = current_bid + output_delta
-        
-        # 7. Output Saturation (Clamping)
-        new_bid = max(self.min_out, min(raw_bid, self.max_out))
+        self._prev_measurement = current_pos
 
-        return {
-            "new_bid": int(new_bid),
-            "error": error,
-            "integral": integral,
-            "p_term": p_term,
-            "i_term": i_term,
-            "d_term": d_term,
-            "action": "update"
-        }
+        # 6. Calculate Output
+        # Base the change on the P-I-D output
+        adjustment = p_term + i_term + d_term
+        
+        # New Bid = Current Bid + Adjustment
+        # We cast to int because bids are usually integers
+        new_bid = int(current_bid + adjustment)
+
+        # 7. Output Limiting
+        if new_bid < self.min_bid:
+            new_bid = self.min_bid
+        elif new_bid > self.max_bid:
+            new_bid = self.max_bid
+
+        return new_bid

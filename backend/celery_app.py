@@ -1,5 +1,6 @@
 import os
 from celery import Celery
+from celery.schedules import crontab
 
 # Получаем URL из окружения (по умолчанию локальный Docker)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -41,5 +42,24 @@ celery_app.conf.update(
     # Брать по 1 задаче за раз (важно для долгих задач парсинга)
     worker_prefetch_multiplier=1, 
     # Подтверждать выполнение ТОЛЬКО после завершения
-    task_acks_late=True, 
+    task_acks_late=True,
+
+    # --- Планировщик задач (Celery Beat) ---
+    beat_schedule={
+        # 1. Обновление цен конкурентов (раз в час)
+        "update-monitored-items-hourly": {
+            "task": "update_all_monitored_items",
+            "schedule": crontab(minute=0), # Каждый час в :00
+        },
+        # 2. Проверка новых заказов (каждые 10 минут)
+        "check-new-orders-every-10m": {
+            "task": "check_new_orders",
+            "schedule": 600.0, 
+        },
+        # 3. [NEW] Биддер: Мастер-процесс (каждые 5 минут)
+        "bidder-producer-every-5m": {
+            "task": "bidder_producer_task",
+            "schedule": 300.0,
+        },
+    }
 )
