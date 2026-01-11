@@ -41,7 +41,7 @@ class User(Base):
 class BidderConfig(Base):
     """
     Конфигурация автобиддера для конкретной кампании.
-    Хранит настройки PID-регулятора и текущее состояние.
+    Хранит настройки PID-регулятора.
     """
     __tablename__ = "bidder_configs"
     id = Column(Integer, primary_key=True, index=True)
@@ -56,22 +56,45 @@ class BidderConfig(Base):
     min_bid = Column(Integer, default=125)       # Минимальная ставка
     keyword = Column(String, nullable=True)      # Ключевое слово для проверки позиций
     
-    # PID коэффициенты (настраиваемые)
-    kp = Column(Float, default=1.0)
-    ki = Column(Float, default=0.1)
-    kd = Column(Float, default=0.05)
+    # Пороги эффективности
+    max_cpa = Column(Float, default=1000.0)      # Максимальная цена за действие (опционально)
+    min_ctr = Column(Float, default=1.5)         # Минимальный CTR для работы
     
-    # Состояние PID (для интегральной составляющей)
-    accumulated_error = Column(Float, default=0.0)
-    last_error = Column(Float, default=0.0)
+    # PID коэффициенты (настраиваемые)
+    kp = Column(Float, default=2.0)              # Увеличил дефолт для агрессивности
+    ki = Column(Float, default=0.2)
+    kd = Column(Float, default=0.1)
     
     is_active = Column(Boolean, default=False)   # Включен ли биддер
-    safe_mode = Column(Boolean, default=True)    # Safe Mode: только логирование, без реальной ставки
+    safe_mode = Column(Boolean, default=True)    # Safe Mode: только логирование
     
     last_check = Column(DateTime, default=datetime.utcnow)
-    last_log = Column(Text, nullable=True)       # Последнее действие (текстом)
-
+    
     user = relationship("User", back_populates="bidder_configs")
+    logs = relationship("BidderLog", back_populates="config", cascade="all, delete-orphan")
+
+class BidderLog(Base):
+    """
+    Лог операций биддера.
+    Используется для аналитики и демонстрации работы Safe Mode.
+    """
+    __tablename__ = "bidder_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    config_id = Column(Integer, ForeignKey("bidder_configs.id"))
+    
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    current_pos = Column(Integer)
+    target_pos = Column(Integer)
+    
+    old_bid = Column(Integer)
+    calculated_bid = Column(Integer) # Какую ставку хотел поставить PID
+    applied_bid = Column(Integer)    # Какую ставку реально отправили (в SafeMode мб 0 изменений)
+    
+    money_saved = Column(Float, default=0.0) # Оценка экономии
+    action_type = Column(String) # 'update', 'hold', 'safe_mode', 'paused_low_ctr'
+    message = Column(String, nullable=True)
+    
+    config = relationship("BidderConfig", back_populates="logs")
 
 class ProductCost(Base):
     __tablename__ = "product_costs"
@@ -82,6 +105,7 @@ class ProductCost(Base):
     fulfillment_cost = Column(Float, default=0.0)
     external_marketing = Column(Float, default=0.0)
     tax_rate = Column(Float, default=6.0)
+    fixed_costs = Column(Float, default=0.0)
     updated_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="costs")
 
