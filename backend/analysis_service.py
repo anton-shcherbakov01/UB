@@ -13,18 +13,99 @@ from database import ProductCost
 from clickhouse_models import ch_service
 from forecasting import forecast_demand
 
+# ML Imports (Lazy Loading pattern to prevent crash if libs are missing)
+try:
+    from sentence_transformers import SentenceTransformer
+    from sklearn.cluster import KMeans
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+
 logger = logging.getLogger("AI-Service")
 
 class AnalysisService:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
         self.ai_url = "https://api.artemox.com/v1/chat/completions"
+        self._embedder = None # Lazy load model
         try:
             ch_service.connect()
         except Exception as e:
             logger.warning(f"ClickHouse init failed (will retry on usage): {e}")
 
-    # --- FORECASTING & SUPPLY CHAIN METRICS (NEW) ---
+    # --- SEMANTIC CLUSTERING (NEW) ---
+
+    def _get_embedder(self):
+        """Singleton pattern for heavy BERT model"""
+        if not ML_AVAILABLE:
+            raise ImportError("Install 'sentence-transformers' and 'scikit-learn'")
+        if self._embedder is None:
+            logger.info("Loading BERT model for clustering...")
+            # Using a lightweight model suitable for CPU
+            self._embedder = SentenceTransformer('all-MiniLM-L6-v2')
+        return self._embedder
+
+    def cluster_keywords(self, keywords: List[str]) -> Dict[str, Any]:
+        """
+        Кластеризация ключевых слов по семантической близости (BERT + K-Means).
+        Позволяет группировать запросы по интенту (смыслу), а не просто по вхождению слов.
+        """
+        if not keywords:
+            return {"status": "error", "message": "Empty keywords list"}
+        
+        if not ML_AVAILABLE:
+            return {
+                "status": "error", 
+                "message": "ML libraries missing. Install sentence-transformers & scikit-learn."
+            }
+
+        try:
+            model = self._get_embedder()
+            
+            # 1. Векторизация (Embeddings)
+            embeddings = model.encode(keywords)
+            
+            # 2. Определение оптимального числа кластеров
+            # Эвристика: ~5 ключей на кластер, минимум 2 кластера (если ключей > 5)
+            n_clusters = max(2, len(keywords) // 5)
+            if len(keywords) < 5:
+                n_clusters = 1
+            
+            # 3. Кластеризация K-Means
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            kmeans.fit(embeddings)
+            labels = kmeans.labels_
+            
+            # 4. Группировка результатов
+            clusters = {}
+            for keyword, label in zip(keywords, labels):
+                lbl_str = str(label)
+                if lbl_str not in clusters:
+                    clusters[lbl_str] = []
+                clusters[lbl_str].append(keyword)
+            
+            # 5. Нейминг кластеров (берем самое короткое слово как название темы)
+            named_clusters = []
+            for _, kw_list in clusters.items():
+                topic_name = min(kw_list, key=len) # Самое короткое слово ~ тема
+                named_clusters.append({
+                    "topic": topic_name,
+                    "keywords": kw_list,
+                    "count": len(kw_list)
+                })
+                
+            return {
+                "status": "success",
+                "clusters": named_clusters,
+                "total_keywords": len(keywords),
+                "n_clusters": n_clusters
+            }
+
+        except Exception as e:
+            logger.error(f"Clustering failed: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # --- FORECASTING & SUPPLY CHAIN METRICS ---
 
     def calculate_supply_metrics(
         self, 
@@ -37,23 +118,14 @@ class AnalysisService:
     ) -> Dict[str, Any]:
         """
         Расчет точки заказа (ROP) и страхового запаса (Safety Stock).
-        
-        Формула Safety Stock (SS):
-        SS = Z * sqrt( (Avg_Lead_Time * sigma_Demand^2) + (Avg_Demand^2 * sigma_Lead_Time^2) )
-        
-        Формула Reorder Point (ROP):
-        ROP = (Demand_During_Lead_Time) + SS
         """
         
         # 1. Определяем спрос (Demand)
-        # Если есть прогноз от Prophet, используем его среднее значение на горизонте Lead Time
         if forecast_data and forecast_data.get("status") == "success":
             avg_daily_demand = forecast_data.get("daily_avg_forecast", 0)
             forecast_points = forecast_data.get("forecast_points", [])
-            # Сумма прогноза именно на время доставки (Lead Time)
             demand_during_lead_time = sum([p['yhat'] for p in forecast_points[:lead_time_days]])
         else:
-            # Fallback: Считаем среднее по истории, если нет прогноза
             if not sales_history:
                 return {"status": "error", "message": "No data"}
             values = [x['qty'] for x in sales_history if x['qty'] > 0]
@@ -62,7 +134,7 @@ class AnalysisService:
             avg_daily_demand = np.mean(values)
             demand_during_lead_time = avg_daily_demand * lead_time_days
 
-        # 2. Считаем стандартное отклонение спроса (sigma_Demand) по истории
+        # 2. Считаем стандартное отклонение спроса (sigma_Demand)
         if sales_history:
             hist_values = [x['qty'] for x in sales_history]
             sigma_demand = np.std(hist_values) if len(hist_values) > 1 else 0
@@ -70,20 +142,16 @@ class AnalysisService:
             sigma_demand = 0
 
         # 3. Расчет Safety Stock
-        # (Avg_Lead_Time * sigma_Demand^2)
         term1 = lead_time_days * (sigma_demand ** 2)
-        # (Avg_Demand^2 * sigma_Lead_Time^2)
         term2 = (avg_daily_demand ** 2) * (lead_time_sigma ** 2)
-        
         safety_stock = service_level_z * math.sqrt(term1 + term2)
         
         # 4. Расчет ROP
         rop = demand_during_lead_time + safety_stock
         
-        # 5. Интерпретация для пользователя
+        # 5. Интерпретация
         days_left = current_stock / avg_daily_demand if avg_daily_demand > 0 else 999
         
-        # Округляем
         safety_stock = int(math.ceil(safety_stock))
         rop = int(math.ceil(rop))
         days_left = int(days_left)
@@ -118,7 +186,7 @@ class AnalysisService:
             }
         }
 
-    # --- P&L ANALYTICS (EXISTING) ---
+    # --- P&L ANALYTICS ---
 
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
         ch_query = """
@@ -232,8 +300,8 @@ class AnalysisService:
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
         Комплексный анализ отзывов с использованием DeepSeek-V3.
-        1. ABSA (Aspect-Based Sentiment Analysis): Сущности + Атрибуты с оценкой 1-9.
-        2. Психографическое профилирование: Классификация аудитории (Рационал, Эмоционал, Скептик).
+        1. ABSA (Aspect-Based Sentiment Analysis).
+        2. Психографическое профилирование.
         """
         if not reviews: 
             return {
@@ -244,9 +312,8 @@ class AnalysisService:
                 "strategy": ["Соберите первые отзывы"]
             }
 
-        # 1. Подготовка контекста (Smart Context Packing)
         reviews_text = ""
-        for r in reviews[:40]: # Берем чуть больше для статистики
+        for r in reviews[:40]:
             clean_text = r['text'].replace('\n', ' ').strip()
             if len(clean_text) > 5:
                 text = f"- {clean_text} (Оценка: {r['rating']})\n"
@@ -255,7 +322,6 @@ class AnalysisService:
                 else: 
                     break
         
-        # 2. Промпт для DeepSeek-V3 (Strategy 2026)
         prompt = f"""
         Роль: Ты Lead Data Analyst в E-commerce. Твоя специализация — ABSA и Психография.
         
@@ -272,12 +338,11 @@ class AnalysisService:
 
         НАПРАВЛЕНИЕ 2: Психографическое профилирование аудитории
         - Определи, к какому типу относится большинство авторов отзывов:
-          A. Rational (Рациональный): Факты, цифры, срок службы, качество сборки, соответствие описанию.
-          B. Emotional (Эмоциональный): Стиль, восторг, упаковка, тактильные ощущения, "вау-эффект", капс, эмодзи.
-          C. Skeptic (Скептик): Сомнения, поиск брака, проверка гарантий, сравнение с конкурентами, недоверие.
+          A. Rational (Рациональный): Факты, цифры, срок службы.
+          B. Emotional (Эмоциональный): Стиль, восторг, упаковка, "вау-эффект".
+          C. Skeptic (Скептик): Сомнения, поиск брака, проверка гарантий.
         - Рассчитай примерный процент (%) каждого типа в выборке.
         - На основе ДОМИНИРУЮЩЕГО типа сгенерируй рекомендацию для инфографики (Infographic Tip).
-          (Например: для Скептиков — "Добавить слайд с сертификатом и гарантией 2 года").
 
         Формат ответа (СТРОГО JSON):
         {{
@@ -310,13 +375,11 @@ class AnalysisService:
             "strategy": ["Повторите попытку"]
         }
         
-        # 3. Вызов AI с температурой 0.5 для аналитической точности
         ai_response = self._call_ai(prompt, fallback, temperature=0.5)
         
-        # 4. Backward Compatibility & Post-Processing
+        # Post-Processing
         aspects = ai_response.get("aspects", [])
         
-        # Генерируем legacy поля для старых фронтов
         negative_aspects = sorted(
             [a for a in aspects if a.get('sentiment_score', 5) < 4.5], 
             key=lambda x: x['sentiment_score']
@@ -332,14 +395,51 @@ class AnalysisService:
         return ai_response
 
     def generate_product_content(self, keywords: list, tone: str, title_len: int = 100, desc_len: int = 1000):
+        """
+        GEO-Optimized Generation (Generative Engine Optimization).
+        Создает контент, оптимизированный для AI-поисковиков (Perplexity, SGE, Yandex GPT).
+        Включает структурированные данные и FAQ.
+        """
         kw_str = ", ".join(keywords)
         prompt = f"""
-        Ты профессиональный SEO-копирайтер для Wildberries.
-        Задача: Написать продающий заголовок и описание товара.
-        Параметры: Ключевые слова: {kw_str}. Тон: {tone}. Заголовок: ~{title_len} симв. Описание: ~{desc_len} симв.
-        Ответ верни СТРОГО в JSON: {{ "title": "...", "description": "..." }}
+        Роль: Ты профессиональный SEO-копирайтер уровня Senior, специализирующийся на GEO (Generative Engine Optimization).
+        Твоя задача — создать контент для Wildberries, который легко считывается AI-алгоритмами и ранжируется в SGE.
+
+        Входные данные:
+        - Ключевые слова: {kw_str}
+        - Тон (Tone of Voice): {tone}
+        - Лимит заголовка: ~{title_len} симв.
+        - Лимит описания: ~{desc_len} симв.
+
+        Требования к структуре (GEO Standards):
+        1. Extractability: Используй маркированные списки и четкие сущности.
+        2. Authority: Добавь таблицу характеристик для сравнения.
+        3. User Intent: Добавь блок FAQ (3-5 вопросов), закрывающий боли Рационалов, Эмоционалов и Скептиков.
+
+        Верни ответ СТРОГО в формате JSON:
+        {{
+            "title": "Продающий заголовок с вхождением топ ключей",
+            "description": "Основной текст описания с LSI-фразами и структурированными списками...",
+            "structured_features": {{
+                "Материал": "...",
+                "Назначение": "...",
+                "Особенность": "..."
+            }},
+            "faq": [
+                {{ "question": "Вопрос клиента", "answer": "Экспертный ответ" }},
+                {{ "question": "Вопрос про гарантию", "answer": "Ответ про надежность" }}
+            ]
+        }}
         """
-        return self._call_ai(prompt, {"title": "Ошибка генерации", "description": "Не удалось сгенерировать текст"}, temperature=0.7)
+        
+        fallback = {
+            "title": "Ошибка генерации", 
+            "description": "Не удалось сгенерировать текст", 
+            "structured_features": {}, 
+            "faq": []
+        }
+        
+        return self._call_ai(prompt, fallback, temperature=0.7)
 
     def _call_ai(self, prompt: str, fallback_json: dict, temperature: float = 0.7):
         try:
@@ -356,7 +456,7 @@ class AnalysisService:
             result = resp.json()
             content = result['choices'][0]['message']['content']
             try:
-                # Очистка Markdown-блоков кода (```json ... ```) перед парсингом
+                # Очистка Markdown-блоков кода
                 content = re.sub(r'^```json\s*', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^```\s*', '', content, flags=re.MULTILINE)
                 content = content.strip()
@@ -364,25 +464,8 @@ class AnalysisService:
                 json_match = re.search(r'\{[\s\S]*\}', content)
                 if json_match:
                     parsed = json.loads(json_match.group(0))
-                    for k, v in parsed.items():
-                        if isinstance(v, list): 
-                            # Рекурсивная очистка строк внутри списков/объектов не помешает, но для MVP хватит верхнего уровня
-                            cleaned_list = []
-                            for item in v:
-                                if isinstance(item, str):
-                                    cleaned_list.append(self.clean_ai_text(item))
-                                elif isinstance(item, dict):
-                                    # Очистка внутри словарей (для aspects)
-                                    cleaned_dict = {}
-                                    for dk, dv in item.items():
-                                        cleaned_dict[dk] = self.clean_ai_text(str(dv)) if isinstance(dv, str) else dv
-                                    cleaned_list.append(cleaned_dict)
-                                else:
-                                    cleaned_list.append(item)
-                            parsed[k] = cleaned_list
-                        elif isinstance(v, str): 
-                            parsed[k] = self.clean_ai_text(v)
-                    return parsed
+                    # Рекурсивная очистка
+                    return self._clean_recursive(parsed)
                 else: 
                     logger.warning(f"No JSON found in AI response: {content[:100]}...")
                     return fallback_json
@@ -392,5 +475,15 @@ class AnalysisService:
         except Exception as e:
             logger.error(f"AI Connection Error: {e}")
             return fallback_json
+
+    def _clean_recursive(self, data):
+        if isinstance(data, dict):
+            return {k: self._clean_recursive(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._clean_recursive(i) for i in data]
+        elif isinstance(data, str):
+            return self.clean_ai_text(data)
+        else:
+            return data
 
 analysis_service = AnalysisService()

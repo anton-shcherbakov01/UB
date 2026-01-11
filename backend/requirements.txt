@@ -18,3 +18,5 @@ prophet
 holidays
 numpy
 scipy
+sentence-transformers
+scikit-learn

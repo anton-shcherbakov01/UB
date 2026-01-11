@@ -613,8 +613,9 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
 
 @celery_app.task(bind=True, name="generate_seo_task")
 def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: int = None, title_len: int = 100, desc_len: int = 1000):
-    self.update_state(state='PROGRESS', meta={'status': 'Генерация контента...'})
+    self.update_state(state='PROGRESS', meta={'status': 'Генерация GEO контента...'})
     
+    # Теперь возвращает JSON со структурой: title, description, features_table, faq
     content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
     
     final_result = {
@@ -622,14 +623,30 @@ def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: in
         "sku": sku,
         "keywords": keywords,
         "tone": tone,
-        "generated_content": content
+        "generated_content": content # Содержит title, description, structured_features, faq
     }
     
     if user_id and sku > 0:
-        title = f"SEO: {content.get('title', 'Без заголовка')[:20]}..."
+        title = f"GEO: {content.get('title', 'Без заголовка')[:20]}..."
         save_history_sync(user_id, sku, 'seo', title, final_result)
         
     return final_result
+
+@celery_app.task(bind=True, name="cluster_keywords_task")
+def cluster_keywords_task(self, keywords: List[str], user_id: int = None, sku: int = 0):
+    """
+    Тяжелая задача кластеризации (загрузка BERT модели + K-Means).
+    """
+    self.update_state(state='PROGRESS', meta={'status': 'Загрузка BERT модели...'})
+    
+    # Вызов метода кластеризации (он лениво загрузит модель)
+    result = analysis_service.cluster_keywords(keywords)
+    
+    if user_id and sku > 0:
+        title = f"Clusters: {len(keywords)} keys ({result.get('n_clusters', 0)} groups)"
+        save_history_sync(user_id, sku, 'clusters', title, result)
+        
+    return result
 
 @celery_app.task(bind=True, name="check_seo_position_task")
 def check_seo_position_task(self, sku: int, keyword: str, user_id: int):

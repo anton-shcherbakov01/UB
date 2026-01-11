@@ -474,7 +474,6 @@ async def parse_seo_keywords(sku: int, user: User = Depends(get_current_user)):
         raise HTTPException(400, res.get("message"))
     return res
 
-# [UPDATED] Модель запроса с настройками длины
 class SeoGenRequest(BaseModel):
     sku: int
     keywords: List[str]
@@ -484,8 +483,19 @@ class SeoGenRequest(BaseModel):
 
 @app.post("/api/seo/generate")
 async def generate_seo_content(req: SeoGenRequest, user: User = Depends(get_current_user)):
-    # [UPDATED] Передаем параметры длины в задачу
     task = generate_seo_task.delay(req.keywords, req.tone, req.sku, user.id, req.title_len, req.desc_len)
+    return {"status": "accepted", "task_id": task.id}
+
+class ClusterRequest(BaseModel):
+    sku: int
+    keywords: List[str]
+
+@app.post("/api/seo/cluster")
+async def cluster_keywords_endpoint(req: ClusterRequest, user: User = Depends(get_current_user)):
+    """
+    Запуск задачи семантической кластеризации.
+    """
+    task = cluster_keywords_task.delay(req.keywords, user.id, req.sku)
     return {"status": "accepted", "task_id": task.id}
 
 # --- HISTORY ---

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { API_URL, getTgHeaders } from '../config';
-import { Brain, Wand2, BarChart3, Search, Star, ThumbsDown, Crown, X, Loader2, ChevronLeft, Copy } from 'lucide-react';
+import { Brain, Wand2, BarChart3, Search, Star, ThumbsDown, Crown, X, Loader2, ChevronLeft, Copy, Table, HelpCircle, Layers, BrainCircuit } from 'lucide-react';
 
-const CopyableBlock = ({ label, text }) => (
-  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-3 group relative">
+const CopyableBlock = ({ label, text, className="" }) => (
+  <div className={`bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-3 group relative ${className}`}>
     <div className="flex justify-between items-center mb-2">
         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
         <button 
@@ -25,7 +25,9 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
     useEffect(() => {
         if (isOpen) {
             setLoading(true);
-            fetch(`${API_URL}/api/user/history?request_type=${type}`, { 
+            // Если тип не указан, грузим все (или можно сделать фильтр "seo" включающий и "clusters")
+            const url = type ? `${API_URL}/api/user/history?request_type=${type}` : `${API_URL}/api/user/history`;
+            fetch(url, { 
                 headers: getTgHeaders()
             })
             .then(r => r.json())
@@ -41,6 +43,7 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
             case 'ai': return <Brain size={18}/>;
             case 'seo': return <Wand2 size={18}/>;
             case 'price': return <BarChart3 size={18}/>;
+            case 'clusters': return <BrainCircuit size={18} className="text-indigo-600"/>;
             default: return <Search size={18}/>;
         }
     };
@@ -48,17 +51,85 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
     const renderDetails = (item) => {
         const data = item.data;
         
+        // --- Clustering History ---
+        if (item.type === 'clusters' && data.clusters) {
+            return (
+                 <div className="space-y-4 animate-in fade-in">
+                    <div className="flex gap-2 mb-2">
+                         <span className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-xs font-bold">
+                            Всего слов: {data.total_keywords}
+                         </span>
+                         <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold">
+                            Кластеров: {data.n_clusters}
+                         </span>
+                    </div>
+                    {data.clusters.map((c, i) => (
+                        <div key={i} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                            <div className="flex items-center gap-2 mb-3">
+                                <Layers size={16} className="text-indigo-500"/>
+                                <h4 className="font-bold text-sm capitalize">{c.topic}</h4>
+                                <span className="ml-auto text-xs bg-slate-100 px-2 py-0.5 rounded text-slate-500">{c.count}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {c.keywords.map((k, j) => (
+                                    <span key={j} className="text-[10px] bg-slate-50 text-slate-600 px-2 py-1 rounded-md border border-slate-100">{k}</span>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                 </div>
+            )
+        }
+
         // --- SEO History ---
         if (item.type === 'seo' && data.generated_content) {
+            const content = data.generated_content;
             return (
-                <div className="space-y-2 animate-in fade-in">
+                <div className="space-y-4 animate-in fade-in">
                     <div className="flex flex-wrap gap-1 mb-4">
-                        {data.keywords?.map((k, i) => (
+                        {data.keywords?.slice(0, 10).map((k, i) => (
                             <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg text-[10px] font-bold">{k}</span>
                         ))}
+                        {data.keywords?.length > 10 && <span className="text-[10px] text-slate-400 p-1">+{data.keywords.length - 10}</span>}
                     </div>
-                    <CopyableBlock label="Заголовок" text={data.generated_content.title} />
-                    <CopyableBlock label="Описание" text={data.generated_content.description} />
+
+                    <CopyableBlock label="Заголовок" text={content.title} />
+                    
+                    {/* Features Table */}
+                    {content.structured_features && (
+                        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                            <h4 className="font-bold text-xs text-slate-500 uppercase mb-2 flex items-center gap-2">
+                                <Table size={14}/> Характеристики
+                            </h4>
+                            <div className="text-xs">
+                                {Object.entries(content.structured_features).map(([k, v], i) => (
+                                    <div key={i} className="flex border-b border-slate-50 last:border-0 py-1.5">
+                                        <span className="w-1/3 text-slate-400">{k}</span>
+                                        <span className="w-2/3 font-medium text-slate-700">{v}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <CopyableBlock label="Описание" text={content.description} />
+
+                    {/* FAQ */}
+                    {content.faq && (
+                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                             <h4 className="font-bold text-xs text-slate-500 uppercase mb-3 flex items-center gap-2">
+                                <HelpCircle size={14}/> FAQ
+                            </h4>
+                            <div className="space-y-3">
+                                {content.faq.map((f, i) => (
+                                    <div key={i}>
+                                        <div className="font-bold text-xs text-slate-700 mb-1">❓ {f.question}</div>
+                                        <div className="text-xs text-slate-500 leading-relaxed">{f.answer}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             )
         }
@@ -74,6 +145,13 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
                              <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
                          </div>
                     </div>
+                    
+                    {data.ai_analysis.global_summary && (
+                        <div className="bg-slate-800 p-3 rounded-xl text-xs text-slate-300 italic">
+                            "{data.ai_analysis.global_summary}"
+                        </div>
+                    )}
+
                     <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
                          <h4 className="font-bold text-red-600 text-sm mb-2 flex items-center gap-2"><ThumbsDown size={14}/> Жалобы</h4>
                          <ul className="text-sm space-y-2 text-slate-700">
@@ -90,11 +168,10 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
             )
         }
 
-        // --- Price/Monitor History (Beautiful Card) ---
+        // --- Price/Monitor History ---
         if (item.type === 'price' && data.prices) {
             return (
                 <div className="space-y-4 animate-in fade-in">
-                    {/* Header */}
                     <div className="flex gap-4 items-start">
                         {data.image && <img src={data.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
                         <div>
@@ -103,8 +180,6 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
                             <div className="mt-1 text-xs bg-slate-100 inline-block px-2 py-1 rounded text-slate-500">Остаток: {data.stock_qty} шт</div>
                         </div>
                     </div>
-
-                    {/* Prices Card */}
                     <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-sm font-medium text-slate-500">WB Кошелек</span>
@@ -119,25 +194,11 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
                             <span className="text-xs text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
                         </div>
                     </div>
-
-                    {/* Metrics */}
-                    {data.metrics && (
-                        <div className="grid grid-cols-2 gap-3">
-                            <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-                                <div className="text-[10px] text-emerald-600 font-bold uppercase">Скидка</div>
-                                <div className="text-lg font-black text-emerald-700">{data.metrics.total_discount_percent}%</div>
-                            </div>
-                            <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100">
-                                <div className="text-[10px] text-indigo-600 font-bold uppercase">Выгода</div>
-                                <div className="text-lg font-black text-indigo-700">{data.metrics.wallet_benefit} ₽</div>
-                            </div>
-                        </div>
-                    )}
                 </div>
             )
         }
 
-        // --- Fallback (JSON) ---
+        // --- Fallback ---
         return (
             <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto max-h-[60vh] text-slate-600 font-mono">
                 {JSON.stringify(data, null, 2)}
@@ -149,12 +210,12 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
         <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-lg sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl relative max-h-[85vh] flex flex-col">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg">История</h3>
+                    <h3 className="font-bold text-lg flex items-center gap-2">История {type && type !== 'clusters' && getTypeIcon(type)}</h3>
                     <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20} /></button>
                 </div>
 
                 {!selectedItem ? (
-                    <div className="flex-1 overflow-y-auto space-y-3 pb-4">
+                    <div className="flex-1 overflow-y-auto space-y-3 pb-4 custom-scrollbar">
                         {loading ? (
                             <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
                         ) : history.length === 0 ? (
@@ -173,7 +234,7 @@ const HistoryModule = ({ type, isOpen, onClose }) => {
                         )}
                     </div>
                 ) : (
-                    <div className="flex-1 overflow-y-auto pb-4">
+                    <div className="flex-1 overflow-y-auto pb-4 custom-scrollbar">
                         <button onClick={() => setSelectedItem(null)} className="flex items-center gap-1 text-xs font-bold text-slate-400 mb-4 hover:text-indigo-600 transition-colors">
                             <ChevronLeft size={14}/> Назад к списку
                         </button>
