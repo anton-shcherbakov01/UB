@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle } from 'lucide-react';
+import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
@@ -23,6 +23,7 @@ const SeoGeneratorPage = () => {
     const [result, setResult] = useState(null);
     const [error, setError] = useState('');
     const [historyOpen, setHistoryOpen] = useState(false);
+    const [pdfLoading, setPdfLoading] = useState(false);
 
     const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
 
@@ -34,7 +35,7 @@ const SeoGeneratorPage = () => {
             const data = await res.json();
             if (res.status !== 200) throw new Error(data.detail || data.message);
             setKeywords(data.keywords || []); 
-            setClusters(null); // Reset clusters on new fetch
+            setClusters(null);
             setStep(2);
         } catch (e) { setError(e.message); } finally { setLoading(false); }
     };
@@ -104,6 +105,45 @@ const SeoGeneratorPage = () => {
         } catch (e) { setError(e.message); } finally { setLoading(false); setStatus(''); }
     };
 
+    const downloadPdf = async () => {
+        if (!result) return;
+        setPdfLoading(true);
+        try {
+            const payload = {
+                sku: String(sku),
+                title: result.title || "",
+                description: result.description || "",
+                features: result.structured_features || {},
+                faq: result.faq || []
+            };
+
+            const response = await fetch(`${API_URL}/api/report/seo-pdf/generate`, {
+                method: 'POST',
+                headers: {
+                    ...getTgHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error("Ошибка генерации PDF");
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `SEO_Report_${sku}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (e) {
+            alert("Не удалось скачать PDF: " + e.message);
+        } finally {
+            setPdfLoading(false);
+        }
+    };
+
     const CopyButton = ({ text }) => (
         <button onClick={() => {navigator.clipboard.writeText(text); alert("Скопировано!");}} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 rounded-lg">
             <Copy size={16} />
@@ -160,7 +200,6 @@ const SeoGeneratorPage = () => {
 
                         {status && <div className="text-xs text-indigo-600 font-medium bg-indigo-50 p-2 rounded-lg text-center">{status}</div>}
                         
-                        {/* Keywords List / Clusters */}
                         {clusters ? (
                             <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                                 {clusters.map((c, i) => (
@@ -193,7 +232,7 @@ const SeoGeneratorPage = () => {
                             <input 
                                 value={newKeyword}
                                 onChange={e => setNewKeyword(e.target.value)}
-                                placeholder="Добавить свой ключ..."
+                                placeholder="Добавить ключ..."
                                 className="flex-1 bg-slate-50 rounded-xl px-4 py-2 text-sm outline-none"
                             />
                             <button onClick={addKeyword} className="bg-slate-900 text-white px-4 rounded-xl font-bold text-xl">+</button>
@@ -239,6 +278,16 @@ const SeoGeneratorPage = () => {
             {/* STEP 3: Result (GEO Content) */}
             {step === 3 && result && (
                 <div className="space-y-4 animate-in fade-in">
+                    
+                    <button 
+                        onClick={downloadPdf} 
+                        disabled={pdfLoading}
+                        className="w-full bg-slate-800 text-white p-3 rounded-xl font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg"
+                    >
+                        {pdfLoading ? <Loader2 size={16} className="animate-spin"/> : <Download size={16}/>}
+                        Скачать PDF отчет
+                    </button>
+
                     {/* Header */}
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                         <div className="flex justify-between items-center mb-2">
@@ -252,7 +301,7 @@ const SeoGeneratorPage = () => {
                         />
                     </div>
 
-                    {/* Features Table (New) */}
+                    {/* Features Table */}
                     {result.structured_features && Object.keys(result.structured_features).length > 0 && (
                         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                              <div className="flex justify-between items-center mb-3">
@@ -285,7 +334,7 @@ const SeoGeneratorPage = () => {
                         />
                     </div>
 
-                    {/* FAQ (New) */}
+                    {/* FAQ */}
                     {result.faq && result.faq.length > 0 && (
                          <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                             <div className="flex justify-between items-center mb-3">
