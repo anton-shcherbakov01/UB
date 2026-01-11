@@ -10,7 +10,8 @@ logger = logging.getLogger("WB-API-Service")
 class WBApiService:
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
     COMMON_URL = "https://common-api.wildberries.ru/api/v1"
-    ADV_URL = "https://advert-api.wb.ru/adv/v1"
+    ADV_URL = "https://advert-api.wb.ru/adv/v0" # Используем v0 для работы с кампаниями
+    ADV_URL_V1 = "https://advert-api.wb.ru/adv/v1"
     
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 
@@ -34,11 +35,16 @@ class WBApiService:
                         await asyncio.sleep(backoff)
                         backoff *= 2
                     else:
+                        # Log error for debug
+                        txt = await resp.text()
+                        logger.error(f"API Error {resp.status} on {url}: {txt}")
                         return None
             except Exception as e:
+                logger.error(f"Request exc: {e}")
                 await asyncio.sleep(backoff)
         return None
 
+    # ... (методы кэша, orders, stocks остаются прежними, добавляем рекламу) ...
     def _get_cache_key(self, token, method, params):
         token_part = token[-10:] if token else "none"
         param_str = json.dumps(params, sort_keys=True)
@@ -47,13 +53,11 @@ class WBApiService:
     async def _get_cached_or_request(self, session, url, headers, params, use_cache=True):
         if not use_cache:
             return await self._request_with_retry(session, url, headers, params)
-
         cache_key = self._get_cache_key(headers.get("Authorization"), url, params)
         if cache_key in self._cache:
             ts, data = self._cache[cache_key]
             if (datetime.now() - ts).total_seconds() < self._cache_ttl:
                 return data
-        
         data = await self._request_with_retry(session, url, headers, params)
         if data is not None:
             self._cache[cache_key] = (datetime.now(), data)
@@ -80,6 +84,52 @@ class WBApiService:
             orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
             return {"orders_today": orders_res, "stocks": stocks_res}
 
+    # --- МЕТОДЫ РЕКЛАМЫ (BIDDER) ---
+
+    async def get_advert_campaigns(self, token: str):
+        """Получение списка рекламных кампаний"""
+        url = f"{self.ADV_URL}/adverts" # Получение списка РК
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession() as session:
+            # Получаем список (статусы: 9 - идут, 11 - пауза)
+            # Берем статус 9 (активные) и 11 (пауза)
+            params = {"status": 9, "type": 9} # type 9 = Поиск + Каталог (самые частые)
+            data = await self._request_with_retry(session, url, headers, params=params)
+            
+            if not data: return []
+            
+            # Если вернулся список ID, нужно получить детали
+            # API может вернуть просто список объектов или список ID в зависимости от версии
+            return data if isinstance(data, list) else []
+
+    async def get_campaign_info(self, token: str, campaign_id: int):
+        """Получение детальной инфо о ставке и статусе"""
+        url = f"{self.ADV_URL}/advert"
+        headers = {"Authorization": token}
+        params = {"id": campaign_id}
+        
+        async with aiohttp.ClientSession() as session:
+            return await self._request_with_retry(session, url, headers, params=params)
+
+    async def set_campaign_bid(self, token: str, campaign_id: int, bid: int, param_type: int = 6):
+        """
+        Установка ставки (CPM).
+        param_type: 6 (Поиск), 7 (Каталог). Обычно меняем 6 для поиска.
+        """
+        url = f"{self.ADV_URL}/cpm"
+        headers = {"Authorization": token, "Content-Type": "application/json"}
+        payload = {
+            "advertId": campaign_id,
+            "type": param_type, 
+            "cpm": bid
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            res = await self._request_with_retry(session, url, headers, json_data=payload, method='POST')
+            return res is not None
+
+    # --- EXISTING METHODS ---
     async def get_new_orders_since(self, token: str, last_check: datetime):
         if not last_check: last_check = datetime.now() - timedelta(hours=1)
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -95,7 +145,6 @@ class WBApiService:
             return new_orders
 
     async def get_my_stocks(self, token: str):
-        """Получение текущих остатков"""
         if not token: return []
         today = datetime.now().strftime("%Y-%m-%dT00:00:00")
         url = f"{self.BASE_URL}/stocks"
@@ -106,14 +155,9 @@ class WBApiService:
              return data if isinstance(data, list) else []
 
     async def get_sales_history(self, token: str, days: int = 30):
-        """
-        [NEW] Получение списка заказов за период (для P&L).
-        """
         if not token: return []
         date_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00")
-        
         async with aiohttp.ClientSession() as session:
-            # Получаем заказы без кэша или с коротким кэшем, чтобы видеть свежие данные
             data = await self._get_orders(session, token, date_from, use_cache=True)
             return data.get("items", [])
 
@@ -128,11 +172,7 @@ class WBApiService:
         ]
 
     async def calculate_transit(self, liters: int, destination: str = "Koledino"):
-        direct_base = 1500
-        direct_rate = 30
-        transit_base = 500 
-        transit_rate = 10 
-        transit_logistics = 1000 
+        direct_base = 1500; direct_rate = 30; transit_base = 500; transit_rate = 10; transit_logistics = 1000 
         return {
             "destination": destination,
             "direct": {"rate": direct_rate, "total": direct_base + (liters * direct_rate)},
