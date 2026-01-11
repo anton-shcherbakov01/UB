@@ -151,44 +151,28 @@ class AnalysisService:
         return self._call_ai(prompt, {"title": "Ошибка генерации", "description": "Не удалось сгенерировать текст"})
 
     def _call_ai(self, prompt: str, fallback_json: dict):
-        """Вспомогательный метод вызова AI"""
         try:
             payload = {
                 "model": "deepseek-chat", 
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7 # Чуть выше для креатива
+                "temperature": 0.5 
             }
-            headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
+            # Fix: Ensure Bearer prefix is present
+            auth_header = self.ai_api_key if self.ai_api_key.startswith("Bearer ") else f"Bearer {self.ai_api_key}"
+            headers = {"Authorization": auth_header, "Content-Type": "application/json"}
+            resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=60)
             
-            resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=90) # Увеличили таймаут для генерации текста
-            
-            if resp.status_code != 200:
+            if resp.status_code != 200: 
                 logger.error(f"AI API Error: {resp.text}")
                 return fallback_json
             
-            result = resp.json()
-            content = result['choices'][0]['message']['content']
-            
-            try:
-                # Пытаемся найти JSON
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    # Чистим значения
-                    for k, v in parsed.items():
-                        if isinstance(v, list):
-                            parsed[k] = [self.clean_ai_text(str(x)) for x in v]
-                        elif isinstance(v, str):
-                            parsed[k] = self.clean_ai_text(v)
-                    return parsed
-                else:
-                    return fallback_json
-            except Exception as e:
-                logger.error(f"JSON Parse Error: {e}")
-                return fallback_json
-
+            content = resp.json()['choices'][0]['message']['content']
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group(0))
+            return fallback_json
         except Exception as e:
-            logger.error(f"AI Connection Error: {e}")
+            logger.error(f"AI Error: {e}")
             return fallback_json
 
 analysis_service = AnalysisService()
