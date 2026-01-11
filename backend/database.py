@@ -7,7 +7,6 @@ from datetime import datetime
 
 # Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
-# Для Воркера (Celery) используем синхронный драйвер
 DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 
 # 1. Асинхронный движок (FastAPI)
@@ -29,7 +28,7 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
     
-    # Новые поля для API WB и уведомлений
+    # Поля для API WB и уведомлений
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
     
@@ -42,14 +41,20 @@ class User(Base):
 
 class ProductCost(Base):
     """
-    Таблица для хранения себестоимости СОБСТВЕННЫХ товаров пользователя.
-    Используется для расчета Unit-экономики и P&L во внутренней аналитике.
+    Таблица для хранения себестоимости и параметров Unit-экономики.
+    Расширена для расчета P&L (CM1, CM2, CM3).
     """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
-    cost_price = Column(Integer, default=0)
+    
+    # Экономические параметры (вводимые пользователем)
+    cost_price = Column(Float, default=0.0)      # Себестоимость закупки/производства
+    fulfillment_cost = Column(Float, default=0.0) # Фулфилмент/Упаковка (на единицу)
+    external_marketing = Column(Float, default=0.0) # Внешняя реклама (бюджет на артикул)
+    tax_rate = Column(Float, default=6.0)        # Налоговая ставка (по умолчанию УСН 6%)
+    
     updated_at = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="costs")
@@ -91,9 +96,6 @@ class SearchHistory(Base):
     user = relationship("User", back_populates="history")
 
 class SeoPosition(Base):
-    """
-    Новая таблица: Трекинг позиций (SERP)
-    """
     __tablename__ = "seo_positions"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -106,6 +108,7 @@ class SeoPosition(Base):
 
 async def init_db():
     async with engine_async.begin() as conn:
+        # В продакшене лучше использовать Alembic для миграций
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db():
