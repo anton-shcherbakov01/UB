@@ -7,7 +7,7 @@ services:
     container_name: wb_postgres
     restart: always
     env_file:
-      - .backend/.env
+      - ./backend/.env
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=wb_secret_password
