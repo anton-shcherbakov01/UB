@@ -117,6 +117,11 @@ const SeoGeneratorPage = () => {
                 faq: result.faq || []
             };
 
+            if (user?.plan === 'free') {
+                alert("Скачивание PDF доступно только на тарифе PRO или Business");
+                return;
+            }
+
             const response = await fetch(`${API_URL}/api/report/seo-pdf/generate`, {
                 method: 'POST',
                 headers: {

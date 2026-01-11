@@ -9,6 +9,7 @@ import requests
 import asyncio
 import aiohttp
 import zipfile
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -27,14 +28,21 @@ logging.basicConfig(
 logger = logging.getLogger("WB-Parser")
 logging.getLogger('WDM').setLevel(logging.ERROR)
 
+# Константы для Geo Tracking
+GEO_ZONES = {
+    "moscow": "-1257786",
+    "spb": "-1257262",
+    "kazan": "-1255942",
+    "krasnodar": "-1257233",
+    "novosibirsk": "-1257493"
+}
+
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v14.4.
-    - [FIX] Возврат ссылки на изображение при парсинге цен.
-    - Исправлен поиск корзин (до 50).
-    - Оптимизированное ожидание загрузки цен.
-    - Улучшенный сбор SEO данных (Smart Keyword Extraction).
-    - Фоллбэк парсинга остатков через Selenium.
+    Микросервис парсинга Wildberries v14.5.
+    - [UPD] Переход на API search.wb.ru для трекинга позиций (вместо Selenium).
+    - [NEW] Geo Tracking (поддержка параметра dest).
+    - [NEW] Разделение Органической и Рекламной выдачи.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -49,7 +57,7 @@ class SeleniumWBParser:
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
         ]
 
-    # --- ЛОГИКА ПОИСКА КОРЗИН ---
+    # --- ЛОГИКА ПОИСКА КОРЗИН (Legacy/Core) ---
     
     def _calc_basket_static(self, sku: int) -> str:
         vol = sku // 100000
@@ -79,9 +87,8 @@ class SeleniumWBParser:
         
         calc_host = self._calc_basket_static(sku)
         
-        # Сначала расчетную, потом новые (18-50), потом старые (1-17)
         hosts_priority = [calc_host] + [f"{i:02d}" for i in range(18, 51)] + [f"{i:02d}" for i in range(1, 18)]
-        hosts = list(dict.fromkeys(hosts_priority)) # Remove duplicates
+        hosts = list(dict.fromkeys(hosts_priority)) 
 
         async with aiohttp.ClientSession() as session:
             for i in range(0, len(hosts), 15):
@@ -109,7 +116,7 @@ class SeleniumWBParser:
         except: pass
         return None
 
-    # --- SELENIUM SETUP ---
+    # --- SELENIUM SETUP (Legacy support for full page parsing) ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -140,8 +147,6 @@ class SeleniumWBParser:
             edge_options.add_extension(plugin_path)
             
         edge_options.add_argument("--window-size=1920,1080")
-        
-        # Ротация UA
         ua = random.choice(self.user_agents)
         edge_options.add_argument(f"user-agent={ua}")
         
@@ -175,7 +180,7 @@ class SeleniumWBParser:
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         total_qty = 0
 
-        # 1. Получаем статику + ОСТАТКИ из card.json (Шпионаж)
+        # 1. Получаем статику + ОСТАТКИ из card.json
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -187,7 +192,6 @@ class SeleniumWBParser:
                 static_info["brand"] = data.get('selling', {}).get('brand_name')
                 static_info["image"] = data.get('image_url')
                 
-                # Парсинг остатков по размерам
                 sizes = data.get('sizes', [])
                 for size in sizes:
                     stocks = size.get('stocks', [])
@@ -196,19 +200,16 @@ class SeleniumWBParser:
         except Exception as e:
             logger.warning(f"Static fail: {e}")
 
-        # 2. Парсим цены (Selenium) - Увеличенное время ожидания
-        for attempt in range(1, 4): # Увеличили до 3 попыток
+        # 2. Парсим цены (Selenium)
+        for attempt in range(1, 4):
             driver = None
             try:
                 driver = self._init_driver()
                 url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx?targetUrl=GP"
                 driver.get(url)
-                
-                # Даем странице прогрузиться
                 time.sleep(15) 
                 driver.execute_script("window.scrollTo(0, 400);")
                 
-                # Явное ожидание блока цены (до 15 секунд)
                 try:
                     WebDriverWait(driver, 15).until(
                         EC.presence_of_element_located((By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price, [class*='walletPrice']"))
@@ -216,7 +217,6 @@ class SeleniumWBParser:
                 except:
                     logger.warning(f"Wait timeout for price selector attempt {attempt}")
 
-                # Попытка через JSON (window.staticModel)
                 try:
                     p_json = driver.execute_script("return window.staticModel ? JSON.stringify(window.staticModel) : null;")
                     if p_json:
@@ -225,7 +225,6 @@ class SeleniumWBParser:
                         wallet = int(price.get('clientPriceU', 0)/100) or int(price.get('totalPrice', 0)/100)
                         
                         if wallet > 0:
-                            # [FALLBACK] Если остатки не нашлись через card.json, пробуем взять отсюда
                             if total_qty == 0:
                                 try:
                                     sizes = d.get('sizes', [])
@@ -239,14 +238,13 @@ class SeleniumWBParser:
                                 "id": sku, 
                                 "name": static_info["name"], 
                                 "brand": static_info["brand"],
-                                "image": static_info["image"], # [FIX] Добавлено изображение
+                                "image": static_info["image"],
                                 "stock_qty": total_qty,
                                 "prices": {"wallet_purple": wallet, "standard_black": int(price.get('salePriceU',0)/100), "base_crossed": int(price.get('priceU',0)/100)},
                                 "status": "success"
                             }
                 except: pass
 
-                # Попытка через DOM (Селекторы)
                 wallet = self._extract_price(driver, ".price-block__wallet-price, [class*='walletPrice']")
                 standard = self._extract_price(driver, ".price-block__final-price, [class*='priceBlockFinal']")
                 base = self._extract_price(driver, ".price-block__old-price, [class*='priceBlockOld']")
@@ -257,7 +255,7 @@ class SeleniumWBParser:
                         "id": sku, 
                         "name": static_info["name"], 
                         "brand": static_info["brand"],
-                        "image": static_info["image"], # [FIX] Добавлено изображение
+                        "image": static_info["image"],
                         "stock_qty": total_qty, 
                         "prices": {"wallet_purple": wallet, "standard_black": standard, "base_crossed": base},
                         "status": "success"
@@ -273,7 +271,6 @@ class SeleniumWBParser:
         return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
-        """Сбор отзывов с фоллбэками"""
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
         try:
             loop = asyncio.new_event_loop()
@@ -302,7 +299,7 @@ class SeleniumWBParser:
                         break
                 except: continue
             
-            if not feed_data: return {"status": "error", "message": "API отзывов недоступен (401/404)"}
+            if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
 
             raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
             valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
@@ -327,34 +324,24 @@ class SeleniumWBParser:
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):
-        """
-        Умное извлечение ключевых слов из card.json (v14.3).
-        Фильтрует мусор, собирает данные из params, options и grouped_options.
-        """
         logger.info(f"--- SEO PARSE SKU: {sku} ---")
         try:
             card_data = await self._find_card_json(sku)
             if not card_data: return {"status": "error", "message": "Card not found"}
 
             keywords = []
-            
-            # 1. Название и Категория
             name = card_data.get('imt_name') or card_data.get('subj_name')
             if name: keywords.append(name)
             subj = card_data.get('subj_name')
             if subj and subj != name: keywords.append(subj)
             
-            # 2. Опции (Характеристики)
             options = card_data.get('options', [])
-            
-            # Если нет options, ищем в grouped_options (новая структура WB)
             if not options:
                 grouped = card_data.get('grouped_options', [])
                 for group in grouped:
                     if group.get('options'):
                         options.extend(group.get('options'))
 
-            # Список стоп-слов и значений для фильтрации
             stop_values = ['нет', 'да', 'отсутствует', 'без рисунка', 'китай', 'россия', '0', '1', '2', '3']
             
             for opt in options:
@@ -362,26 +349,21 @@ class SeleniumWBParser:
                 name_param = str(opt.get('name', '')).lower()
                 
                 if not val: continue
-                
-                # Фильтрация мусорных значений
                 if val.lower() in stop_values: continue
-                if len(val) < 2: continue # Слишком короткие слова
-                if val.isdigit() and "год" not in name_param: continue # Пропускаем просто цифры, если это не год
+                if len(val) < 2: continue 
+                if val.isdigit() and "год" not in name_param: continue
                 
-                # Приоритет важным полям (состав, назначение и т.д.)
                 if "состав" in name_param or "назначение" in name_param or "рисунок" in name_param or "фактура" in name_param:
-                    # Разбиваем через запятую или слеш
                     parts = re.split(r'[,/]', val)
                     for p in parts:
                         keywords.append(p.strip())
                 else:
                     keywords.append(val)
 
-            # Чистка дубликатов (case-insensitive) и спецсимволов
             clean_keywords = []
             seen = set()
             for k in keywords:
-                k_clean = re.sub(r'[^\w\s-]', '', k).strip() # Убираем спецсимволы, оставляем буквы, цифры, дефис
+                k_clean = re.sub(r'[^\w\s-]', '', k).strip()
                 if k_clean and k_clean.lower() not in seen:
                     seen.add(k_clean.lower())
                     clean_keywords.append(k_clean)
@@ -390,66 +372,116 @@ class SeleniumWBParser:
                 "sku": sku,
                 "name": name,
                 "image": card_data.get('image_url'),
-                "keywords": clean_keywords[:40], # Ограничиваем топ-40 для релевантности
+                "keywords": clean_keywords[:40],
                 "status": "success"
             }
         except Exception as e:
             logger.error(f"SEO Parse Error: {e}")
             return {"status": "error", "message": str(e)}
 
-    def get_search_position(self, query: str, target_sku: int):
-        logger.info(f"--- SERP CHECK: {query} for {target_sku} ---")
-        driver = None
+    # --- ADVANCED GEO SEARCH (NEW API IMPLEMENTATION) ---
+
+    async def get_search_position_v2(self, query: str, target_sku: int, dest: str = GEO_ZONES["moscow"]):
+        """
+        Асинхронный поиск позиции через API WB (catalog/search).
+        
+        Args:
+            query (str): Поисковый запрос.
+            target_sku (int): Артикул товара.
+            dest (str): ID региона (координаты/склад).
+            
+        Returns:
+            dict: { "organic_pos": int, "ad_pos": int, "is_boosted": bool }
+        """
+        target_sku = int(target_sku)
+        # URL может меняться, используем актуальный для v7/v5
+        # Используем exactmatch/ru/common/v7/search или catalog.wb.ru/search
+        url = "https://search.wb.ru/exactmatch/ru/common/v7/search"
+        
+        params = {
+            "ab_testing": "false",
+            "appType": "1",
+            "curr": "rub",
+            "dest": dest,
+            "query": query,
+            "resultset": "catalog",
+            "sort": "popular",
+            "spp": "30",
+            "suppressSpellcheck": "false"
+        }
+        
+        headers = {
+            "User-Agent": random.choice(self.user_agents),
+            "Accept": "*/*"
+        }
+
         try:
-            driver = self._init_driver()
-            # Кодируем запрос в URL
-            encoded_query = requests.utils.quote(query)
-            url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={encoded_query}"
-            driver.get(url)
-            
-            # Ждем прогрузки карточек
-            try:
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "article.product-card, div.product-card"))
-                )
-            except:
-                return 0
-
-            # Скроллим немного, чтобы подгрузились (lazy load)
-            for _ in range(3):
-                driver.execute_script("window.scrollBy(0, 800);")
-                time.sleep(1)
-
-            # Собираем ID всех карточек на странице
-            # WB использует разные классы, пробуем универсальный поиск по атрибутам
-            cards = driver.find_elements(By.CSS_SELECTOR, "article.product-card")
-            if not cards:
-                cards = driver.find_elements(By.CSS_SELECTOR, "div.product-card")
-            
-            position = 0
-            for index, card in enumerate(cards):
-                try:
-                    # id карточки обычно в id элемента или data-nm-id
-                    card_id = card.get_attribute("id") 
-                    if not card_id:
-                        # Fallback на data-popup-nm-id и подобные
-                        data_nm = card.get_attribute("data-nm-id")
-                        if data_nm: card_id = data_nm
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, headers=headers, timeout=10) as resp:
+                    if resp.status != 200:
+                        logger.error(f"Search API Error {resp.status} for {query}")
+                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
                     
-                    # id обычно вида 'c123456', берем цифры
-                    if card_id:
-                        sku_str = re.sub(r'[^\d]', '', card_id)
-                        if sku_str and int(sku_str) == int(target_sku):
-                            position = index + 1
-                            break
-                except: continue
-                
-            return position
+                    data = await resp.json()
+                    
+                    # Извлекаем продукты
+                    products = data.get("data", {}).get("products", [])
+                    if not products:
+                         # Fallback структура
+                         products = data.get("products", [])
+                    
+                    if not products:
+                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+
+                    # Логика подсчета позиций
+                    organic_counter = 0
+                    
+                    for index, item in enumerate(products):
+                        item_id = int(item.get("id", 0))
+                        
+                        # --- AD DETECTION STRATEGY ---
+                        # 1. Наличие поля 'log' (стандартный маркер рекламы в поиске WB)
+                        # 2. Наличие 'adId' или 'promoText'
+                        # 3. Иногда 'time1'/'time2' паттерны, но 'log' надежнее
+                        is_ad = bool(item.get("log") or item.get("adId") or item.get("cpm"))
+                        
+                        if not is_ad:
+                            organic_counter += 1
+                        
+                        if item_id == target_sku:
+                            # Товар найден!
+                            return {
+                                "organic_pos": organic_counter if not is_ad else 0,
+                                "ad_pos": (index + 1) if is_ad else 0,
+                                "is_boosted": is_ad,
+                                "total_pos": index + 1
+                            }
+                            
+            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
         except Exception as e:
-            logger.error(f"SERP Error: {e}")
+            logger.error(f"Geo Search Error ({dest}): {e}")
+            return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+
+    # Wrapper для совместимости со старым синхронным вызовом (для задач, которые не обновлены)
+    def get_search_position(self, query: str, target_sku: int):
+        """Legacy synchronous wrapper calling async v2 implementation"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            # Default to Moscow for legacy calls
+            result = loop.run_until_complete(self.get_search_position_v2(query, target_sku))
+            loop.close()
+            
+            # Legacy expected return: just int position (prefer organic, fallback to total)
+            if result["organic_pos"] > 0:
+                return result["organic_pos"]
+            elif result["ad_pos"] > 0:
+                # Если товар найден только как реклама, возвращаем позицию рекламы (как раньше)
+                return result["ad_pos"]
             return 0
-        finally:
-            if driver: driver.quit()
+        except Exception as e:
+            logger.error(f"Legacy Search Error: {e}")
+            return 0
 
 parser_service = SeleniumWBParser()

@@ -649,13 +649,61 @@ def cluster_keywords_task(self, keywords: List[str], user_id: int = None, sku: i
     return result
 
 @celery_app.task(bind=True, name="check_seo_position_task")
-def check_seo_position_task(self, sku: int, keyword: str, user_id: int):
-    self.update_state(state='PROGRESS', meta={'status': 'Парсинг поиска...'})
+def check_seo_position_task(self, sku: int, keyword: str, user_id: int, regions: List[str] = None):
+    """
+    Проверка позиций с поддержкой мульти-региональности.
+    Если regions не передан, используется только Москва.
+    """
+    self.update_state(state='PROGRESS', meta={'status': 'Geo Tracking (Search API)...'})
     
-    position = parser_service.get_search_position(keyword, sku)
-    save_seo_position_sync(user_id, sku, keyword, position)
-    
-    return {"status": "success", "sku": sku, "keyword": keyword, "position": position}
+    if not regions:
+        regions = ["moscow"] # Default
+
+    async def check_all_regions():
+        tasks = []
+        for reg_name in regions:
+            # Получаем ID региона из констант (по умолчанию Москва)
+            dest_id = GEO_ZONES.get(reg_name.lower(), GEO_ZONES["moscow"])
+            
+            # Запускаем асинхронный поиск
+            tasks.append(parser_service.get_search_position_v2(keyword, sku, dest=dest_id))
+        
+        # Параллельное выполнение
+        return await asyncio.gather(*tasks)
+
+    try:
+        # Запуск Async loop внутри Sync Celery Worker
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        results = loop.run_until_complete(check_all_regions())
+        loop.close()
+        
+        # Агрегация результатов
+        # Мы сохраняем в БД позицию для ПЕРВОГО региона (обычно Москва) как основную метрику
+        main_result = results[0]
+        
+        # Если позиция органическая > 0, пишем её. Иначе пишем рекламную со знаком минус (как маркер) или 0
+        db_position = main_result["organic_pos"]
+        
+        # Сохраняем основную метрику в БД
+        save_seo_position_sync(user_id, sku, keyword, db_position)
+        
+        # Формируем расширенный отчет для возврата (может использоваться фронтендом для логов)
+        detailed_report = {}
+        for reg, res in zip(regions, results):
+            detailed_report[reg] = res
+
+        return {
+            "status": "success", 
+            "sku": sku, 
+            "keyword": keyword, 
+            "main_position": db_position,
+            "geo_details": detailed_report
+        }
+
+    except Exception as e:
+        logger.error(f"SEO Check Task Error: {e}")
+        return {"status": "error", "message": str(e)}
 
 @celery_app.task(name="update_all_monitored_items")
 def update_all_monitored_items():
