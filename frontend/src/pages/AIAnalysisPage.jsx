@@ -54,40 +54,16 @@ const AIAnalysisPage = ({ user }) => {
             return;
         }
 
-        setDownloading(true);
+        // Прямое скачивание через URL для поддержки мобильных устройств
         try {
             const token = window.Telegram?.WebApp?.initData || "";
-            const response = await fetch(`${API_URL}/api/report/ai-pdf/${targetSku}`, {
-                headers: { 'X-TG-Data': token }
-            });
-
-            if (response.status === 403) {
-                alert("Эта функция доступна только в тарифе PRO или Business");
-                setDownloading(false);
-                return;
-            }
+            // Формируем URL с токеном в query параметрах
+            const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
             
-            if (response.status === 404) {
-                alert("Анализ не найден. Попробуйте запустить анализ заново.");
-                setDownloading(false);
-                return;
-            }
-
-            if (!response.ok) throw new Error("Ошибка загрузки");
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `ai_analysis_${targetSku}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
+            // Открываем в новом окне - это инициирует нативную загрузку
+            window.open(downloadUrl, '_blank');
         } catch (e) {
             alert("Не удалось скачать отчет: " + e.message);
-        } finally {
-            setDownloading(false);
         }
     };
 

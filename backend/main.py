@@ -685,78 +685,102 @@ async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: 
     pdf.add_page()
 
     # Шрифты
+    # Используем проверенный путь или fallback
+    # Важно: для кириллицы нужен шрифт с поддержкой Unicode
     font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    font_bold_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+    
+    font_family = 'Arial' # Default fallback
+    
     try:
         if os.path.exists(font_path):
             pdf.add_font('DejaVu', '', font_path, uni=True)
-            pdf.set_font('DejaVu', '', 14)
-            pdf.add_font('DejaVuBold', '', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', uni=True)
+            if os.path.exists(font_bold_path):
+                pdf.add_font('DejaVu', 'B', font_bold_path, uni=True)
+            font_family = 'DejaVu'
         else:
              # Локальный fallback
              local_font = "fonts/DejaVuSans.ttf"
              if os.path.exists(local_font):
                  pdf.add_font('DejaVu', '', local_font, uni=True)
-                 pdf.set_font('DejaVu', '', 14)
+                 font_family = 'DejaVu'
              else:
-                 pdf.set_font("Arial", size=12)
+                 logger.warning("Cyrillic font not found, using Arial (may break text)")
     except Exception as e:
         logger.error(f"Font error: {e}")
-        pdf.set_font("Arial", size=12)
+
+    pdf.set_font(font_family, '', 14)
 
     # --- Header ---
     pdf.set_font_size(20)
-    pdf.cell(0, 10, txt=f"AI Отчет: {sku}", ln=1, align='C')
+    pdf.cell(0, 10, txt=f"AI Report: {sku}", ln=1, align='C')
     pdf.set_font_size(12)
-    pdf.cell(0, 10, txt=f"Товар: {data.get('product_name', 'Без названия')[:50]}...", ln=1, align='C')
+    # Sanitize text to avoid Latin-1 errors if using standard fonts, though uni=True handles it
+    product_name = data.get('product_name', 'Product')[:50]
+    pdf.cell(0, 10, txt=f"Product: {product_name}...", ln=1, align='C')
     pdf.ln(5)
 
     # --- Summary ---
     if ai_data.get('global_summary'):
-        pdf.set_font('DejaVu', '', 12) # Use non-bold for body
-        # pdf.set_font('DejaVuBold', '', 12) # Use bold for header if available
+        pdf.set_font(font_family, '', 12)
         pdf.cell(0, 10, txt="Резюме:", ln=1)
-        pdf.set_font('DejaVu', '', 10)
-        pdf.multi_cell(0, 8, txt=ai_data['global_summary'])
+        pdf.set_font(font_family, '', 10)
+        # Use effective page width for multi_cell
+        epw = pdf.w - 2 * pdf.l_margin
+        pdf.multi_cell(epw, 8, txt=str(ai_data['global_summary']))
         pdf.ln(5)
 
     # --- Audience ---
     if ai_data.get('audience_stats'):
         stats = ai_data['audience_stats']
-        pdf.set_font('DejaVu', '', 12)
+        pdf.set_font(font_family, '', 12)
         pdf.cell(0, 10, txt="Аудитория:", ln=1)
-        pdf.set_font('DejaVu', '', 10)
+        pdf.set_font(font_family, '', 10)
         pdf.cell(0, 8, txt=f"- Рационалы: {stats.get('rational_percent')}%", ln=1)
         pdf.cell(0, 8, txt=f"- Эмоционалы: {stats.get('emotional_percent')}%", ln=1)
         pdf.cell(0, 8, txt=f"- Скептики: {stats.get('skeptic_percent')}%", ln=1)
         pdf.ln(5)
         
         if ai_data.get('infographic_recommendation'):
-             pdf.set_font('DejaVu', '', 10)
-             pdf.multi_cell(0, 8, txt=f"Совет для инфографики: {ai_data['infographic_recommendation']}")
+             epw = pdf.w - 2 * pdf.l_margin
+             pdf.multi_cell(epw, 8, txt=f"Совет для инфографики: {ai_data['infographic_recommendation']}")
              pdf.ln(5)
 
     # --- Aspects ---
     if ai_data.get('aspects'):
-        pdf.set_font('DejaVu', '', 12)
+        pdf.set_font(font_family, '', 12)
         pdf.cell(0, 10, txt="Ключевые аспекты:", ln=1)
-        pdf.set_font('DejaVu', '', 10)
+        pdf.set_font(font_family, '', 10)
         
+        epw = pdf.w - 2 * pdf.l_margin
         for asp in ai_data['aspects'][:10]: # Top 10
             score = asp.get('sentiment_score', 0)
             pdf.cell(0, 8, txt=f"{asp.get('aspect')} ({score}/9.0)", ln=1)
             pdf.set_font_size(8)
-            pdf.multi_cell(0, 5, txt=f"Цитата: {asp.get('snippet')}")
+            # Ensure snippet is a string
+            snippet = str(asp.get('snippet', ''))
+            pdf.multi_cell(epw, 5, txt=f"Цитата: {snippet}")
             pdf.ln(2)
             pdf.set_font_size(10)
     
     # --- Strategy ---
     if ai_data.get('strategy'):
         pdf.ln(5)
-        pdf.set_font('DejaVu', '', 12)
+        pdf.set_font(font_family, '', 12)
         pdf.cell(0, 10, txt="Стратегия роста:", ln=1)
-        pdf.set_font('DejaVu', '', 10)
+        pdf.set_font(font_family, '', 10)
+        epw = pdf.w - 2 * pdf.l_margin
         for s in ai_data['strategy']:
-            pdf.multi_cell(0, 8, txt=f"- {s}")
+            # FIX: Explicitly check for None/empty and convert to string
+            text_line = f"- {str(s)}"
+            # Reset X to left margin to ensure full width availability
+            pdf.set_x(pdf.l_margin)
+            try:
+                pdf.multi_cell(epw, 8, txt=text_line)
+            except Exception as e:
+                # Fallback if text is problematic
+                logger.error(f"PDF Render error on line '{text_line[:20]}...': {e}")
+                pdf.cell(0, 8, txt="- (Ошибка отображения текста)", ln=1)
 
     pdf_content = pdf.output(dest='S')
     
