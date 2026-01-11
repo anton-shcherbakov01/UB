@@ -121,11 +121,6 @@ class AnalysisService:
     # --- P&L ANALYTICS (EXISTING) ---
 
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
-        # ... (Preserved P&L Logic from previous file)
-        # For brevity, reusing the previous logic via Copy-Paste is assumed in real env, 
-        # but here I must output full file content or updated parts.
-        # Since I'm refactoring, I will include the P&L logic fully to ensure the file is complete.
-        
         ch_query = """
         SELECT 
             toDate(sale_dt) as report_date,
@@ -234,21 +229,94 @@ class AnalysisService:
         text = text.replace("`", "")
         return text.strip()
 
-    def analyze_reviews_with_ai(self, reviews: list, product_name: str):
-        if not reviews: return {"flaws": ["Нет отзывов"], "strategy": ["Недостаточно данных"]}
-        reviews_text = ""
-        for r in reviews[:25]:
-            text = f"- {r['text'][:150]} ({r['rating']}*)\n"
-            if len(reviews_text) + len(text) < 2500: reviews_text += text
-            else: break
-        
-        prompt = f"""
-        Проанализируй товар WB: "{product_name}".
-        Отзывы: {reviews_text}
-        Задача: 1. Напиши 3 главных минуса (жалобы). 2. Напиши 5 советов продавцу.
-        Ответ верни СТРОГО в JSON: {{ "flaws": [...], "strategy": [...] }}
+    def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
-        return self._call_ai(prompt, {"flaws": ["Ошибка"], "strategy": ["Ошибка"]})
+        Aspect-Based Sentiment Analysis (ABSA) с использованием DeepSeek-V3.
+        Декомпозиция отзывов на сущности и атрибуты, оценка по шкале Valence-Arousal (1-9).
+        """
+        if not reviews: 
+            return {
+                "aspects": [], 
+                "flaws": ["Нет отзывов"], 
+                "strategy": ["Недостаточно данных для анализа"]
+            }
+
+        # 1. Подготовка контекста (уплотнение токенов)
+        reviews_text = ""
+        for r in reviews[:30]:
+            # Очистка от мусора для экономии токенов
+            clean_text = r['text'].replace('\n', ' ').strip()
+            if len(clean_text) > 5:
+                text = f"- {clean_text} (Оценка: {r['rating']})\n"
+                if len(reviews_text) + len(text) < 3500: 
+                    reviews_text += text
+                else: 
+                    break
+        
+        # 2. Структурированный промпт для ABSA (2026 Strategy)
+        prompt = f"""
+        Роль: Ты Lead Data Analyst в E-commerce. Твоя специализация — Aspect-Based Sentiment Analysis (ABSA).
+        
+        Задача: Проведи глубокий анализ отзывов на товар WB: "{product_name}".
+        Отзывы:
+        {reviews_text}
+
+        Требования:
+        1. Выдели ключевые аспекты (Aspect = Entity + Attribute). Например: "Качество ткани", "Соответствие размеру", "Упаковка".
+        2. Оцени каждый аспект по шкале Valence (Тональность) от 1.00 (Крайний негатив) до 9.00 (Восхищение).
+        3. Найди подтверждающую цитату (Snippet) из текста.
+        4. Дай конкретный Actionable Advice (Совет) для продавца по улучшению этого аспекта.
+
+        Формат ответа (СТРОГО JSON):
+        {{
+            "aspects": [
+                {{
+                    "aspect": "Название аспекта",
+                    "sentiment_score": 2.5,
+                    "snippet": "цитата из отзыва",
+                    "actionable_advice": "конкретное действие"
+                }}
+            ],
+            "global_summary": "Краткое общее резюме по товару (1 предложение)"
+        }}
+        """
+        
+        # 3. Запрос к модели с пониженной температурой (0.5 для аналитики)
+        fallback = {
+            "aspects": [],
+            "global_summary": "Ошибка анализа",
+            "flaws": ["Ошибка API"],
+            "strategy": ["Повторите попытку позже"]
+        }
+        
+        ai_response = self._call_ai(prompt, fallback, temperature=0.5)
+        
+        # 4. Пост-обработка и обеспечение обратной совместимости (Backward Compatibility)
+        # Генерируем поля 'flaws' и 'strategy' для старых клиентов API/Frontend
+        
+        aspects = ai_response.get("aspects", [])
+        
+        # Flaws: аспекты с оценкой ниже 4.0
+        negative_aspects = sorted(
+            [a for a in aspects if a.get('sentiment_score', 5) < 4.5], 
+            key=lambda x: x['sentiment_score']
+        )
+        flaws_legacy = [f"{a['aspect']}: {a['snippet'][:50]}..." for a in negative_aspects[:5]]
+        
+        # Strategy: советы из негативных и нейтральных аспектов
+        advice_list = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 9) < 7.0]
+        strategy_legacy = advice_list[:7]
+
+        # Если негатива нет, берем позитивные моменты для стратегии (усиление преимуществ)
+        if not strategy_legacy:
+            strategy_legacy = ["Поддерживайте текущее качество", "Используйте отзывы в рекламе"]
+            if not flaws_legacy:
+                flaws_legacy = ["Критических недостатков не выявлено"]
+
+        ai_response["flaws"] = flaws_legacy
+        ai_response["strategy"] = strategy_legacy
+        
+        return ai_response
 
     def generate_product_content(self, keywords: list, tone: str, title_len: int = 100, desc_len: int = 1000):
         kw_str = ", ".join(keywords)
@@ -258,14 +326,14 @@ class AnalysisService:
         Параметры: Ключевые слова: {kw_str}. Тон: {tone}. Заголовок: ~{title_len} симв. Описание: ~{desc_len} симв.
         Ответ верни СТРОГО в JSON: {{ "title": "...", "description": "..." }}
         """
-        return self._call_ai(prompt, {"title": "Ошибка генерации", "description": "Не удалось сгенерировать текст"})
+        return self._call_ai(prompt, {"title": "Ошибка генерации", "description": "Не удалось сгенерировать текст"}, temperature=0.7)
 
-    def _call_ai(self, prompt: str, fallback_json: dict):
+    def _call_ai(self, prompt: str, fallback_json: dict, temperature: float = 0.7):
         try:
             payload = {
                 "model": "deepseek-chat", 
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7 
+                "temperature": temperature
             }
             headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
             resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=90) 
@@ -275,14 +343,36 @@ class AnalysisService:
             result = resp.json()
             content = result['choices'][0]['message']['content']
             try:
+                # Очистка Markdown-блоков кода (```json ... ```) перед парсингом
+                content = re.sub(r'^```json\s*', '', content, flags=re.MULTILINE)
+                content = re.sub(r'^```\s*', '', content, flags=re.MULTILINE)
+                content = content.strip()
+
                 json_match = re.search(r'\{[\s\S]*\}', content)
                 if json_match:
                     parsed = json.loads(json_match.group(0))
                     for k, v in parsed.items():
-                        if isinstance(v, list): parsed[k] = [self.clean_ai_text(str(x)) for x in v]
-                        elif isinstance(v, str): parsed[k] = self.clean_ai_text(v)
+                        if isinstance(v, list): 
+                            # Рекурсивная очистка строк внутри списков/объектов не помешает, но для MVP хватит верхнего уровня
+                            cleaned_list = []
+                            for item in v:
+                                if isinstance(item, str):
+                                    cleaned_list.append(self.clean_ai_text(item))
+                                elif isinstance(item, dict):
+                                    # Очистка внутри словарей (для aspects)
+                                    cleaned_dict = {}
+                                    for dk, dv in item.items():
+                                        cleaned_dict[dk] = self.clean_ai_text(str(dv)) if isinstance(dv, str) else dv
+                                    cleaned_list.append(cleaned_dict)
+                                else:
+                                    cleaned_list.append(item)
+                            parsed[k] = cleaned_list
+                        elif isinstance(v, str): 
+                            parsed[k] = self.clean_ai_text(v)
                     return parsed
-                else: return fallback_json
+                else: 
+                    logger.warning(f"No JSON found in AI response: {content[:100]}...")
+                    return fallback_json
             except Exception as e:
                 logger.error(f"JSON Parse Error: {e}")
                 return fallback_json
