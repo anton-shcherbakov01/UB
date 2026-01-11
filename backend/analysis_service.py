@@ -231,41 +231,53 @@ class AnalysisService:
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
-        Aspect-Based Sentiment Analysis (ABSA) с использованием DeepSeek-V3.
-        Декомпозиция отзывов на сущности и атрибуты, оценка по шкале Valence-Arousal (1-9).
+        Комплексный анализ отзывов с использованием DeepSeek-V3.
+        1. ABSA (Aspect-Based Sentiment Analysis): Сущности + Атрибуты с оценкой 1-9.
+        2. Психографическое профилирование: Классификация аудитории (Рационал, Эмоционал, Скептик).
         """
         if not reviews: 
             return {
                 "aspects": [], 
+                "audience_stats": {"rational": 0, "emotional": 0, "skeptic": 0},
+                "global_summary": "Нет данных для анализа",
                 "flaws": ["Нет отзывов"], 
-                "strategy": ["Недостаточно данных для анализа"]
+                "strategy": ["Соберите первые отзывы"]
             }
 
-        # 1. Подготовка контекста (уплотнение токенов)
+        # 1. Подготовка контекста (Smart Context Packing)
         reviews_text = ""
-        for r in reviews[:30]:
-            # Очистка от мусора для экономии токенов
+        for r in reviews[:40]: # Берем чуть больше для статистики
             clean_text = r['text'].replace('\n', ' ').strip()
             if len(clean_text) > 5:
                 text = f"- {clean_text} (Оценка: {r['rating']})\n"
-                if len(reviews_text) + len(text) < 3500: 
+                if len(reviews_text) + len(text) < 4000: 
                     reviews_text += text
                 else: 
                     break
         
-        # 2. Структурированный промпт для ABSA (2026 Strategy)
+        # 2. Промпт для DeepSeek-V3 (Strategy 2026)
         prompt = f"""
-        Роль: Ты Lead Data Analyst в E-commerce. Твоя специализация — Aspect-Based Sentiment Analysis (ABSA).
+        Роль: Ты Lead Data Analyst в E-commerce. Твоя специализация — ABSA и Психография.
         
-        Задача: Проведи глубокий анализ отзывов на товар WB: "{product_name}".
-        Отзывы:
+        Товар: "{product_name}".
+        Отзывы покупателей:
         {reviews_text}
 
-        Требования:
-        1. Выдели ключевые аспекты (Aspect = Entity + Attribute). Например: "Качество ткани", "Соответствие размеру", "Упаковка".
-        2. Оцени каждый аспект по шкале Valence (Тональность) от 1.00 (Крайний негатив) до 9.00 (Восхищение).
-        3. Найди подтверждающую цитату (Snippet) из текста.
-        4. Дай конкретный Actionable Advice (Совет) для продавца по улучшению этого аспекта.
+        Выполни глубокий анализ по двум направлениям:
+
+        НАПРАВЛЕНИЕ 1: Аспектный анализ (ABSA)
+        - Выдели ключевые аспекты (Aspect = Entity + Attribute).
+        - Оцени каждый аспект по шкале Valence (Тональность) от 1.00 (Крайний негатив) до 9.00 (Восхищение).
+        - Найди цитату (Snippet) и дай совет (Actionable Advice).
+
+        НАПРАВЛЕНИЕ 2: Психографическое профилирование аудитории
+        - Определи, к какому типу относится большинство авторов отзывов:
+          A. Rational (Рациональный): Факты, цифры, срок службы, качество сборки, соответствие описанию.
+          B. Emotional (Эмоциональный): Стиль, восторг, упаковка, тактильные ощущения, "вау-эффект", капс, эмодзи.
+          C. Skeptic (Скептик): Сомнения, поиск брака, проверка гарантий, сравнение с конкурентами, недоверие.
+        - Рассчитай примерный процент (%) каждого типа в выборке.
+        - На основе ДОМИНИРУЮЩЕГО типа сгенерируй рекомендацию для инфографики (Infographic Tip).
+          (Например: для Скептиков — "Добавить слайд с сертификатом и гарантией 2 года").
 
         Формат ответа (СТРОГО JSON):
         {{
@@ -273,49 +285,50 @@ class AnalysisService:
                 {{
                     "aspect": "Название аспекта",
                     "sentiment_score": 2.5,
-                    "snippet": "цитата из отзыва",
-                    "actionable_advice": "конкретное действие"
+                    "snippet": "цитата",
+                    "actionable_advice": "совет"
                 }}
             ],
-            "global_summary": "Краткое общее резюме по товару (1 предложение)"
+            "audience_stats": {{
+                "rational_percent": 30,
+                "emotional_percent": 50,
+                "skeptic_percent": 20
+            }},
+            "dominant_type": "Emotional",
+            "infographic_recommendation": "Текст рекомендации...",
+            "global_summary": "Общее резюме (1 предложение)"
         }}
         """
         
-        # 3. Запрос к модели с пониженной температурой (0.5 для аналитики)
         fallback = {
             "aspects": [],
-            "global_summary": "Ошибка анализа",
+            "audience_stats": {"rational_percent": 33, "emotional_percent": 33, "skeptic_percent": 34},
+            "dominant_type": "Mixed",
+            "infographic_recommendation": "Проверьте качество контента",
+            "global_summary": "Ошибка анализа нейросети",
             "flaws": ["Ошибка API"],
-            "strategy": ["Повторите попытку позже"]
+            "strategy": ["Повторите попытку"]
         }
         
+        # 3. Вызов AI с температурой 0.5 для аналитической точности
         ai_response = self._call_ai(prompt, fallback, temperature=0.5)
         
-        # 4. Пост-обработка и обеспечение обратной совместимости (Backward Compatibility)
-        # Генерируем поля 'flaws' и 'strategy' для старых клиентов API/Frontend
-        
+        # 4. Backward Compatibility & Post-Processing
         aspects = ai_response.get("aspects", [])
         
-        # Flaws: аспекты с оценкой ниже 4.0
+        # Генерируем legacy поля для старых фронтов
         negative_aspects = sorted(
             [a for a in aspects if a.get('sentiment_score', 5) < 4.5], 
             key=lambda x: x['sentiment_score']
         )
-        flaws_legacy = [f"{a['aspect']}: {a['snippet'][:50]}..." for a in negative_aspects[:5]]
+        ai_response["flaws"] = [f"{a['aspect']}: {a['snippet'][:50]}..." for a in negative_aspects[:5]]
         
-        # Strategy: советы из негативных и нейтральных аспектов
-        advice_list = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 9) < 7.0]
-        strategy_legacy = advice_list[:7]
+        positive_strategies = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 0) < 7.5]
+        ai_response["strategy"] = positive_strategies[:7] if positive_strategies else ["Масштабируйте продажи"]
 
-        # Если негатива нет, берем позитивные моменты для стратегии (усиление преимуществ)
-        if not strategy_legacy:
-            strategy_legacy = ["Поддерживайте текущее качество", "Используйте отзывы в рекламе"]
-            if not flaws_legacy:
-                flaws_legacy = ["Критических недостатков не выявлено"]
+        if not ai_response["flaws"]:
+            ai_response["flaws"] = ["Критических проблем не выявлено"]
 
-        ai_response["flaws"] = flaws_legacy
-        ai_response["strategy"] = strategy_legacy
-        
         return ai_response
 
     def generate_product_content(self, keywords: list, tone: str, title_len: int = 100, desc_len: int = 1000):
