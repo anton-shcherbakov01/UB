@@ -95,6 +95,7 @@ class WBApiService:
             return new_orders
 
     async def get_my_stocks(self, token: str):
+        """Получение текущих остатков"""
         if not token: return []
         today = datetime.now().strftime("%Y-%m-%dT00:00:00")
         url = f"{self.BASE_URL}/stocks"
@@ -103,6 +104,18 @@ class WBApiService:
         async with aiohttp.ClientSession() as session:
              data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              return data if isinstance(data, list) else []
+
+    async def get_sales_history(self, token: str, days: int = 30):
+        """
+        [NEW] Получение списка заказов за период (для P&L).
+        """
+        if not token: return []
+        date_from = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00")
+        
+        async with aiohttp.ClientSession() as session:
+            # Получаем заказы без кэша или с коротким кэшем, чтобы видеть свежие данные
+            data = await self._get_orders(session, token, date_from, use_cache=True)
+            return data.get("items", [])
 
     async def get_warehouse_coeffs(self, token: str):
         return [

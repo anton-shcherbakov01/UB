@@ -174,8 +174,6 @@ async def get_stories(user: User = Depends(get_current_user)):
     })
     return stories
 
-# --- FINANCE & UNIT ECONOMICS ---
-
 class CostUpdateRequest(BaseModel):
     cost_price: float
     fulfillment_cost: float
@@ -189,62 +187,96 @@ async def get_my_products_finance(
 ):
     """
     Получение детального отчета P&L по каждому товару (API + БД).
+    Использует РЕАЛЬНЫЕ данные о продажах за 30 дней.
     """
     token = user.wb_api_token
-    # Если токена нет, генерируем демо-данные, чтобы пользователь увидел функционал
     is_demo = not token
     
     if is_demo:
+        # Демо-режим без изменений
         stocks = [
             {"nmId": 12345678, "quantity": 120, "Price": 2500, "Discount": 50},
             {"nmId": 87654321, "quantity": 45, "Price": 1800, "Discount": 30},
             {"nmId": 11223344, "quantity": 300, "Price": 990, "Discount": 10}
         ]
+        sales_map = {12345678: 30, 87654321: 5, 11223344: 150} # Фиксированные демо-продажи
     else:
+        # 1. Получаем Остатки (склад)
         stocks = await wb_api_service.get_my_stocks(token)
+        
+        # 2. Получаем Продажи (за 30 дней)
+        sales_data = await wb_api_service.get_sales_history(token, days=30)
+        
+        # Агрегируем продажи по SKU
+        sales_map = {}
+        for order in sales_data:
+            sku = order.get('nmId')
+            if sku:
+                sales_map[sku] = sales_map.get(sku, 0) + 1
     
-    if not stocks: 
-        return []
+    # Собираем общую карту товаров (Остатки + Продажи)
+    # Это решает проблему, когда товар кончился (нет в stocks), но был продан
+    all_skus = set()
+    sku_details = {} # Map для хранения цены и скидки
     
-    sku_map = {}
-    for s in stocks:
-        sku = s.get('nmId')
-        if sku not in sku_map:
-            sku_map[sku] = {
-                "sku": sku, 
-                "quantity": 0, 
-                "price": s.get('Price', 0), 
-                "discount": s.get('Discount', 0)
+    # Обработка stocks
+    if stocks:
+        for s in stocks:
+            sku = s.get('nmId')
+            all_skus.add(sku)
+            if sku not in sku_details:
+                sku_details[sku] = {
+                    "price": s.get('Price', 0),
+                    "discount": s.get('Discount', 0),
+                    "quantity": s.get('quantity', 0)
+                }
+            else:
+                sku_details[sku]["quantity"] += s.get('quantity', 0)
+                
+    # Обработка продаж (добавляем SKU, которых нет на остатках)
+    for sku, count in sales_map.items():
+        all_skus.add(sku)
+        if sku not in sku_details:
+            # Если товара нет на остатках, цену берем примерную или 0 (API истории не всегда отдает текущую цену)
+            # В идеале нужно делать доп запрос к card info, но пока оставим заглушку
+            sku_details[sku] = {
+                "price": 0, 
+                "discount": 0, 
+                "quantity": 0,
+                "is_out_of_stock": True 
             }
-        sku_map[sku]['quantity'] += s.get('quantity', 0)
-    
-    skus = list(sku_map.keys())
-    costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
+
+    if not all_skus:
+        return []
+
+    # Получаем себестоимость из БД
+    skus_list = list(all_skus)
+    costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus_list)))
     costs_map = {c.sku: c for c in costs_res.scalars().all()}
     
     result = []
-    for sku, data in sku_map.items():
+    for sku in all_skus:
+        details = sku_details.get(sku, {})
         cost_obj = costs_map.get(sku)
         
-        # Значения по умолчанию, если не заданы
         cogs = cost_obj.cost_price if cost_obj else 0.0
         ff_cost = cost_obj.fulfillment_cost if cost_obj else 0.0
         ext_mkt = cost_obj.external_marketing if cost_obj else 0.0
         tax = cost_obj.tax_rate if cost_obj else 6.0
         
-        selling_price = data['price'] * (1 - data['discount']/100)
+        selling_price = details['price'] * (1 - details['discount']/100)
         
-        # Симуляция продаж (для P&L)
-        # В реальности берем из /api/v1/supplier/orders
-        if is_demo:
-            orders_count = random.randint(5, 50)
-        else:
-            orders_count = random.randint(1, 20) # Заглушка, пока нет реальной истории заказов в БД
-            
-        # Симуляция тарифов WB (в идеале из API тарифов)
+        # РЕАЛЬНЫЕ ПРОДАЖИ (больше нет рандома)
+        orders_count = sales_map.get(sku, 0)
+        
+        # Если цены нет (товар кончился), пробуем не ломать расчет
+        if selling_price == 0 and orders_count > 0:
+            # Можно попробовать найти цену в объекте заказа, если она там есть
+            pass 
+
         commission_wb = selling_price * 0.23 # 23%
-        logistics_wb = 50.0 # 50 руб
-        adv_wb_per_item = 15.0 # Внутренняя реклама на шт
+        logistics_wb = 50.0 
+        adv_wb_per_item = 15.0 
         
         pnl = analysis_service.calculate_pnl(
             price=selling_price,
@@ -258,12 +290,13 @@ async def get_my_products_finance(
             tax_rate=tax
         )
         
-        sales_velocity = orders_count / 7 # Условно за неделю
-        supply = analysis_service.calculate_supply_prediction(data['quantity'], sales_velocity)
+        # Прогноз поставок
+        sales_velocity = orders_count / 30 # Продаж в день (среднее за месяц)
+        supply = analysis_service.calculate_supply_prediction(details['quantity'], sales_velocity)
 
         result.append({
             "sku": sku,
-            "quantity": data['quantity'],
+            "quantity": details['quantity'],
             "price": int(selling_price),
             "input_data": {
                 "cost_price": cogs,
@@ -272,8 +305,12 @@ async def get_my_products_finance(
                 "tax_rate": tax
             },
             "economics": pnl,
-            "supply": supply
+            "supply": supply,
+            "is_out_of_stock": details.get("is_out_of_stock", False)
         })
+        
+    # Сортировка: сначала те, где есть продажи или остатки
+    result.sort(key=lambda x: (x['economics']['gross_sales'], x['quantity']), reverse=True)
         
     return result
 
