@@ -7,7 +7,7 @@ services:
     container_name: wb_postgres
     restart: always
     env_file:
-      - .env
+      - .backend/.env
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=wb_secret_password
@@ -99,7 +99,7 @@ services:
     volumes: 
       - ./backend:/app
     env_file:
-      - .env
+      - ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
