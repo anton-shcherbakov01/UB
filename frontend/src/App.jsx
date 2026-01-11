@@ -5,85 +5,287 @@ import {
   Crown, LayoutGrid, Trash2, RefreshCw, X, History as HistoryIcon, 
   ChevronLeft, FileDown, LogOut, Receipt, Wand2, Copy, Edit2, Check, Hash,
   Key, TrendingUp, Package, Coins, Calculator, DollarSign, PieChart, Truck, 
-  Scale, Target, PlayCircle, ShieldCheck, Clock, Settings, Save, Info, AlertTriangle, ArrowDown
+  Scale, Target, PlayCircle, ShieldCheck, Clock, Settings, Save, Info, AlertTriangle, ArrowDown,
+  ThumbsUp, XCircle
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area, CartesianGrid,
   BarChart, Bar, Cell
 } from 'recharts';
 
+// Адрес API (в продакшене лучше вынести в .env)
 const API_URL = "https://api.ulike-bot.ru"; 
 
-const formatMoney = (val) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
+const formatMoney = (val) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
 const formatPercent = (val) => `${val}%`;
+
+// Имитация Haptic Feedback (вибрации) для Telegram WebApp
+const hapticFeedback = (style = 'light') => {
+    if (window.Telegram?.WebApp?.HapticFeedback) {
+        window.Telegram.WebApp.HapticFeedback.impactOccurred(style);
+    }
+};
 
 // --- КОМПОНЕНТЫ UI ---
 
 const TabNav = ({ active, setTab, isAdmin }) => (
   <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-100 px-2 py-3 flex justify-between items-end z-50 pb-8 safe-area-pb shadow-[0_-5px_20px_rgba(0,0,0,0.03)]">
-    <button onClick={() => setTab('home')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => { setTab('home'); hapticFeedback('light'); }} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <LayoutGrid size={22} strokeWidth={active === 'home' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Главная</span>
     </button>
-    <button onClick={() => setTab('monitor')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => { setTab('monitor'); hapticFeedback('light'); }} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'monitor' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <BarChart3 size={22} strokeWidth={active === 'monitor' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Цены</span>
     </button>
     
     <div className="relative -top-5 w-[20%] flex justify-center">
         <button 
-            onClick={() => setTab('finance')} 
+            onClick={() => { setTab('finance'); hapticFeedback('medium'); }} 
             className="bg-indigo-600 text-white w-14 h-14 rounded-full shadow-xl shadow-indigo-300 active:scale-95 transition-transform border-4 border-white flex items-center justify-center"
         >
             <DollarSign size={28} strokeWidth={3} />
         </button>
     </div>
 
-    <button onClick={() => setTab('ai')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => { setTab('ai'); hapticFeedback('light'); }} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'ai' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <Brain size={22} strokeWidth={active === 'ai' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">ИИ</span>
     </button>
     
-    <button onClick={() => setTab('profile')} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
+    <button onClick={() => { setTab('profile'); hapticFeedback('light'); }} className={`flex flex-col items-center gap-1 w-[20%] transition-colors ${active === 'profile' ? 'text-indigo-600' : 'text-slate-400'}`}>
       <User size={22} strokeWidth={active === 'profile' ? 2.5 : 2} />
       <span className="text-[9px] font-bold">Профиль</span>
     </button>
   </div>
 );
 
+// --- НОВЫЙ КОМПОНЕНТ: Full Screen Story Viewer ---
+const StoryViewer = ({ stories, initialStoryId, onClose }) => {
+    const [currentIndex, setCurrentIndex] = useState(stories.findIndex(s => s.id === initialStoryId));
+    const [progress, setProgress] = useState(0);
+    const storyDuration = 5000; // 5 секунд на историю
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setProgress(old => {
+                if (old >= 100) {
+                    if (currentIndex < stories.length - 1) {
+                        setCurrentIndex(prev => prev + 1);
+                        return 0;
+                    } else {
+                        onClose(); // Закрыть, если истории кончились
+                        return 100;
+                    }
+                }
+                return old + (100 / (storyDuration / 100));
+            });
+        }, 100);
+        return () => clearInterval(timer);
+    }, [currentIndex]);
+
+    const handleNext = () => {
+        if (currentIndex < stories.length - 1) {
+            setCurrentIndex(prev => prev + 1);
+            setProgress(0);
+            hapticFeedback('light');
+        } else {
+            onClose();
+        }
+    };
+
+    const handlePrev = () => {
+        if (currentIndex > 0) {
+            setCurrentIndex(prev => prev - 1);
+            setProgress(0);
+            hapticFeedback('light');
+        }
+    };
+
+    const currentStory = stories[currentIndex];
+    // Градиенты для фона историй
+    const bgGradients = {
+        'bg-emerald-500': 'from-emerald-500 to-teal-700',
+        'bg-red-500': 'from-red-500 to-rose-700',
+        'bg-purple-500': 'from-purple-600 to-indigo-800',
+        'bg-blue-500': 'from-blue-500 to-cyan-700',
+        'bg-green-500': 'from-green-500 to-emerald-700',
+        'bg-slate-400': 'from-slate-500 to-slate-700'
+    };
+    const bgClass = bgGradients[currentStory.color] || 'from-indigo-500 to-purple-700';
+
+    return (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col animate-in fade-in duration-200">
+            {/* Progress Bars */}
+            <div className="flex gap-1 p-2 pt-4 safe-area-pt z-20">
+                {stories.map((s, i) => (
+                    <div key={s.id} className="h-1 flex-1 bg-white/30 rounded-full overflow-hidden">
+                        <div 
+                            className="h-full bg-white transition-all duration-100 ease-linear"
+                            style={{ 
+                                width: i < currentIndex ? '100%' : i === currentIndex ? `${progress}%` : '0%' 
+                            }}
+                        />
+                    </div>
+                ))}
+            </div>
+
+            {/* Content */}
+            <div className={`flex-1 relative flex flex-col justify-center items-center text-white bg-gradient-to-br ${bgClass}`}>
+                <div className="absolute top-4 right-4 z-30">
+                    <button onClick={onClose} className="p-2 bg-black/20 rounded-full backdrop-blur-md">
+                        <X size={24} color="white" />
+                    </button>
+                </div>
+
+                <div className="text-center p-8 animate-in zoom-in-95 duration-500">
+                    <div className="text-sm font-bold uppercase tracking-widest opacity-80 mb-4">{currentStory.title}</div>
+                    <div className="text-6xl font-black mb-4 drop-shadow-lg">{currentStory.val}</div>
+                    <div className="text-xl font-medium opacity-90 bg-black/20 px-4 py-2 rounded-2xl inline-block backdrop-blur-sm">
+                        {currentStory.subtitle}
+                    </div>
+                </div>
+
+                {/* Tap Zones */}
+                <div className="absolute inset-y-0 left-0 w-1/3 z-10" onClick={handlePrev} />
+                <div className="absolute inset-y-0 right-0 w-2/3 z-10" onClick={handleNext} />
+            </div>
+        </div>
+    );
+};
+
 const StoriesBar = () => {
-  const [stories, setStories] = useState([]);
-  useEffect(() => {
-      fetch(`${API_URL}/api/internal/stories`, {
-           headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-      }).then(r => r.json()).then(setStories).catch(console.error);
-  }, []);
-  if (stories.length === 0) return null;
-  return (
-      <div className="flex gap-3 overflow-x-auto pb-4 px-2 scrollbar-hide">
-          {stories.map(s => (
-              <div key={s.id} className="flex flex-col items-center gap-1 min-w-[64px] animate-in slide-in-from-right duration-500" style={{animationDelay: `${s.id * 100}ms`}}>
-                  <div className={`w-14 h-14 rounded-full p-[2px] ${s.color}`}>
-                      <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center flex-col">
-                           <span className="text-[10px] font-bold text-center leading-tight">{s.val}</span>
-                      </div>
-                  </div>
-                  <span className="text-[9px] font-medium text-slate-500">{s.title}</span>
-              </div>
-          ))}
-      </div>
-  )
+    const [stories, setStories] = useState([]);
+    const [viewerOpen, setViewerOpen] = useState(false);
+    const [initialStoryId, setInitialStoryId] = useState(null);
+    
+    useEffect(() => {
+        fetch(`${API_URL}/api/internal/stories`, {
+             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        }).then(r => r.json()).then(setStories).catch(console.error);
+    }, []);
+
+    const openStory = (id) => {
+        setInitialStoryId(id);
+        setViewerOpen(true);
+        hapticFeedback('medium');
+    };
+
+    if (stories.length === 0) return null;
+
+    return (
+        <>
+            <div className="flex gap-3 overflow-x-auto pb-4 px-2 scrollbar-hide">
+                {stories.map(s => (
+                    <div key={s.id} onClick={() => openStory(s.id)} className="flex flex-col items-center gap-1 min-w-[64px] animate-in slide-in-from-right duration-500 cursor-pointer active:scale-95 transition-transform" style={{animationDelay: `${s.id * 100}ms`}}>
+                        <div className={`w-14 h-14 rounded-full p-[2px] ${s.color}`}>
+                            <div className="w-full h-full rounded-full bg-white border-2 border-transparent flex items-center justify-center flex-col overflow-hidden relative">
+                                 {/* Имитация мини-превью */}
+                                 <div className={`absolute inset-0 opacity-10 ${s.color.replace('bg-', 'bg-')}`}></div>
+                                 <span className="text-[10px] font-bold text-center leading-tight z-10">{s.val}</span>
+                            </div>
+                        </div>
+                        <span className="text-[9px] font-medium text-slate-500">{s.title}</span>
+                    </div>
+                ))}
+            </div>
+            {viewerOpen && <StoryViewer stories={stories} initialStoryId={initialStoryId} onClose={() => setViewerOpen(false)} />}
+        </>
+    )
 }
+
+// --- НОВЫЙ КОМПОНЕНТ: Swipe Cards (Геймификация) ---
+const SwipeRecommendations = () => {
+    const [cards, setCards] = useState([
+        { id: 1, type: 'price', title: 'Поднять цену', desc: 'SKU 123456 на 5% выше рынка. Поднятие на 100₽ увеличит маржу на 12%.', color: 'bg-emerald-50 text-emerald-700', icon: <TrendingUp/> },
+        { id: 2, type: 'stock', title: 'Пополнить склад', desc: 'SKU 987654. Остаток на 4 дня. Рекомендуем поставку 500 шт.', color: 'bg-orange-50 text-orange-700', icon: <Package/> },
+        { id: 3, type: 'ad', title: 'Остановить рекламу', desc: 'Кампания "Платья". CTR упал до 1.5%. Сливаете бюджет.', color: 'bg-red-50 text-red-700', icon: <XCircle/> }
+    ]);
+    const [lastDirection, setLastDirection] = useState(null);
+
+    const handleSwipe = (direction, id) => {
+        setLastDirection(direction);
+        hapticFeedback(direction === 'right' ? 'success' : 'error');
+        
+        // Анимация удаления
+        setTimeout(() => {
+            setCards(prev => prev.filter(c => c.id !== id));
+            setLastDirection(null);
+        }, 300);
+        
+        // Тут можно отправить запрос на бэкенд
+        console.log(`Card ${id} swiped ${direction}`);
+    };
+
+    if (cards.length === 0) return (
+        <div className="bg-white p-6 rounded-3xl border border-dashed border-slate-200 text-center py-8">
+            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3">
+                <CheckCircle2 size={24}/>
+            </div>
+            <p className="font-bold text-slate-600">Все задачи выполнены!</p>
+            <p className="text-xs text-slate-400">Отличная работа 🎉</p>
+        </div>
+    );
+
+    const topCard = cards[0];
+
+    return (
+        <div className="relative h-64 w-full">
+            <h3 className="font-bold text-lg px-2 mb-3 flex items-center gap-2">
+                <Sparkles size={18} className="text-yellow-500"/> Рекомендации
+                <span className="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded-full font-bold">{cards.length}</span>
+            </h3>
+            
+            {/* Stack Effect */}
+            {cards.length > 1 && (
+                <div className="absolute top-10 left-4 right-4 bottom-0 bg-white rounded-3xl border border-slate-200 shadow-sm scale-95 translate-y-2 opacity-60 z-0"></div>
+            )}
+
+            {/* Active Card */}
+            <div className={`absolute top-8 left-0 right-0 z-10 transition-all duration-300 ${lastDirection === 'right' ? 'translate-x-full rotate-12 opacity-0' : lastDirection === 'left' ? '-translate-x-full -rotate-12 opacity-0' : ''}`}>
+                <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-100 h-full flex flex-col justify-between">
+                    <div>
+                        <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-xl text-xs font-bold mb-3 ${topCard.color}`}>
+                            {topCard.icon} {topCard.title}
+                        </div>
+                        <p className="text-slate-800 font-bold text-lg leading-snug">{topCard.desc}</p>
+                    </div>
+                    
+                    <div className="flex gap-4 mt-6">
+                        <button 
+                            onClick={() => handleSwipe('left', topCard.id)}
+                            className="flex-1 py-3 rounded-xl border-2 border-slate-100 text-slate-400 font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform"
+                        >
+                            <X size={20}/> Позже
+                        </button>
+                        <button 
+                            onClick={() => handleSwipe('right', topCard.id)}
+                            className="flex-1 py-3 rounded-xl bg-slate-900 text-white font-bold flex items-center justify-center gap-2 active:scale-95 transition-transform shadow-lg shadow-slate-200"
+                        >
+                            <Check size={20}/> Принять
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const TariffCard = ({ plan, onPay }) => (
   <div className={`p-6 rounded-3xl border-2 relative overflow-hidden transition-all ${plan.is_best ? 'border-indigo-600 bg-indigo-50/50 scale-[1.02] shadow-lg' : 'border-slate-100 bg-white'}`}>
-    {plan.is_best && <div className="absolute top-0 right-0 bg-indigo-600 text-white px-3 py-1 rounded-bl-xl text-[10px] font-black uppercase">ХИТ</div>}
+    {plan.is_best && (
+      <div className="absolute top-0 right-0 bg-indigo-600 text-white px-3 py-1 rounded-bl-xl text-[10px] font-black uppercase">
+        ХИТ
+      </div>
+    )}
     <h3 className={`text-xl font-black uppercase ${plan.is_best ? 'text-indigo-700' : 'text-slate-800'}`}>{plan.name}</h3>
     <div className="flex items-baseline gap-2 mt-2 mb-4">
         <span className="text-3xl font-black text-slate-900">{plan.price}</span>
         {plan.stars > 0 && <span className="text-xs font-bold text-amber-500 bg-amber-100 px-2 py-0.5 rounded-full flex items-center gap-1"><Star size={10} fill="currentColor"/> {plan.stars} Stars</span>}
     </div>
+    
     <ul className="space-y-3 mb-6">
       {plan.features.map((f, i) => (
         <li key={i} className="flex items-start gap-3 text-sm font-medium text-slate-600">
@@ -92,241 +294,524 @@ const TariffCard = ({ plan, onPay }) => (
         </li>
       ))}
     </ul>
-    <button onClick={() => !plan.current && onPay(plan)} className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}>
+    
+    <button 
+        onClick={() => !plan.current && onPay(plan)}
+        className={`w-full py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-all flex justify-center items-center gap-2 ${plan.current ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : plan.is_best ? 'bg-indigo-600 text-white shadow-indigo-200' : 'bg-slate-900 text-white'}`}
+    >
       {plan.current ? 'Ваш текущий план' : <>{plan.stars > 0 && <Star size={16} fill="currentColor" className="text-amber-400"/>} Оплатить Stars</>}
     </button>
   </div>
 );
 
-
 // --- MODAL: DETAILED COST EDITING (Unit Economics) ---
 
 const CostEditModal = ({ item, onClose, onSave }) => {
-  const [formData, setFormData] = useState({
-      cost_price: item.input_data?.cost_price || 0,
-      fulfillment_cost: item.input_data?.fulfillment || 0,
-      external_marketing: item.input_data?.external_marketing || 0,
-      tax_rate: item.input_data?.tax_rate || 6
-  });
-  const handleChange = (field, value) => setFormData(prev => ({...prev, [field]: parseFloat(value) || 0}));
-  return (
-      <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
-          <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
-              <div className="flex justify-between items-center mb-4"><div><h3 className="font-bold text-lg">Unit-экономика</h3><p className="text-xs text-slate-400">SKU {item.sku}</p></div><button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button></div>
-              <div className="space-y-4">
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Себестоимость (COGS)</label><div className="flex items-center gap-2"><input type="number" value={formData.cost_price} onChange={e => handleChange('cost_price', e.target.value)} className="w-full bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800"/><span className="font-bold text-slate-400">₽</span></div></div>
-                  <div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фулфилмент (шт)</label><input type="number" value={formData.fulfillment_cost} onChange={e => handleChange('fulfillment_cost', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label><input type="number" value={formData.tax_rate} onChange={e => handleChange('tax_rate', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div></div>
-                  <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Внешняя реклама (бюджет)</label><input type="number" value={formData.external_marketing} onChange={e => handleChange('external_marketing', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div>
-                  <button onClick={() => onSave(item.sku, formData)} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-transform">Сохранить</button>
-              </div>
-          </div>
-      </div>
-  );
+    // State for all cost components
+    const [formData, setFormData] = useState({
+        cost_price: item.input_data?.cost_price || 0,
+        logistics_fwd: item.input_data?.logistics_fwd || 50,
+        logistics_ret: item.input_data?.logistics_ret || 33,
+        tax_rate: item.input_data?.tax || 6,
+        adv_cost: item.input_data?.adv || 0
+    });
+
+    const handleChange = (field, value) => {
+        setFormData(prev => ({...prev, [field]: Number(value)}));
+    };
+
+    return (
+        <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
+            <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                         <h3 className="font-bold text-lg">Unit-экономика</h3>
+                         <p className="text-xs text-slate-400">SKU {item.sku}</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-slate-400 uppercase ml-1">Себестоимость (COGS)</label>
+                        <div className="relative mt-1">
+                             <input 
+                                type="number" 
+                                value={formData.cost_price} 
+                                onChange={e => handleChange('cost_price', e.target.value)}
+                                className="w-full bg-slate-50 p-4 rounded-2xl font-black text-xl outline-none focus:ring-2 ring-indigo-500"
+                            />
+                            <span className="absolute right-4 top-4 text-slate-400 font-bold">₽</span>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Клиент)</label>
+                            <input 
+                                type="number" 
+                                value={formData.logistics_fwd} 
+                                onChange={e => handleChange('logistics_fwd', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Логистика (Возврат)</label>
+                            <input 
+                                type="number" 
+                                value={formData.logistics_ret} 
+                                onChange={e => handleChange('logistics_ret', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label>
+                            <input 
+                                type="number" 
+                                value={formData.tax_rate} 
+                                onChange={e => handleChange('tax_rate', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Реклама (на шт)</label>
+                            <input 
+                                type="number" 
+                                value={formData.adv_cost} 
+                                onChange={e => handleChange('adv_cost', e.target.value)}
+                                className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-sm text-indigo-800">
+                        <Info size={16} className="inline mr-1 relative -top-0.5"/>
+                        Комиссия WB берется автоматически из API (23% для примера).
+                    </div>
+
+                    <button 
+                        onClick={() => onSave(item.sku, formData)} 
+                        className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform"
+                    >
+                        Сохранить и пересчитать
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 };
+
 // --- History Components ---
 
 const CopyableBlock = ({ label, text }) => (
   <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-3 group relative">
     <div className="flex justify-between items-center mb-2">
         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
-        <button onClick={() => { navigator.clipboard.writeText(text); alert('Скопировано'); }} className="p-2 text-slate-300 hover:text-indigo-600 transition-colors bg-white rounded-lg shadow-sm"><Copy size={14}/></button>
+        <button 
+            onClick={() => { navigator.clipboard.writeText(text); alert('Скопировано'); }} 
+            className="p-2 text-slate-300 hover:text-indigo-600 transition-colors bg-white rounded-lg shadow-sm"
+        >
+            <Copy size={14}/>
+        </button>
     </div>
     <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{text}</div>
   </div>
 );
 
 const HistoryModule = ({ type, isOpen, onClose }) => {
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedItem, setSelectedItem] = useState(null);
+    const [history, setHistory] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedItem, setSelectedItem] = useState(null);
 
-  useEffect(() => {
-      if (isOpen) {
-          setLoading(true);
-          fetch(`${API_URL}/api/user/history?request_type=${type}`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } })
-          .then(r => r.json()).then(data => { setHistory(data); setLoading(false); }).catch(() => setLoading(false));
-      }
-  }, [isOpen, type]);
+    useEffect(() => {
+        if (isOpen) {
+            setLoading(true);
+            fetch(`${API_URL}/api/user/history?request_type=${type}`, { 
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } 
+            })
+            .then(r => r.json())
+            .then(data => { setHistory(data); setLoading(false); })
+            .catch(() => setLoading(false));
+        }
+    }, [isOpen, type]);
 
-  if (!isOpen) return null;
+    if (!isOpen) return null;
 
-  const renderDetails = (item) => {
-      const data = item.data;
-      if (item.type === 'seo' && data.generated_content) {
-          return (
-              <div className="space-y-2 animate-in fade-in">
-                  <div className="flex flex-wrap gap-1 mb-4">{data.keywords?.map((k, i) => <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg text-[10px] font-bold">{k}</span>)}</div>
-                  <CopyableBlock label="Заголовок" text={data.generated_content.title} />
-                  <CopyableBlock label="Описание" text={data.generated_content.description} />
-              </div>
-          )
-      }
-      if (item.type === 'ai' && data.ai_analysis) {
-          return (
-              <div className="space-y-4 animate-in fade-in">
-                  <div className="flex gap-4 items-center bg-white border border-slate-100 p-3 rounded-2xl">
-                       {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
-                       <div><div className="font-bold text-lg flex items-center gap-1 text-amber-500"><Star size={16} fill="currentColor"/> {data.rating}</div><div className="text-xs text-slate-500">{data.reviews_count} отзывов</div></div>
-                  </div>
-                  <div className="bg-red-50 p-4 rounded-2xl border border-red-100"><h4 className="font-bold text-red-600 text-sm mb-2 flex items-center gap-2"><ThumbsDown size={14}/> Жалобы</h4><ul className="text-sm space-y-2 text-slate-700">{data.ai_analysis.flaws?.map((f,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">⛔ {f}</li>)}</ul></div>
-                  <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100"><h4 className="font-bold text-indigo-600 text-sm mb-2 flex items-center gap-2"><Crown size={14}/> Стратегия</h4><ul className="text-sm space-y-2 text-slate-700">{data.ai_analysis.strategy?.map((s,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">{s}</li>)}</ul></div>
-              </div>
-          )
-      }
-      return <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto max-h-[60vh] text-slate-600 font-mono">{JSON.stringify(data, null, 2)}</pre>;
-  };
+    const getTypeIcon = (t) => {
+        switch(t) {
+            case 'ai': return <Brain size={18}/>;
+            case 'seo': return <Wand2 size={18}/>;
+            case 'price': return <BarChart3 size={18}/>;
+            default: return <Search size={18}/>;
+        }
+    };
 
-  return (
-      <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-lg sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl relative max-h-[85vh] flex flex-col">
-              <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">История</h3><button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20} /></button></div>
-              {!selectedItem ? (
-                  <div className="flex-1 overflow-y-auto space-y-3 pb-4">
-                      {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div> : history.length === 0 ? <div className="text-center p-10 text-slate-400 border border-dashed border-slate-200 rounded-2xl">Пусто</div> : history.map(h => (
-                              <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-slate-50 p-3 rounded-xl flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform hover:bg-slate-100">
-                                  <div className="bg-white p-2 rounded-lg text-indigo-600 shadow-sm">{h.type === 'ai' ? <Brain size={18}/> : <Search size={18}/>}</div>
-                                  <div className="flex-1 min-w-0"><div className="font-bold text-sm truncate">{h.title || `SKU ${h.sku}`}</div><div className="text-[10px] text-slate-400">{new Date(h.created_at).toLocaleString('ru-RU')}</div></div><ChevronLeft className="rotate-180 text-slate-300" size={16}/>
-                              </div>
-                      ))}
-                  </div>
-              ) : (
-                  <div className="flex-1 overflow-y-auto pb-4"><button onClick={() => setSelectedItem(null)} className="flex items-center gap-1 text-xs font-bold text-slate-400 mb-4 hover:text-indigo-600 transition-colors"><ChevronLeft size={14}/> Назад к списку</button><h3 className="font-bold text-xl mb-4 leading-tight">{selectedItem.title}</h3>{renderDetails(selectedItem)}</div>
-              )}
-          </div>
-      </div>
-  );
+    const renderDetails = (item) => {
+        const data = item.data;
+        
+        // --- SEO History ---
+        if (item.type === 'seo' && data.generated_content) {
+            return (
+                <div className="space-y-2 animate-in fade-in">
+                    <div className="flex flex-wrap gap-1 mb-4">
+                        {data.keywords?.map((k, i) => (
+                            <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg text-[10px] font-bold">{k}</span>
+                        ))}
+                    </div>
+                    <CopyableBlock label="Заголовок" text={data.generated_content.title} />
+                    <CopyableBlock label="Описание" text={data.generated_content.description} />
+                </div>
+            )
+        }
+
+        // --- AI Analysis History ---
+        if (item.type === 'ai' && data.ai_analysis) {
+            return (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="flex gap-4 items-center bg-white border border-slate-100 p-3 rounded-2xl">
+                         {data.image && <img src={data.image} className="w-12 h-16 object-cover rounded-lg" alt="product"/>}
+                         <div>
+                             <div className="font-bold text-lg flex items-center gap-1 text-amber-500"><Star size={16} fill="currentColor"/> {data.rating}</div>
+                             <div className="text-xs text-slate-500">{data.reviews_count} отзывов</div>
+                         </div>
+                    </div>
+                    <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+                         <h4 className="font-bold text-red-600 text-sm mb-2 flex items-center gap-2"><ThumbsDown size={14}/> Жалобы</h4>
+                         <ul className="text-sm space-y-2 text-slate-700">
+                             {data.ai_analysis.flaws?.map((f,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">⛔ {f}</li>)}
+                         </ul>
+                    </div>
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                         <h4 className="font-bold text-indigo-600 text-sm mb-2 flex items-center gap-2"><Crown size={14}/> Стратегия</h4>
+                         <ul className="text-sm space-y-2 text-slate-700">
+                             {data.ai_analysis.strategy?.map((s,i) => <li key={i} className="bg-white p-2 rounded-lg shadow-sm text-xs">{s}</li>)}
+                         </ul>
+                    </div>
+                </div>
+            )
+        }
+
+        // --- Price/Monitor History (Beautiful Card) ---
+        if (item.type === 'price' && data.prices) {
+            return (
+                <div className="space-y-4 animate-in fade-in">
+                    {/* Header */}
+                    <div className="flex gap-4 items-start">
+                        {data.image && <img src={data.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
+                        <div>
+                            <div className="text-[10px] font-bold text-slate-400 uppercase">{data.brand}</div>
+                            <div className="font-bold text-sm leading-tight">{data.name}</div>
+                            <div className="mt-1 text-xs bg-slate-100 inline-block px-2 py-1 rounded text-slate-500">Остаток: {data.stock_qty} шт</div>
+                        </div>
+                    </div>
+
+                    {/* Prices Card */}
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium text-slate-500">WB Кошелек</span>
+                            <span className="text-xl font-black text-purple-600">{data.prices.wallet_purple} ₽</span>
+                        </div>
+                        <div className="flex justify-between items-center mb-1">
+                            <span className="text-xs text-slate-400">Обычная цена</span>
+                            <span className="text-sm font-bold text-slate-700">{data.prices.standard_black} ₽</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs text-slate-400">До скидок</span>
+                            <span className="text-xs text-slate-400 line-through">{data.prices.base_crossed} ₽</span>
+                        </div>
+                    </div>
+
+                    {/* Metrics */}
+                    {data.metrics && (
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                                <div className="text-[10px] text-emerald-600 font-bold uppercase">Скидка</div>
+                                <div className="text-lg font-black text-emerald-700">{data.metrics.total_discount_percent}%</div>
+                            </div>
+                            <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                                <div className="text-[10px] text-indigo-600 font-bold uppercase">Выгода</div>
+                                <div className="text-lg font-black text-indigo-700">{data.metrics.wallet_benefit} ₽</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )
+        }
+
+        // --- Fallback (JSON) ---
+        return (
+            <pre className="text-xs bg-slate-50 p-3 rounded-xl overflow-auto max-h-[60vh] text-slate-600 font-mono">
+                {JSON.stringify(data, null, 2)}
+            </pre>
+        );
+    };
+
+    return (
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-lg sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl relative max-h-[85vh] flex flex-col">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-lg">История</h3>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20} /></button>
+                </div>
+
+                {!selectedItem ? (
+                    <div className="flex-1 overflow-y-auto space-y-3 pb-4">
+                        {loading ? (
+                            <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400"/></div>
+                        ) : history.length === 0 ? (
+                            <div className="text-center p-10 text-slate-400 border border-dashed border-slate-200 rounded-2xl">Пусто</div>
+                        ) : (
+                            history.map(h => (
+                                <div key={h.id} onClick={() => setSelectedItem(h)} className="bg-slate-50 p-3 rounded-xl flex items-center gap-3 cursor-pointer active:scale-[0.99] transition-transform hover:bg-slate-100">
+                                    <div className="bg-white p-2 rounded-lg text-indigo-600 shadow-sm">{getTypeIcon(h.type)}</div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="font-bold text-sm truncate">{h.title || `SKU ${h.sku}`}</div>
+                                        <div className="text-[10px] text-slate-400">{new Date(h.created_at).toLocaleString('ru-RU')}</div>
+                                    </div>
+                                    <ChevronLeft className="rotate-180 text-slate-300" size={16}/>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                ) : (
+                    <div className="flex-1 overflow-y-auto pb-4">
+                        <button onClick={() => setSelectedItem(null)} className="flex items-center gap-1 text-xs font-bold text-slate-400 mb-4 hover:text-indigo-600 transition-colors">
+                            <ChevronLeft size={14}/> Назад к списку
+                        </button>
+                        <h3 className="font-bold text-xl mb-4 leading-tight">{selectedItem.title}</h3>
+                        {renderDetails(selectedItem)}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 // --- СТРАНИЦЫ ---
 
 const DashboardPage = ({ onNavigate, user }) => {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-      if (user?.has_wb_token) {
-          setLoading(true);
-          fetch(`${API_URL}/api/internal/stats`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }).then(r => r.json()).then(data => { setStats(data); setLoading(false); }).catch(() => setLoading(false));
-      }
-  }, [user]);
+    const [stats, setStats] = useState(null);
+    const [loading, setLoading] = useState(false);
 
-  return (
-      <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
-          <StoriesBar />
-          <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
-              <div className="relative z-10">
-                  <div className="flex justify-between items-start mb-4">
-                      <div className="flex items-center gap-2 opacity-80"><Sparkles size={16} className="text-amber-300" /><span className="text-xs font-bold uppercase tracking-widest">Мои Продажи</span></div>
-                      {!user?.has_wb_token && <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">Подключить</button>}
-                  </div>
-                  {!user?.has_wb_token ? (
-                      <div className="text-center py-4"><p className="font-bold text-lg mb-2">Подключите API</p><p className="text-xs opacity-70">Чтобы видеть реальные продажи</p></div>
-                  ) : loading ? <div className="flex justify-center py-6"><Loader2 className="animate-spin" /></div> : (
-                      <div className="grid grid-cols-2 gap-4">
-                          <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm"><p className="text-xs opacity-70 mb-1">Заказы сегодня</p><p className="text-2xl font-black">{stats?.orders_today?.sum?.toLocaleString() || 0} ₽</p><p className="text-xs opacity-70">{stats?.orders_today?.count || 0} шт</p></div>
-                          <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm"><p className="text-xs opacity-70 mb-1">Остатки</p><p className="text-2xl font-black">{stats?.stocks?.total_quantity?.toLocaleString() || 0} шт</p></div>
-                      </div>
-                  )}
-              </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-               <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
-                  <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600"><PieChart size={24} /></div>
-                  <div><span className="font-bold text-slate-800 block">Unit-экономика</span><span className="text-xs text-slate-400">P&L, Маржа, ROI</span></div>
-              </div>
-              <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"><div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600"><Truck size={24} /></div><div><span className="font-bold text-slate-800 block">Поставки</span><span className="text-xs text-slate-400">Прогноз склада</span></div></div>
-              <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"><div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600"><Target size={24} /></div><div><span className="font-bold text-slate-800 block">Биддер</span><span className="text-xs text-slate-400">Управление рекламой</span></div></div>
-              <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"><div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600"><TrendingUp size={24} /></div><div><span className="font-bold text-slate-800 block">SEO Трекер</span><span className="text-xs text-slate-400">Позиции (SERP)</span></div></div>
-              <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"><div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600"><Plus size={24} /></div><div><span className="font-bold text-slate-800 block">Сканер</span><span className="text-xs text-slate-400">Добавить</span></div></div>
-              <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"><div className="bg-yellow-100 w-12 h-12 rounded-2xl flex items-center justify-center text-yellow-600"><Wand2 size={24} /></div><div><span className="font-bold text-slate-800 block">SEO Gen</span><span className="text-xs text-slate-400">Генератор</span></div></div>
-          </div>
-      </div>
-  );
+    useEffect(() => {
+        if (user?.has_wb_token) {
+            setLoading(true);
+            fetch(`${API_URL}/api/internal/stats`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            })
+            .then(r => r.json())
+            .then(data => {
+                setStats(data);
+                setLoading(false);
+            })
+            .catch(() => setLoading(false));
+        }
+    }, [user]);
+
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in duration-500">
+            <StoriesBar />
+
+            <div className="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-[32px] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
+                <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-4">
+                        <div className="flex items-center gap-2 opacity-80">
+                            <Sparkles size={16} className="text-amber-300" />
+                            <span className="text-xs font-bold uppercase tracking-widest">Мои Продажи</span>
+                        </div>
+                        {!user?.has_wb_token && (
+                            <button onClick={() => onNavigate('profile')} className="bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-xs font-bold transition-colors">
+                                Подключить
+                            </button>
+                        )}
+                    </div>
+
+                    {!user?.has_wb_token ? (
+                        <div className="text-center py-4">
+                            <p className="font-bold text-lg mb-2">Подключите API</p>
+                            <p className="text-xs opacity-70">Чтобы видеть реальные продажи</p>
+                        </div>
+                    ) : loading ? (
+                        <div className="flex justify-center py-6"><Loader2 className="animate-spin" /></div>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm">
+                                <p className="text-xs opacity-70 mb-1">Заказы сегодня</p>
+                                <p className="text-2xl font-black">{stats?.orders_today?.sum?.toLocaleString() || 0} ₽</p>
+                                <p className="text-xs opacity-70">{stats?.orders_today?.count || 0} шт</p>
+                            </div>
+                            <div className="bg-white/10 p-3 rounded-2xl backdrop-blur-sm">
+                                <p className="text-xs opacity-70 mb-1">Остатки</p>
+                                <p className="text-2xl font-black">{stats?.stocks?.total_quantity?.toLocaleString() || 0} шт</p>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Геймификация: Карточки с рекомендациями */}
+            <SwipeRecommendations />
+
+            <div className="grid grid-cols-2 gap-4">
+                 <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                    <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
+                        <PieChart size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Unit-экономика</span>
+                        <span className="text-xs text-slate-400">P&L, Маржа, ROI</span>
+                    </div>
+                </div>
+                <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
+                        <Truck size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Поставки</span>
+                        <span className="text-xs text-slate-400">Прогноз склада</span>
+                    </div>
+                </div>
+                <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
+                        <Target size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Биддер</span>
+                        <span className="text-xs text-slate-400">Управление рекламой</span>
+                    </div>
+                </div>
+                 <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
+                        <TrendingUp size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">SEO Трекер</span>
+                        <span className="text-xs text-slate-400">Позиции (SERP)</span>
+                    </div>
+                </div>
+                 <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
+                        <Plus size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">Сканер</span>
+                        <span className="text-xs text-slate-400">Добавить</span>
+                    </div>
+                </div>
+                 <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    <div className="bg-yellow-100 w-12 h-12 rounded-2xl flex items-center justify-center text-yellow-600">
+                        <Wand2 size={24} />
+                    </div>
+                    <div>
+                        <span className="font-bold text-slate-800 block">SEO Gen</span>
+                        <span className="text-xs text-slate-400">Генератор</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 const SupplyPage = () => {
-  const [coeffs, setCoeffs] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [volume, setVolume] = useState(1000);
-  const [calculation, setCalculation] = useState(null);
-  const [loading, setLoading] = useState(false);
-  
-  useEffect(() => {
-      const token = window.Telegram?.WebApp?.initData || "";
-      // Fetch coefficients
-      fetch(`${API_URL}/api/internal/coefficients`, { headers: { 'X-TG-Data': token } })
-          .then(r => r.json()).then(setCoeffs).catch(console.error);
-      
-      // Fetch products for supply view
-      setLoading(true);
-      fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': token } })
-          .then(r => r.json())
-          .then(data => {
-              setProducts(data);
-              setLoading(false);
-          })
-          .catch(() => setLoading(false));
-  }, []);
+    const [coeffs, setCoeffs] = useState([]);
+    const [volume, setVolume] = useState(1000);
+    const [calculation, setCalculation] = useState(null);
+    const [loading, setLoading] = useState(false);
+    
+    useEffect(() => {
+        fetch(`${API_URL}/api/internal/coefficients`, {
+             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+        }).then(r => r.json()).then(setCoeffs).catch(console.error);
+    }, []);
 
-  const handleCalculate = async () => {
-      if (!volume) return;
-      const res = await fetch(`${API_URL}/api/internal/transit_calc`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify({ volume: Number(volume) }) });
-      setCalculation(await res.json());
-  };
+    const handleCalculate = async () => {
+        if (!volume) return;
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/internal/transit_calc`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
+                },
+                body: JSON.stringify({ volume: Number(volume), destination: "Koledino" })
+            });
+            setCalculation(await res.json());
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  return (
-      <div className="p-4 space-y-6 pb-32 animate-in fade-in">
-           <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
-              <h1 className="text-2xl font-black flex items-center gap-2">
-                  <Truck className="text-white" /> Supply Chain
-              </h1>
-              <p className="text-sm opacity-90 mt-2">Умное управление поставками (ROP/SS).</p>
-          </div>
-          
-          {/* Supply Recommendations */}
-          <h3 className="font-bold text-lg px-2 flex items-center gap-2">Рекомендации к заказу</h3>
-          <div className="space-y-3">
-              {loading ? <div className="p-10 text-center"><Loader2 className="animate-spin text-orange-500 mx-auto"/></div> : 
-               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').length === 0 ? 
-               <div className="bg-white p-6 rounded-3xl border border-dashed border-slate-200 text-center text-slate-400">Всё отлично! Поставок не требуется.</div> :
-               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').map(p => (
-                  <div key={p.sku} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center relative overflow-hidden">
-                      {p.supply.status === 'critical' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500"/>}
-                      <div>
-                          <div className="font-bold text-sm">SKU {p.sku}</div>
-                          <div className="text-[10px] text-slate-400 mt-1">Остаток: {p.quantity} шт</div>
-                          <div className="flex gap-2 mt-2">
-                              <span className="bg-slate-100 px-2 py-1 rounded text-[9px] text-slate-500 font-bold">Продаж/день: {p.supply.metrics?.avg_sales}</span>
-                              <span className="bg-indigo-50 px-2 py-1 rounded text-[9px] text-indigo-600 font-bold">Страховой: {p.supply.metrics?.safety_stock}</span>
+    return (
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+             <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
+                <h1 className="text-2xl font-black flex items-center gap-2">
+                    <Truck className="text-white" /> Supply Chain
+                </h1>
+                <p className="text-sm opacity-90 mt-2">Управление поставками и коэффициенты складов.</p>
+            </div>
+            
+            <h3 className="font-bold text-lg px-2">Приемка складов (Live)</h3>
+            <div className="grid grid-cols-2 gap-3">
+                {coeffs.map((c, i) => (
+                    <div key={i} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                        <div className="flex justify-between items-start mb-2">
+                             <span className="font-bold text-sm truncate">{c.warehouse}</span>
+                             <span className={`text-xs font-black px-2 py-0.5 rounded ${c.coefficient === 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                                x{c.coefficient}
+                             </span>
+                        </div>
+                        <p className="text-10px text-slate-400">Транзит: {c.transit_time}</p>
+                    </div>
+                ))}
+            </div>
+
+            <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
+                 <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
+                 <p className="text-sm text-blue-600 mb-4">Сравнение: Прямая поставка vs Транзит через Казань.</p>
+                 
+                 <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">Объем поставки (литры)</label>
+                    <input 
+                        type="number"
+                        value={volume}
+                        onChange={e => setVolume(e.target.value)}
+                        className="w-full font-black text-lg outline-none text-slate-800"
+                    />
+                 </div>
+
+                 <button 
+                    onClick={handleCalculate} 
+                    disabled={loading}
+                    className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold active:scale-95 transition-transform"
+                 >
+                    {loading ? <Loader2 className="animate-spin mx-auto"/> : 'Рассчитать выгоду'}
+                 </button>
+
+                 {calculation && (
+                      <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
+                          <div className="flex justify-between text-sm mb-1">
+                              <span className="text-slate-500">Прямая (Коледино):</span>
+                              <span className="font-bold">{calculation.direct_cost} ₽</span>
+                          </div>
+                          <div className="flex justify-between text-sm mb-3">
+                              <span className="text-slate-500">Транзит (Казань):</span>
+                              <span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span>
+                          </div>
+                          <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
+                              {calculation.recommendation}
+                              {calculation.is_profitable && <div className="mt-1">Выгода: {calculation.benefit} ₽</div>}
                           </div>
                       </div>
-                      <div className="text-right">
-                          {p.supply.recommendation > 0 ? (
-                              <>
-                                  <div className="text-[10px] text-orange-500 font-bold uppercase mb-1">Заказать</div>
-                                  <div className="text-2xl font-black text-slate-800">{p.supply.recommendation}</div>
-                              </>
-                          ) : (
-                              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">Хватит на {p.supply.days_left} дн.</span>
-                          )}
-                      </div>
-                  </div>
-              ))}
-          </div>
-
-          <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 mt-6">
-               <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
-               <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100"><input type="number" value={volume} onChange={e => setVolume(e.target.value)} className="w-full font-black text-lg outline-none text-slate-800"/></div>
-               <button onClick={handleCalculate} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать выгоду</button>
-               {calculation && (
-                    <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100 text-sm">
-                        <div className="flex justify-between mb-1"><span className="text-slate-500">Прямая:</span><span className="font-bold">{calculation.direct_cost} ₽</span></div>
-                        <div className="flex justify-between mb-3"><span className="text-slate-500">Транзит:</span><span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span></div>
-                        <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>{calculation.recommendation}</div>
-                    </div>
-               )}
-          </div>
-      </div>
-  )
+                 )}
+            </div>
+        </div>
+    )
 }
 
 // --- BIDDER PAGE (CONFIG & SIMULATION) ---
@@ -553,35 +1038,112 @@ const SeoTrackerPage = () => {
 }
 
 const FinancePage = ({ onNavigate }) => {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [editingCost, setEditingCost] = useState(null);
-  const fetchProducts = async () => {
-      setLoading(true);
-      try { const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }); if (res.ok) setProducts(await res.json()); } catch(e) { console.error(e); } finally { setLoading(false); }
-  };
-  useEffect(() => { fetchProducts(); }, []);
-  const handleUpdateCost = async (sku, formData) => {
-      try { await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) }); setEditingCost(null); fetchProducts(); } catch(e) { alert("Ошибка"); }
-  };
-  return (
-      <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
-           <div className="flex justify-between items-center px-2"><div><h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2><p className="text-xs text-slate-400">Unit-экономика</p></div><button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button></div>
-          {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
-          {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div> : products.map((item) => (
-                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm mb-4 overflow-hidden">
-                      <div className="p-5 pb-2"><div className="flex justify-between items-start mb-4"><div><div className="font-black text-lg">SKU {item.sku}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Цена: {item.price} ₽ • Остаток: {item.quantity} шт</div></div><button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button></div>
-                          <div className="bg-slate-50 rounded-2xl p-4 space-y-3 mb-2">
-                              <div className="flex justify-between items-center border-b border-slate-200 pb-2"><span className="text-xs font-bold text-slate-500">Gross Sales</span><span className="font-black text-slate-800">{item.economics.gross_sales} ₽</span></div>
-                              <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100"><span className="text-xs font-bold text-purple-600">CM2 (Операционная)</span><span className="font-bold">{item.economics.cm2} ₽</span></div>
-                              <div className={`flex justify-between items-center p-3 rounded-xl ${item.economics.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}><span className="font-black text-sm uppercase">Чистая прибыль</span><span className="font-black text-lg">{item.economics.cm3} ₽</span></div>
-                          </div>
-                      </div>
-                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center"><div className="flex gap-2"><span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.roi}%</span></div>{item.economics.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}</div>
-                  </div>
-          ))}
-      </div>
-  );
+    const [products, setProducts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [editingCost, setEditingCost] = useState(null);
+
+    const fetchProducts = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/finance/products`, {
+                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
+            });
+            if (res.ok) setProducts(await res.json());
+        } catch(e) { console.error(e); } finally { setLoading(false); }
+    };
+
+    useEffect(() => { fetchProducts(); }, []);
+
+    const handleUpdateCost = async (sku, formData) => {
+        try {
+            await fetch(`${API_URL}/api/finance/cost/${sku}`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
+                },
+                body: JSON.stringify(formData)
+            });
+            setEditingCost(null);
+            fetchProducts();
+        } catch(e) { alert("Ошибка обновления"); }
+    };
+
+    return (
+        <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
+             <div className="flex justify-between items-center px-2">
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800">Unit-экономика</h2>
+                    <p className="text-xs text-slate-400">Внутренняя аналитика (API)</p>
+                </div>
+                <button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
+            </div>
+
+            {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
+
+            {loading ? (
+                <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div>
+            ) : products.length === 0 ? (
+                <div className="text-center p-10 bg-white rounded-3xl border border-dashed border-slate-200">
+                    <p className="font-bold text-slate-500 mb-2">Нет данных</p>
+                    <p className="text-xs text-slate-400">Убедитесь, что подключен API токен и на остатках есть товары.</p>
+                </div>
+            ) : (
+                products.map((item) => (
+                    <div key={item.sku} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group mb-3">
+                        <div className="flex justify-between items-start mb-3">
+                            <div className="min-w-0">
+                                <div className="font-bold truncate text-sm">SKU {item.sku}</div>
+                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Остаток: {item.quantity} шт</div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                                <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
+                                    <Calculator size={18} />
+                                </button>
+                                {item.supply && (
+                                    <span className={`text-[9px] font-bold px-2 py-1 rounded-lg ${item.supply.status === 'critical' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                        {item.supply.days_left} дн.
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Waterfall / Progress */}
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full flex overflow-hidden mb-3">
+                            <div className="bg-slate-400 h-full" style={{width: `${(item.input_data.cost_price / item.price)*100}%`}}/>
+                            <div className="bg-indigo-300 h-full" style={{width: `${(item.economics.costs_breakdown?.logistics || 50 / item.price)*100}%`}}/>
+                            <div className="bg-emerald-500 h-full flex-1"/>
+                        </div>
+
+                        <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
+                             <div>
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Себестоимость</span>
+                                <span className="font-bold text-slate-700">{item.input_data.cost_price} ₽</span>
+                             </div>
+                             <div className="text-center">
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Цена</span>
+                                <span className="font-bold text-slate-700">{item.price} ₽</span>
+                             </div>
+                             <div className="text-right">
+                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Прибыль</span>
+                                <span className={`font-black ${item.economics.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                    {item.economics.cm3} ₽
+                                </span>
+                             </div>
+                        </div>
+                        <div className="mt-2 flex gap-2">
+                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                 ROI: {item.economics.roi}%
+                             </span>
+                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
+                                 Маржа: {item.economics.margin_percent}%
+                             </span>
+                        </div>
+                    </div>
+                ))
+            )}
+        </div>
+    );
 }
 
 const MonitorPage = () => {
@@ -1337,4 +1899,3 @@ export default function App() {
     </div>
   );
 }
-// NEW PAGE
