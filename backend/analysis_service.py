@@ -3,6 +3,8 @@ import re
 import json
 import logging
 import requests
+import math
+from statistics import mean, stdev
 from datetime import datetime, timedelta
 
 logger = logging.getLogger("AI-Service")
@@ -32,6 +34,102 @@ class AnalysisService:
         return raw_data
 
     @staticmethod
+    def calculate_supply_metrics(current_stock: int, sales_history: list, lead_time_days: int = 14):
+        """
+        Расчет метрик Supply Chain по формулам из раздела 4.2 Плана.
+        
+        sales_history: список продаж по дням (int), например [5, 2, 0, 8, ...] за 30-60 дней.
+        lead_time_days: срок поставки (L), по умолчанию 14 дней.
+        """
+        if not sales_history:
+            return {
+                "status": "no_data",
+                "message": "Нет данных о продажах",
+                "recommendation": 0,
+                "days_left": 999
+            }
+
+        # 1. Основные статистики
+        avg_daily_sales = mean(sales_history) if sales_history else 0
+        
+        # Если продаж нет
+        if avg_daily_sales == 0:
+             return {
+                "status": "ok",
+                "message": "Продаж нет",
+                "recommendation": 0,
+                "days_left": 999,
+                "safety_stock": 0
+            }
+
+        # Стандартное отклонение спроса (sigma_D)
+        # Если данных мало (1 день), stdev кидает ошибку, берем 0
+        try:
+            sigma_d = stdev(sales_history)
+        except:
+            sigma_d = avg_daily_sales * 0.5 # Эвристика для новых товаров
+
+        # 2. Параметры модели
+        # Уровень сервиса 95% -> Z = 1.65 (из плана)
+        z_alpha = 1.65 
+        
+        # Стандартное отклонение времени поставки (sigma_L). 
+        # Обычно это 1-2 дня для WB. Возьмем 2 дня для надежности.
+        sigma_l = 2 
+
+        # 3. Расчет страхового запаса (SS)
+        # Формула: SS = Z * sqrt( L * sigma_D^2 + D_avg^2 * sigma_L^2 )
+        term1 = lead_time_days * (sigma_d ** 2)
+        term2 = (avg_daily_sales ** 2) * (sigma_l ** 2)
+        safety_stock = int(z_alpha * math.sqrt(term1 + term2))
+
+        # 4. Расчет точки заказа (ROP)
+        # Формула: ROP = (D_avg * L) + SS
+        cycle_stock = avg_daily_sales * lead_time_days
+        rop = int(cycle_stock + safety_stock)
+
+        # 5. Анализ текущей ситуации
+        days_left = int(current_stock / avg_daily_sales)
+        
+        # Сколько нужно заказать?
+        # Target Stock Level обычно ROP + Cycle Stock (или просто доводим до уровня ROP + запас на период)
+        # Упрощенно: если мы ниже ROP, заказываем, чтобы покрыть lead_time + еще один цикл продаж
+        qty_to_order = 0
+        status = "ok"
+        message = "Запаса достаточно"
+
+        if current_stock <= rop:
+            # Нужно заказать: (ROP + Cycle Stock) - Current Stock
+            target_level = rop + cycle_stock 
+            qty_to_order = int(target_level - current_stock)
+            if qty_to_order < 0: qty_to_order = 0
+            
+            if current_stock <= safety_stock:
+                status = "critical"
+                message = "Критический остаток! Риск OOS"
+            else:
+                status = "warning"
+                message = "Пора заказывать"
+
+        elif days_left < lead_time_days + 5:
+             # Мягкое предупреждение
+             status = "warning"
+             message = "Планируйте поставку"
+
+        return {
+            "status": status,
+            "message": message,
+            "days_left": days_left,
+            "metrics": {
+                "avg_sales": round(avg_daily_sales, 1),
+                "volatility": round(sigma_d, 1), # Волатильность
+                "safety_stock": safety_stock,
+                "rop": rop
+            },
+            "recommendation": qty_to_order
+        }
+
+    @staticmethod
     def calculate_pnl(
         price: float, 
         quantity_sold: int,
@@ -43,44 +141,21 @@ class AnalysisService:
         external_marketing: float,
         tax_rate: float
     ):
-        """
-        Расчет Unit-экономики и P&L (Profit and Loss) согласно плану.
-        
-        Иерархия маржинальности:
-        1. Gross Sales = Цена * Кол-во
-        2. Net Sales = Gross Sales - Возвраты (упрощенно считаем в quantity_sold чистые продажи)
-        3. CM1 (Marginal Profit) = Net Sales - COGS (Себестоимость)
-        4. CM2 (Operational Margin) = CM1 - (Логистика + Комиссия + Фулфилмент + Налоги)
-        5. CM3 (Net Margin) = CM2 - Маркетинг (Внутренний + Внешний)
-        """
-        
-        # 1. Gross Sales (Выручка)
         gross_sales = price * quantity_sold
-        
-        # 2. COGS (Cost of Goods Sold)
         total_cogs = cost_price * quantity_sold
-        
-        # 3. CM1
         cm1 = gross_sales - total_cogs
         
-        # Переменные расходы WB и Операционные
         total_commission = commission_wb * quantity_sold
         total_logistics = logistics_wb * quantity_sold
         total_fulfillment = fulfillment * quantity_sold
         total_tax = (gross_sales * (tax_rate / 100))
         
         operational_expenses = total_commission + total_logistics + total_fulfillment + total_tax
-        
-        # 4. CM2
         cm2 = cm1 - operational_expenses
         
-        # Маркетинг
-        total_marketing = (advertising_wb * quantity_sold) + external_marketing # external считаем как фикс на объем
-        
-        # 5. CM3 (Net Profit)
+        total_marketing = (advertising_wb * quantity_sold) + external_marketing
         net_profit = cm2 - total_marketing
         
-        # Метрики
         margin_percent = round((net_profit / gross_sales * 100), 1) if gross_sales > 0 else 0
         roi = round((net_profit / (total_cogs + total_marketing) * 100), 1) if (total_cogs + total_marketing) > 0 else 0
         
@@ -99,29 +174,11 @@ class AnalysisService:
                 "internal": int(advertising_wb * quantity_sold),
                 "external": int(external_marketing)
             },
-            "cm3": int(net_profit), # Чистая прибыль
+            "cm3": int(net_profit),
             "margin_percent": margin_percent,
             "roi": roi,
             "is_toxic": cm2 < 0 or net_profit < 0
         }
-
-    @staticmethod
-    def calculate_supply_prediction(current_stock: int, sales_velocity: float):
-        if sales_velocity <= 0:
-            return {"days_left": 999, "status": "ok", "message": "Продаж нет"}
-        
-        days_left = int(current_stock / sales_velocity)
-        
-        status = "ok"
-        message = "Запаса достаточно"
-        if days_left <= 3:
-            status = "critical"
-            message = "Критический остаток!"
-        elif days_left <= 7:
-            status = "warning"
-            message = "Пора планировать поставку"
-            
-        return {"days_left": days_left, "status": status, "message": message}
 
     @staticmethod
     def calculate_transit_benefit(volume_liters: int):

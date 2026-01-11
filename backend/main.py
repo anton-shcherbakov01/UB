@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 
 from parser_service import parser_service
@@ -186,70 +186,84 @@ async def get_my_products_finance(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Получение детального отчета P&L по каждому товару (API + БД).
-    Использует РЕАЛЬНЫЕ данные о продажах за 30 дней.
+    Получение детального отчета P&L и Supply Chain по каждому товару.
+    Использует РЕАЛЬНЫЕ данные о продажах за 60 дней для точного расчета ROP/Safety Stock.
     """
     token = user.wb_api_token
     is_demo = not token
     
     if is_demo:
-        # Демо-режим без изменений
         stocks = [
             {"nmId": 12345678, "quantity": 120, "Price": 2500, "Discount": 50},
-            {"nmId": 87654321, "quantity": 45, "Price": 1800, "Discount": 30},
+            {"nmId": 87654321, "quantity": 15, "Price": 1800, "Discount": 30}, # Мало
             {"nmId": 11223344, "quantity": 300, "Price": 990, "Discount": 10}
         ]
-        sales_map = {12345678: 30, 87654321: 5, 11223344: 150} # Фиксированные демо-продажи
+        # Демо-история: список продаж по дням
+        sales_history_map = {
+            12345678: [5, 4, 6, 5, 5, 8, 2, 5, 6, 5, 4, 5, 6, 7],
+            87654321: [1, 0, 1, 0, 2, 1, 0, 1, 0, 0, 1, 2, 1, 0],
+            11223344: [10, 12, 15, 10, 11, 13, 20, 18, 15, 12, 14, 15, 10, 11]
+        }
+        all_skus = set([12345678, 87654321, 11223344])
+        sku_details = {s['nmId']: {"price": s['Price'], "discount": s['Discount'], "quantity": s['quantity']} for s in stocks}
     else:
-        # 1. Получаем Остатки (склад)
+        # 1. Получаем Остатки
         stocks = await wb_api_service.get_my_stocks(token)
         
-        # 2. Получаем Продажи (за 30 дней)
-        sales_data = await wb_api_service.get_sales_history(token, days=30)
+        # 2. Получаем Продажи (за 60 дней для статистики)
+        sales_data = await wb_api_service.get_sales_history(token, days=60)
         
-        # Агрегируем продажи по SKU
-        sales_map = {}
+        # Агрегация истории продаж: SKU -> [qty_day1, qty_day2, ...]
+        # Нужно разложить продажи по датам, чтобы посчитать волатильность
+        sales_history_map = {} # { sku: [2, 0, 5, 1...] }
+        sales_total_map = {}   # { sku: total_qty }
+        
+        # Группируем заказы по дате и SKU
+        temp_daily = {} # { sku: { "2023-10-01": 5, "2023-10-02": 2 } }
+        
         for order in sales_data:
             sku = order.get('nmId')
-            if sku:
-                sales_map[sku] = sales_map.get(sku, 0) + 1
-    
-    # Собираем общую карту товаров (Остатки + Продажи)
-    # Это решает проблему, когда товар кончился (нет в stocks), но был продан
-    all_skus = set()
-    sku_details = {} # Map для хранения цены и скидки
-    
-    # Обработка stocks
-    if stocks:
-        for s in stocks:
-            sku = s.get('nmId')
-            all_skus.add(sku)
-            if sku not in sku_details:
+            if not sku: continue
+            
+            date_str = order.get('date', '')[:10] # YYYY-MM-DD
+            if not date_str: continue
+            
+            if sku not in temp_daily: temp_daily[sku] = {}
+            temp_daily[sku][date_str] = temp_daily[sku].get(date_str, 0) + 1
+            sales_total_map[sku] = sales_total_map.get(sku, 0) + 1
+
+        # Преобразуем словарь дат в плоский список значений (заполняя пропуски нулями)
+        today = datetime.now().date()
+        for sku, daily_map in temp_daily.items():
+            history_list = []
+            # Берем последние 30 дней для Velocity
+            for i in range(30): 
+                d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                history_list.append(daily_map.get(d, 0))
+            sales_history_map[sku] = history_list
+
+        # Собираем все SKU
+        all_skus = set()
+        sku_details = {}
+        
+        if stocks:
+            for s in stocks:
+                sku = s.get('nmId')
+                all_skus.add(sku)
                 sku_details[sku] = {
                     "price": s.get('Price', 0),
                     "discount": s.get('Discount', 0),
                     "quantity": s.get('quantity', 0)
                 }
-            else:
-                sku_details[sku]["quantity"] += s.get('quantity', 0)
-                
-    # Обработка продаж (добавляем SKU, которых нет на остатках)
-    for sku, count in sales_map.items():
-        all_skus.add(sku)
-        if sku not in sku_details:
-            # Если товара нет на остатках, цену берем примерную или 0 (API истории не всегда отдает текущую цену)
-            # В идеале нужно делать доп запрос к card info, но пока оставим заглушку
-            sku_details[sku] = {
-                "price": 0, 
-                "discount": 0, 
-                "quantity": 0,
-                "is_out_of_stock": True 
-            }
+        
+        for sku in sales_total_map.keys():
+            all_skus.add(sku)
+            if sku not in sku_details:
+                sku_details[sku] = {"price": 0, "discount": 0, "quantity": 0, "is_out_of_stock": True}
 
     if not all_skus:
         return []
 
-    # Получаем себестоимость из БД
     skus_list = list(all_skus)
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus_list)))
     costs_map = {c.sku: c for c in costs_res.scalars().all()}
@@ -266,15 +280,14 @@ async def get_my_products_finance(
         
         selling_price = details['price'] * (1 - details['discount']/100)
         
-        # РЕАЛЬНЫЕ ПРОДАЖИ (больше нет рандома)
-        orders_count = sales_map.get(sku, 0)
-        
-        # Если цены нет (товар кончился), пробуем не ломать расчет
-        if selling_price == 0 and orders_count > 0:
-            # Можно попробовать найти цену в объекте заказа, если она там есть
-            pass 
+        # P&L Calculation
+        if is_demo:
+            # Для демо суммируем историю
+            orders_count = sum(sales_history_map.get(sku, []))
+        else:
+            orders_count = sales_total_map.get(sku, 0) # Всего продаж за период (для P&L)
 
-        commission_wb = selling_price * 0.23 # 23%
+        commission_wb = selling_price * 0.23 
         logistics_wb = 50.0 
         adv_wb_per_item = 15.0 
         
@@ -290,9 +303,13 @@ async def get_my_products_finance(
             tax_rate=tax
         )
         
-        # Прогноз поставок
-        sales_velocity = orders_count / 30 # Продаж в день (среднее за месяц)
-        supply = analysis_service.calculate_supply_prediction(details['quantity'], sales_velocity)
+        # Supply Chain Calculation (Real Formulas)
+        history = sales_history_map.get(sku, [])
+        supply = analysis_service.calculate_supply_metrics(
+            current_stock=details['quantity'],
+            sales_history=history,
+            lead_time_days=14 # Срок поставки (можно вынести в настройки SKU)
+        )
 
         result.append({
             "sku": sku,
@@ -309,9 +326,7 @@ async def get_my_products_finance(
             "is_out_of_stock": details.get("is_out_of_stock", False)
         })
         
-    # Сортировка: сначала те, где есть продажи или остатки
     result.sort(key=lambda x: (x['economics']['gross_sales'], x['quantity']), reverse=True)
-        
     return result
 
 @app.post("/api/finance/cost/{sku}")

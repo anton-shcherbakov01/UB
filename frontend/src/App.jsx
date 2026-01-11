@@ -108,79 +108,16 @@ const CostEditModal = ({ item, onClose, onSave }) => {
       external_marketing: item.input_data?.external_marketing || 0,
       tax_rate: item.input_data?.tax_rate || 6
   });
-
-  const handleChange = (field, value) => {
-      setFormData(prev => ({...prev, [field]: parseFloat(value) || 0}));
-  };
-
+  const handleChange = (field, value) => setFormData(prev => ({...prev, [field]: parseFloat(value) || 0}));
   return (
       <div className="fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in">
           <div className="bg-white w-full max-w-sm sm:rounded-[32px] rounded-t-[32px] p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
-              <div className="flex justify-between items-center mb-4">
-                  <div>
-                       <h3 className="font-bold text-lg">Unit-экономика</h3>
-                       <p className="text-xs text-slate-400">SKU {item.sku}</p>
-                  </div>
-                  <button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
-              </div>
-
+              <div className="flex justify-between items-center mb-4"><div><h3 className="font-bold text-lg">Unit-экономика</h3><p className="text-xs text-slate-400">SKU {item.sku}</p></div><button onClick={onClose} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button></div>
               <div className="space-y-4">
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Себестоимость (COGS)</label>
-                      <div className="flex items-center gap-2">
-                           <input 
-                              type="number" 
-                              value={formData.cost_price} 
-                              onChange={e => handleChange('cost_price', e.target.value)}
-                              className="w-full bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800"
-                          />
-                          <span className="font-bold text-slate-400">₽</span>
-                      </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                      <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фулфилмент (шт)</label>
-                          <input 
-                              type="number" 
-                              value={formData.fulfillment_cost} 
-                              onChange={e => handleChange('fulfillment_cost', e.target.value)}
-                              className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"
-                          />
-                      </div>
-                      <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label>
-                          <input 
-                              type="number" 
-                              value={formData.tax_rate} 
-                              onChange={e => handleChange('tax_rate', e.target.value)}
-                              className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"
-                          />
-                      </div>
-                  </div>
-                  
-                  <div>
-                      <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Внешняя реклама (бюджет)</label>
-                      <input 
-                          type="number" 
-                          value={formData.external_marketing} 
-                          onChange={e => handleChange('external_marketing', e.target.value)}
-                          className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none focus:bg-white focus:ring-2 ring-indigo-100 transition-all"
-                      />
-                       <p className="text-[10px] text-slate-400 mt-1 ml-1">Блогеры, Яндекс.Директ и др.</p>
-                  </div>
-
-                  <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-xs text-indigo-800 flex gap-2">
-                      <Info size={16} className="shrink-0"/>
-                      <span>Комиссия WB (23%), логистика и внутренняя реклама берутся автоматически из API для точности расчета.</span>
-                  </div>
-
-                  <button 
-                      onClick={() => onSave(item.sku, formData)} 
-                      className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform flex justify-center gap-2 items-center"
-                  >
-                      <Save size={18}/> Сохранить и пересчитать
-                  </button>
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100"><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Себестоимость (COGS)</label><div className="flex items-center gap-2"><input type="number" value={formData.cost_price} onChange={e => handleChange('cost_price', e.target.value)} className="w-full bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800"/><span className="font-bold text-slate-400">₽</span></div></div>
+                  <div className="grid grid-cols-2 gap-4"><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Фулфилмент (шт)</label><input type="number" value={formData.fulfillment_cost} onChange={e => handleChange('fulfillment_cost', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div><div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Налог (%)</label><input type="number" value={formData.tax_rate} onChange={e => handleChange('tax_rate', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div></div>
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Внешняя реклама (бюджет)</label><input type="number" value={formData.external_marketing} onChange={e => handleChange('external_marketing', e.target.value)} className="w-full bg-slate-50 p-3 rounded-xl font-bold mt-1 outline-none"/></div>
+                  <button onClick={() => onSave(item.sku, formData)} className="w-full py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg active:scale-95 transition-transform">Сохранить</button>
               </div>
           </div>
       </div>
@@ -308,19 +245,88 @@ const DashboardPage = ({ onNavigate, user }) => {
 
 const SupplyPage = () => {
   const [coeffs, setCoeffs] = useState([]);
+  const [products, setProducts] = useState([]);
   const [volume, setVolume] = useState(1000);
   const [calculation, setCalculation] = useState(null);
+  const [loading, setLoading] = useState(false);
+  
   useEffect(() => {
-      fetch(`${API_URL}/api/internal/coefficients`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }).then(r => r.json()).then(setCoeffs).catch(console.error);
+      const token = window.Telegram?.WebApp?.initData || "";
+      // Fetch coefficients
+      fetch(`${API_URL}/api/internal/coefficients`, { headers: { 'X-TG-Data': token } })
+          .then(r => r.json()).then(setCoeffs).catch(console.error);
+      
+      // Fetch products for supply view
+      setLoading(true);
+      fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': token } })
+          .then(r => r.json())
+          .then(data => {
+              setProducts(data);
+              setLoading(false);
+          })
+          .catch(() => setLoading(false));
   }, []);
+
   const handleCalculate = async () => {
+      if (!volume) return;
       const res = await fetch(`${API_URL}/api/internal/transit_calc`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify({ volume: Number(volume) }) });
       setCalculation(await res.json());
   };
-  return <div className="p-4 space-y-6 pb-32">
-      <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200"><h1 className="text-2xl font-black flex items-center gap-2"><Truck className="text-white" /> Supply Chain</h1></div>
-      <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100"><input type="number" value={volume} onChange={e => setVolume(e.target.value)} className="w-full font-black text-lg outline-none text-slate-800 mb-4 bg-white p-3 rounded-xl"/><button onClick={handleCalculate} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать</button>{calculation && <div className="mt-4 bg-white p-4 rounded-xl text-sm"><p>Прямая: {calculation.direct_cost}</p><p className="font-bold text-emerald-600">Транзит: {calculation.transit_cost}</p></div>}</div>
-  </div>
+
+  return (
+      <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+           <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
+              <h1 className="text-2xl font-black flex items-center gap-2">
+                  <Truck className="text-white" /> Supply Chain
+              </h1>
+              <p className="text-sm opacity-90 mt-2">Умное управление поставками (ROP/SS).</p>
+          </div>
+          
+          {/* Supply Recommendations */}
+          <h3 className="font-bold text-lg px-2 flex items-center gap-2">Рекомендации к заказу</h3>
+          <div className="space-y-3">
+              {loading ? <div className="p-10 text-center"><Loader2 className="animate-spin text-orange-500 mx-auto"/></div> : 
+               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').length === 0 ? 
+               <div className="bg-white p-6 rounded-3xl border border-dashed border-slate-200 text-center text-slate-400">Всё отлично! Поставок не требуется.</div> :
+               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').map(p => (
+                  <div key={p.sku} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center relative overflow-hidden">
+                      {p.supply.status === 'critical' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500"/>}
+                      <div>
+                          <div className="font-bold text-sm">SKU {p.sku}</div>
+                          <div className="text-[10px] text-slate-400 mt-1">Остаток: {p.quantity} шт</div>
+                          <div className="flex gap-2 mt-2">
+                              <span className="bg-slate-100 px-2 py-1 rounded text-[9px] text-slate-500 font-bold">Продаж/день: {p.supply.metrics?.avg_sales}</span>
+                              <span className="bg-indigo-50 px-2 py-1 rounded text-[9px] text-indigo-600 font-bold">Страховой: {p.supply.metrics?.safety_stock}</span>
+                          </div>
+                      </div>
+                      <div className="text-right">
+                          {p.supply.recommendation > 0 ? (
+                              <>
+                                  <div className="text-[10px] text-orange-500 font-bold uppercase mb-1">Заказать</div>
+                                  <div className="text-2xl font-black text-slate-800">{p.supply.recommendation}</div>
+                              </>
+                          ) : (
+                              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">Хватит на {p.supply.days_left} дн.</span>
+                          )}
+                      </div>
+                  </div>
+              ))}
+          </div>
+
+          <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 mt-6">
+               <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
+               <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100"><input type="number" value={volume} onChange={e => setVolume(e.target.value)} className="w-full font-black text-lg outline-none text-slate-800"/></div>
+               <button onClick={handleCalculate} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать выгоду</button>
+               {calculation && (
+                    <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100 text-sm">
+                        <div className="flex justify-between mb-1"><span className="text-slate-500">Прямая:</span><span className="font-bold">{calculation.direct_cost} ₽</span></div>
+                        <div className="flex justify-between mb-3"><span className="text-slate-500">Транзит:</span><span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span></div>
+                        <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>{calculation.recommendation}</div>
+                    </div>
+               )}
+          </div>
+      </div>
+  )
 }
 
 // --- BIDDER PAGE (CONFIG & SIMULATION) ---
@@ -550,104 +556,28 @@ const FinancePage = ({ onNavigate }) => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingCost, setEditingCost] = useState(null);
-
   const fetchProducts = async () => {
       setLoading(true);
-      try {
-          const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
-          if (res.ok) setProducts(await res.json());
-      } catch(e) { console.error(e); } finally { setLoading(false); }
+      try { const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }); if (res.ok) setProducts(await res.json()); } catch(e) { console.error(e); } finally { setLoading(false); }
   };
-
   useEffect(() => { fetchProducts(); }, []);
-
   const handleUpdateCost = async (sku, formData) => {
-      try {
-          await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) });
-          setEditingCost(null);
-          fetchProducts();
-      } catch(e) { alert("Ошибка обновления"); }
+      try { await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) }); setEditingCost(null); fetchProducts(); } catch(e) { alert("Ошибка"); }
   };
-
   return (
       <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
-           <div className="flex justify-between items-center px-2">
-              <div>
-                  <h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2>
-                  <p className="text-xs text-slate-400">Unit-экономика (Gross → Net → Profit)</p>
-              </div>
-              <button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
-          </div>
-
+           <div className="flex justify-between items-center px-2"><div><h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2><p className="text-xs text-slate-400">Unit-экономика</p></div><button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button></div>
           {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
-
-          {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div> : products.length === 0 ? <div className="text-center p-10 bg-white rounded-3xl border border-dashed border-slate-200"><p className="font-bold text-slate-500 mb-2">Нет данных</p><p className="text-xs text-slate-400">Убедитесь, что подключен API токен.</p></div> : products.map((item) => (
-                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm relative group mb-4 overflow-hidden">
-                      <div className="p-5 pb-2">
-                          <div className="flex justify-between items-start mb-4">
-                              <div>
-                                  <div className="font-black text-lg">SKU {item.sku}</div>
-                                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
-                                      Цена: {item.price} ₽ • Остаток: {item.quantity} шт
-                                  </div>
-                              </div>
-                              <button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button>
-                          </div>
-
-                          {/* P&L Waterfall Visualization */}
+          {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div> : products.map((item) => (
+                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm mb-4 overflow-hidden">
+                      <div className="p-5 pb-2"><div className="flex justify-between items-start mb-4"><div><div className="font-black text-lg">SKU {item.sku}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Цена: {item.price} ₽ • Остаток: {item.quantity} шт</div></div><button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button></div>
                           <div className="bg-slate-50 rounded-2xl p-4 space-y-3 mb-2">
-                              {/* Gross & Net Sales */}
-                              <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                                  <span className="text-xs font-bold text-slate-500">Gross Sales</span>
-                                  <span className="font-black text-slate-800">{item.economics.gross_sales} ₽</span>
-                              </div>
-                              
-                              {/* CM1 Level */}
-                              <div className="space-y-1">
-                                  <div className="flex justify-between text-[10px] text-slate-400">
-                                      <span>- COGS (Себестоимость)</span>
-                                      <span>-{item.economics.cogs} ₽</span>
-                                  </div>
-                                  <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100">
-                                      <span className="text-xs font-bold text-indigo-600">CM1 (Маржа)</span>
-                                      <span className="font-bold">{item.economics.cm1} ₽</span>
-                                  </div>
-                              </div>
-
-                              {/* CM2 Level */}
-                              <div className="space-y-1">
-                                  <div className="flex justify-between text-[10px] text-slate-400">
-                                      <span>- Расходы (WB + Налог + ФФ)</span>
-                                      <span>-{item.economics.expenses.commission + item.economics.expenses.logistics + item.economics.expenses.fulfillment + item.economics.expenses.tax} ₽</span>
-                                  </div>
-                                  <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100">
-                                      <span className="text-xs font-bold text-purple-600">CM2 (Операционная)</span>
-                                      <span className="font-bold">{item.economics.cm2} ₽</span>
-                                  </div>
-                              </div>
-
-                              {/* CM3 / Net Profit */}
-                              <div className="pt-2 border-t border-slate-200">
-                                  <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-                                      <span>- Маркетинг</span>
-                                      <span>-{item.economics.marketing.internal + item.economics.marketing.external} ₽</span>
-                                  </div>
-                                  <div className={`flex justify-between items-center p-3 rounded-xl ${item.economics.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                                      <span className="font-black text-sm uppercase">Чистая прибыль (EBITDA)</span>
-                                      <span className="font-black text-lg">{item.economics.cm3} ₽</span>
-                                  </div>
-                              </div>
+                              <div className="flex justify-between items-center border-b border-slate-200 pb-2"><span className="text-xs font-bold text-slate-500">Gross Sales</span><span className="font-black text-slate-800">{item.economics.gross_sales} ₽</span></div>
+                              <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100"><span className="text-xs font-bold text-purple-600">CM2 (Операционная)</span><span className="font-bold">{item.economics.cm2} ₽</span></div>
+                              <div className={`flex justify-between items-center p-3 rounded-xl ${item.economics.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}><span className="font-black text-sm uppercase">Чистая прибыль</span><span className="font-black text-lg">{item.economics.cm3} ₽</span></div>
                           </div>
                       </div>
-
-                      {/* Footer Metrics */}
-                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center">
-                          <div className="flex gap-2">
-                              <span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.roi}%</span>
-                              <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-500">Маржа: {item.economics.margin_percent}%</span>
-                          </div>
-                          {item.economics.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}
-                      </div>
+                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center"><div className="flex gap-2"><span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.roi}%</span></div>{item.economics.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}</div>
                   </div>
           ))}
       </div>
