@@ -1,13 +1,20 @@
 import json
 import logging
 import asyncio
-from datetime import datetime
+import aiohttp
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
+from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
+
 from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition
+from clickhouse_models import ch_service
 from sqlalchemy import select
 
 logger = logging.getLogger("CeleryTasks")
@@ -80,13 +87,230 @@ def save_seo_position_sync(user_id, sku, keyword, position):
     finally:
         session.close()
 
-# --- ЗАДАЧИ CELERY (SYNC) ---
+# --- HIGH-LOAD FINANCIAL SYNC (NEW) ---
+
+class FinancialSyncProcessor:
+    """
+    Handles asynchronous fetching, buffering, and batch insertion of WB financial data.
+    Implements 'Double Entry' logic (Actual vs Provisional).
+    """
+    WB_STATS_URL = "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod"
+    WB_ORDERS_URL = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
+    BATCH_SIZE = 5000
+    
+    def __init__(self, token: str, user_id: int):
+        self.token = token
+        self.user_id = user_id
+        self.headers = {"Authorization": token}
+        self.semaphore = asyncio.Semaphore(3) # Limit parallel requests to WB
+        self.buffer = []
+
+    async def _fetch_with_retry(self, session, url, params, retries=3):
+        for i in range(retries):
+            async with self.semaphore:
+                try:
+                    async with session.get(url, params=params, headers=self.headers, timeout=60) as resp:
+                        if resp.status == 429:
+                            await asyncio.sleep(2 ** (i + 1))
+                            continue
+                        if resp.status != 200:
+                            logger.error(f"WB API Error {resp.status}: {await resp.text()}")
+                            return None
+                        return await resp.json()
+                except Exception as e:
+                    logger.warning(f"Fetch attempt {i} failed: {e}")
+                    await asyncio.sleep(1)
+        return None
+
+    def _flush_buffer(self):
+        """Inserts buffered data into ClickHouse."""
+        if not self.buffer:
+            return
+        
+        try:
+            # Use Pandas for data cleaning/normalization before insert
+            df = pd.DataFrame(self.buffer)
+            
+            # Type casting to match ClickHouse Schema
+            numeric_cols = [
+                'retail_price', 'retail_amount', 'retail_price_withdisc_rub', 
+                'delivery_rub', 'ppvz_for_pay', 'penalty', 'additional_payment',
+                'ppvz_sales_commission', 'ppvz_reward'
+            ]
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            # Convert dates
+            date_cols = ['create_dt', 'order_dt', 'sale_dt', 'rr_dt']
+            for col in date_cols:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors='coerce').fillna(datetime.now())
+
+            # Convert back to list of dicts for the existing ClickHouse service interface
+            # (In a purely optimized scenario, we would use client.insert_df, but we stick to the service contract)
+            records = df.to_dict('records')
+            
+            ch_service.insert_reports(records)
+            logger.info(f" flushed {len(records)} records to ClickHouse for user {self.user_id}")
+            self.buffer = []
+        except Exception as e:
+            logger.error(f"Failed to flush buffer: {e}")
+            # Keep buffer to retry or drop depending on policy. Here we drop to avoid loop.
+            self.buffer = []
+
+    async def sync_actual_reports(self, date_from: datetime, date_to: datetime):
+        """
+        Fetches 'Actual' data from Realization Reports.
+        Uses rrdid for cursor-based pagination.
+        """
+        async with aiohttp.ClientSession() as session:
+            rrdid = 0
+            while True:
+                params = {
+                    "dateFrom": date_from.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "dateTo": date_to.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "limit": 1000,
+                    "rrdid": rrdid
+                }
+                
+                data = await self._fetch_with_retry(session, self.WB_STATS_URL, params)
+                if not data:
+                    break
+                
+                if not data: # Empty list
+                    break
+
+                processed_batch = []
+                for row in data:
+                    row['supplier_id'] = self.user_id
+                    # Ensure date fields are parsed correctly
+                    if not row.get('rr_dt'): row['rr_dt'] = row.get('create_dt')
+                    processed_batch.append(row)
+                    rrdid = row.get('rrd_id', rrdid)
+
+                self.buffer.extend(processed_batch)
+                
+                if len(self.buffer) >= self.BATCH_SIZE:
+                    self._flush_buffer()
+                
+                # If we got fewer records than limit, we are done
+                if len(data) < 1000:
+                    break
+        
+        # Flush remaining
+        self._flush_buffer()
+
+    async def sync_provisional_orders(self):
+        """
+        Fetches 'Provisional' data (Orders from today/yesterday) to estimate P&L.
+        Reconciliation Logic: These records are marked as 'Provisional' in doc_type_name.
+        """
+        date_from = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        
+        async with aiohttp.ClientSession() as session:
+            # Using flag=0 (active orders)
+            params = {"dateFrom": date_from, "flag": 0} 
+            data = await self._fetch_with_retry(session, self.WB_ORDERS_URL, params)
+            
+            if not data: return
+
+            for order in data:
+                # Map Order Object -> Realization Report Schema
+                # This is "Double Entry" logic: estimating costs for unclosed orders
+                report_row = {
+                    "rrd_id": order.get("odid", 0), # Using Order ID as temp ID
+                    "realizationreport_id": 0, # 0 indicates provisional
+                    "supplier_id": self.user_id,
+                    "nm_id": order.get("nmId"),
+                    "gi_id": 0,
+                    "subject_name": order.get("category"),
+                    "brand_name": order.get("brand"),
+                    "sa_name": order.get("article"),
+                    "ts_name": "",
+                    "barcode": "",
+                    "doc_type_name": "Provisional_Order", # MARKER
+                    "office_name": order.get("warehouseName"),
+                    "supplier_oper_name": "",
+                    "site_country": order.get("regionName"),
+                    "create_dt": order.get("date"),
+                    "order_dt": order.get("date"),
+                    "sale_dt": order.get("date"), # Assumption for P&L
+                    "rr_dt": datetime.now(),
+                    "quantity": 1,
+                    "retail_price": order.get("priceBeforeDisc", 0),
+                    "retail_amount": order.get("priceWithDiscount", 0),
+                    "sale_percent": order.get("discountPercent", 0),
+                    "commission_percent": 25.00, # Estimate
+                    "retail_price_withdisc_rub": order.get("priceWithDiscount", 0),
+                    "delivery_rub": 50.00, # Estimate Logistics
+                    "ppvz_sales_commission": order.get("priceWithDiscount", 0) * 0.25, # Estimate
+                    "penalty": 0,
+                    "additional_payment": 0,
+                    "return_amount": 0,
+                    "delivery_amount": 1,
+                    "product_discount_for_report": 0,
+                    "supplier_promo": 0,
+                    "rid": order.get("gNumber", 0)
+                }
+                self.buffer.append(report_row)
+            
+            self._flush_buffer()
+
+    async def run_full_sync(self):
+        # 1. Sync Actual (Last 30 days for safety)
+        end = datetime.now()
+        start = end - timedelta(days=30)
+        logger.info(f"Starting Actual Sync for user {self.user_id}")
+        await self.sync_actual_reports(start, end)
+        
+        # 2. Sync Provisional
+        logger.info(f"Starting Provisional Sync for user {self.user_id}")
+        await self.sync_provisional_orders()
+
+
+# --- ЗАДАЧИ CELERY ---
+
+@celery_app.task(bind=True, name="sync_financial_reports")
+def sync_financial_reports(self, user_id: int):
+    """
+    Основная задача синхронизации финансовых данных.
+    Запускает асинхронный процессор внутри синхронного воркера.
+    """
+    self.update_state(state='PROGRESS', meta={'status': 'Initializing Sync...'})
+    
+    # 1. Get Token
+    session = SyncSessionLocal()
+    try:
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user or not user.wb_api_token:
+            logger.error(f"User {user_id} has no token")
+            return {"status": "error", "message": "No token"}
+        
+        token = user.wb_api_token
+    finally:
+        session.close()
+
+    # 2. Run Async Logic
+    processor = FinancialSyncProcessor(token, user_id)
+    
+    try:
+        # Create a new event loop for this task
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        loop.run_until_complete(processor.run_full_sync())
+        loop.close()
+        
+        return {"status": "success", "message": "Financial data synced"}
+    except Exception as e:
+        logger.error(f"Sync failed for user {user_id}: {e}")
+        return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
 def parse_and_save_sku(self, sku: int, user_id: int = None):
     self.update_state(state='PROGRESS', meta={'status': 'Запуск парсера...'})
     
-    # 1. Парсинг (метод внутри синхронный или сам создает луп)
     raw_result = parser_service.get_product_data(sku)
     
     if raw_result.get("status") == "error": 
@@ -95,13 +319,9 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
     
     self.update_state(state='PROGRESS', meta={'status': 'Сохранение...'})
     
-    # 2. Сохранение (Синхронно)
     save_price_sync(sku, raw_result)
-    
-    # 3. Аналитика
     final_result = analysis_service.calculate_metrics(raw_result)
 
-    # 4. История
     if user_id:
         p = raw_result.get('prices', {})
         brand = raw_result.get('brand', 'WB')
@@ -114,7 +334,6 @@ def parse_and_save_sku(self, sku: int, user_id: int = None):
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     self.update_state(state='PROGRESS', meta={'status': 'Сбор отзывов...'})
     
-    # 1. Парсинг API (Requests - синхронно)
     product_info = parser_service.get_full_product_info(sku, limit)
     
     if product_info.get("status") == "error":
@@ -122,7 +341,6 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     
     self.update_state(state='PROGRESS', meta={'status': 'Нейросеть думает...'})
     
-    # 2. ИИ Анализ (Requests - синхронно)
     reviews = product_info.get('reviews', [])
     if not reviews:
         return {"status": "error", "error": "Нет отзывов"}
@@ -146,10 +364,8 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
 
 @celery_app.task(bind=True, name="generate_seo_task")
 def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: int = None, title_len: int = 100, desc_len: int = 1000):
-    """Генерация SEO. Аргументы длины прокинуты."""
     self.update_state(state='PROGRESS', meta={'status': 'Генерация контента...'})
     
-    # Генерация (Requests - синхронно)
     content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
     
     final_result = {
@@ -168,13 +384,9 @@ def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: in
 
 @celery_app.task(bind=True, name="check_seo_position_task")
 def check_seo_position_task(self, sku: int, keyword: str, user_id: int):
-    """Проверка позиций (SERP)"""
     self.update_state(state='PROGRESS', meta={'status': 'Парсинг поиска...'})
     
-    # Парсинг (Selenium - синхронно)
     position = parser_service.get_search_position(keyword, sku)
-    
-    # Сохранение (Синхронно)
     save_seo_position_sync(user_id, sku, keyword, position)
     
     return {"status": "success", "sku": sku, "keyword": keyword, "position": position}
@@ -190,19 +402,8 @@ def update_all_monitored_items():
     finally:
         session.close()
 
-# --- NOTIFICATIONS ("ДЗЫНЬ!") ---
-
 def _process_orders_sync():
-    """
-    Синхронная обертка для проверки заказов.
-    Используем asyncio.run для вызова асинхронных методов WB API.
-    """
-    async def run_check():
-        # Важно: Здесь можно использовать AsyncSession или SyncSession, но так как
-        # мы внутри asyncio.run, лучше создать сессию внутри.
-        # Для простоты используем wb_api_service напрямую, а базу через SyncSession
-        pass # Реализация ниже
-
+    """Синхронная обертка для проверки заказов (уведомления)."""
     session = SyncSessionLocal()
     try:
         users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
@@ -224,7 +425,7 @@ def _process_orders_sync():
                         msg += f"...и еще {len(new_orders)-3} шт."
                     
                     await bot_service.send_message(user.telegram_id, msg)
-                    return True # Orders found
+                    return True
             except Exception as e:
                 logger.error(f"User {user.id} error: {e}")
             return False
