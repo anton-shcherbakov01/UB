@@ -716,257 +716,156 @@ const DashboardPage = ({ onNavigate, user }) => {
 };
 
 const SupplyPage = () => {
-    const [coeffs, setCoeffs] = useState([]);
-    const [volume, setVolume] = useState(1000);
-    const [calculation, setCalculation] = useState(null);
-    const [loading, setLoading] = useState(false);
-    
-    useEffect(() => {
-        fetch(`${API_URL}/api/internal/coefficients`, {
-             headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-        }).then(r => r.json()).then(setCoeffs).catch(console.error);
-    }, []);
+  const [coeffs, setCoeffs] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [volume, setVolume] = useState(1000);
+  const [calculation, setCalculation] = useState(null);
+  const [loading, setLoading] = useState(false);
+  
+  useEffect(() => {
+      const token = window.Telegram?.WebApp?.initData || "";
+      fetch(`${API_URL}/api/internal/coefficients`, { headers: { 'X-TG-Data': token } })
+          .then(r => r.json()).then(setCoeffs).catch(console.error);
+      
+      setLoading(true);
+      fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': token } })
+          .then(r => r.json())
+          .then(data => { setProducts(data); setLoading(false); })
+          .catch(() => setLoading(false));
+  }, []);
 
-    const handleCalculate = async () => {
-        if (!volume) return;
-        setLoading(true);
-        try {
-            const res = await fetch(`${API_URL}/api/internal/transit_calc`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
-                },
-                body: JSON.stringify({ volume: Number(volume), destination: "Koledino" })
-            });
-            setCalculation(await res.json());
-        } catch(e) {
-            console.error(e);
-        } finally {
-            setLoading(false);
-        }
-    };
+  const handleCalculate = async () => {
+      if (!volume) return;
+      const res = await fetch(`${API_URL}/api/internal/transit_calc`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify({ volume: Number(volume) }) });
+      setCalculation(await res.json());
+  };
 
-    return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
-             <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
-                <h1 className="text-2xl font-black flex items-center gap-2">
-                    <Truck className="text-white" /> Supply Chain
-                </h1>
-                <p className="text-sm opacity-90 mt-2">Управление поставками и коэффициенты складов.</p>
-            </div>
-            
-            <h3 className="font-bold text-lg px-2">Приемка складов (Live)</h3>
-            <div className="grid grid-cols-2 gap-3">
-                {coeffs.map((c, i) => (
-                    <div key={i} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                        <div className="flex justify-between items-start mb-2">
-                             <span className="font-bold text-sm truncate">{c.warehouse}</span>
-                             <span className={`text-xs font-black px-2 py-0.5 rounded ${c.coefficient === 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
-                                x{c.coefficient}
-                             </span>
-                        </div>
-                        <p className="text-10px text-slate-400">Транзит: {c.transit_time}</p>
-                    </div>
-                ))}
-            </div>
-
-            <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
-                 <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
-                 <p className="text-sm text-blue-600 mb-4">Сравнение: Прямая поставка vs Транзит через Казань.</p>
-                 
-                 <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase">Объем поставки (литры)</label>
-                    <input 
-                        type="number"
-                        value={volume}
-                        onChange={e => setVolume(e.target.value)}
-                        className="w-full font-black text-lg outline-none text-slate-800"
-                    />
-                 </div>
-
-                 <button 
-                    onClick={handleCalculate} 
-                    disabled={loading}
-                    className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold active:scale-95 transition-transform"
-                 >
-                    {loading ? <Loader2 className="animate-spin mx-auto"/> : 'Рассчитать выгоду'}
-                 </button>
-
-                 {calculation && (
-                      <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100">
-                          <div className="flex justify-between text-sm mb-1">
-                              <span className="text-slate-500">Прямая (Коледино):</span>
-                              <span className="font-bold">{calculation.direct_cost} ₽</span>
-                          </div>
-                          <div className="flex justify-between text-sm mb-3">
-                              <span className="text-slate-500">Транзит (Казань):</span>
-                              <span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span>
-                          </div>
-                          <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
-                              {calculation.recommendation}
-                              {calculation.is_profitable && <div className="mt-1">Выгода: {calculation.benefit} ₽</div>}
+  return (
+      <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+           <div className="bg-gradient-to-r from-orange-400 to-amber-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200">
+              <h1 className="text-2xl font-black flex items-center gap-2"><Truck className="text-white" /> Supply Chain</h1>
+              <p className="text-sm opacity-90 mt-2">Умное управление поставками (ROP/SS).</p>
+          </div>
+          
+          <h3 className="font-bold text-lg px-2 flex items-center gap-2">Рекомендации к заказу</h3>
+          <div className="space-y-3">
+              {loading ? <div className="p-10 text-center"><Loader2 className="animate-spin text-orange-500 mx-auto"/></div> : 
+               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').length === 0 ? 
+               <div className="bg-white p-6 rounded-3xl border border-dashed border-slate-200 text-center text-slate-400">Всё отлично! Поставок не требуется.</div> :
+               products.filter(p => p.supply?.recommendation > 0 || p.supply?.status === 'warning').map(p => (
+                  <div key={p.sku} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center relative overflow-hidden">
+                      {p.supply.status === 'critical' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-red-500"/>}
+                      <div>
+                          <div className="font-bold text-sm">SKU {p.sku}</div>
+                          <div className="text-[10px] text-slate-400 mt-1">Остаток: {p.quantity} шт</div>
+                          <div className="flex gap-2 mt-2">
+                              <span className="bg-slate-100 px-2 py-1 rounded text-[9px] text-slate-500 font-bold">Продаж/день: {p.supply.metrics?.avg_sales}</span>
+                              <span className="bg-indigo-50 px-2 py-1 rounded text-[9px] text-indigo-600 font-bold">Страховой: {p.supply.metrics?.safety_stock}</span>
                           </div>
                       </div>
-                 )}
-            </div>
-        </div>
-    )
+                      <div className="text-right">
+                          {p.supply.recommendation > 0 ? (
+                              <>
+                                  <div className="text-[10px] text-orange-500 font-bold uppercase mb-1">Заказать</div>
+                                  <div className="text-2xl font-black text-slate-800">{p.supply.recommendation}</div>
+                              </>
+                          ) : (
+                              <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">Хватит на {p.supply.days_left} дн.</span>
+                          )}
+                      </div>
+                  </div>
+              ))}
+          </div>
+
+          <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 mt-6">
+               <h3 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Scale size={18}/> Калькулятор транзита</h3>
+               <div className="mb-4 bg-white p-3 rounded-xl border border-blue-100"><input type="number" value={volume} onChange={e => setVolume(e.target.value)} className="w-full font-black text-lg outline-none text-slate-800"/></div>
+               <button onClick={handleCalculate} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold">Рассчитать выгоду</button>
+               {calculation && (
+                    <div className="mt-4 bg-white p-4 rounded-xl animate-in slide-in-from-top-2 border border-slate-100 text-sm">
+                        <div className="flex justify-between mb-1"><span className="text-slate-500">Прямая:</span><span className="font-bold">{calculation.direct_cost} ₽</span></div>
+                        <div className="flex justify-between mb-3"><span className="text-slate-500">Транзит:</span><span className="font-bold text-emerald-600">{calculation.transit_cost} ₽</span></div>
+                        <div className={`text-xs font-bold p-3 rounded-lg text-center ${calculation.is_profitable ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>{calculation.recommendation}</div>
+                    </div>
+               )}
+          </div>
+      </div>
+  )
 }
 
 // --- BIDDER PAGE (CONFIG & SIMULATION) ---
 
 const BidderPage = () => {
-    const [configs, setConfigs] = useState([]);
-    const [simLogs, setSimLogs] = useState([]);
-    const [simStats, setSimStats] = useState(null);
-    const [activeTab, setActiveTab] = useState('config'); // config | simulation
-    
-    // Config State
-    const [editingId, setEditingId] = useState(null);
-    const [editForm, setEditForm] = useState({
-        campaign_id: '',
-        target_position: 5,
-        max_bid: 300,
-        kp: 1.0, ki: 0.1, kd: 0.05,
-        is_active: true
-    });
+  const [configs, setConfigs] = useState([]);
+  const [simLogs, setSimLogs] = useState([]);
+  const [simStats, setSimStats] = useState(null);
+  const [activeTab, setActiveTab] = useState('config'); 
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ campaign_id: '', target_position: 5, max_bid: 300, kp: 1.0, ki: 0.1, kd: 0.05, is_active: true });
 
-    const loadConfigs = async () => {
-        const res = await fetch(`${API_URL}/api/bidder/list`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
-        if(res.ok) setConfigs(await res.json());
-    };
+  const loadConfigs = async () => {
+      const res = await fetch(`${API_URL}/api/bidder/list`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+      if(res.ok) setConfigs(await res.json());
+  };
+  const loadSim = async () => {
+      const res = await fetch(`${API_URL}/api/bidder/simulation`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
+      const data = await res.json();
+      setSimStats(data);
+      setSimLogs(data.logs);
+  };
+  useEffect(() => { loadConfigs(); loadSim(); }, []);
 
-    const loadSim = async () => {
-        const res = await fetch(`${API_URL}/api/bidder/simulation`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } });
-        const data = await res.json();
-        setSimStats(data);
-        setSimLogs(data.logs);
-    };
+  const handleSaveConfig = async () => {
+      try {
+          const res = await fetch(`${API_URL}/api/bidder/config`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify({...editForm, campaign_id: Number(editForm.campaign_id)}) });
+          if (!res.ok) { if(res.status === 403) alert("Нужен тариф Business"); return; }
+          alert("Настройки сохранены!"); setEditingId(null); loadConfigs();
+      } catch(e) { console.error(e); }
+  };
 
-    useEffect(() => { loadConfigs(); loadSim(); }, []);
-
-    const handleSaveConfig = async () => {
-        try {
-            const res = await fetch(`${API_URL}/api/bidder/config`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" },
-                body: JSON.stringify({...editForm, campaign_id: Number(editForm.campaign_id)})
-            });
-            if (!res.ok) {
-                 if(res.status === 403) alert("Нужен тариф Business");
-                 return;
-            }
-            alert("Настройки сохранены!");
-            setEditingId(null);
-            loadConfigs();
-        } catch(e) { console.error(e); }
-    };
-
-    return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in">
-             <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 rounded-3xl text-white shadow-xl shadow-purple-200">
-                <h1 className="text-2xl font-black flex items-center gap-2">
-                    <Target className="text-white" /> Автобиддер
-                </h1>
-                <p className="text-sm opacity-90 mt-2">PID-регулятор ставок. Защита бюджета.</p>
-            </div>
-
-            <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
-                 <button onClick={()=>setActiveTab('config')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'config' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Настройки</button>
-                 <button onClick={()=>setActiveTab('simulation')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'simulation' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Логи (Live)</button>
-            </div>
-
-            {activeTab === 'config' ? (
-                <div className="space-y-4">
-                    <button onClick={() => setEditingId('new')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2">
-                        <Plus size={20}/> Добавить кампанию
-                    </button>
-
-                    {(editingId === 'new' || editingId) && (
-                        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-lg animate-in slide-in-from-top-4">
-                            <h3 className="font-bold mb-4">{editingId === 'new' ? 'Новая кампания' : 'Редактирование'}</h3>
-                            <div className="space-y-3">
-                                <input placeholder="ID Кампании WB" value={editForm.campaign_id} onChange={e=>setEditForm({...editForm, campaign_id: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
-                                
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Целевая поз.</label>
-                                        <input type="number" value={editForm.target_position} onChange={e=>setEditForm({...editForm, target_position: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] font-bold text-slate-400 uppercase">Макс. ставка</label>
-                                        <input type="number" value={editForm.max_bid} onChange={e=>setEditForm({...editForm, max_bid: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
-                                    </div>
-                                </div>
-
-                                <div className="bg-slate-50 p-3 rounded-xl">
-                                    <p className="text-xs font-bold text-slate-400 mb-2">PID Коэффициенты (Advanced)</p>
-                                    <div className="flex gap-2">
-                                        <input placeholder="Kp" value={editForm.kp} onChange={e=>setEditForm({...editForm, kp: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
-                                        <input placeholder="Ki" value={editForm.ki} onChange={e=>setEditForm({...editForm, ki: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
-                                        <input placeholder="Kd" value={editForm.kd} onChange={e=>setEditForm({...editForm, kd: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/>
-                                    </div>
-                                </div>
-                                
-                                <div className="flex items-center gap-3">
-                                    <span className="font-bold text-sm">Активен</span>
-                                    <input type="checkbox" checked={editForm.is_active} onChange={e=>setEditForm({...editForm, is_active: e.target.checked})} className="w-5 h-5 accent-indigo-600"/>
-                                </div>
-
-                                <div className="flex gap-2 pt-2">
-                                    <button onClick={()=>setEditingId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-500">Отмена</button>
-                                    <button onClick={handleSaveConfig} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold">Сохранить</button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {configs.map(c => (
-                        <div key={c.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
-                            <div>
-                                <div className="font-bold text-sm">ID {c.campaign_id}</div>
-                                <div className="text-xs text-slate-400 mt-1">
-                                    Target: #{c.target_position} | Max: {c.max_bid}₽
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <span className={`text-[10px] font-bold px-2 py-1 rounded ${c.is_active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
-                                    {c.is_active ? 'ON' : 'OFF'}
-                                </span>
-                                <button onClick={()=>{setEditingId(c.id); setEditForm(c)}} className="p-2 bg-slate-50 rounded-lg text-slate-400 hover:text-indigo-600"><Settings size={16}/></button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="space-y-4">
-                     {simStats && (
-                        <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 animate-in slide-in-from-bottom-4">
-                            <h3 className="font-bold text-emerald-800">Экономия (Прогноз)</h3>
-                            <p className="text-3xl font-black text-emerald-600 my-2">{simStats.total_budget_saved} ₽</p>
-                            <p className="text-xs text-emerald-700">За последние 24 часа в Safe Mode</p>
-                        </div>
-                    )}
-
-                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-lg">Лог операций</h3>
-                            <button onClick={loadSim} className="text-indigo-600"><RefreshCw size={16}/></button>
-                        </div>
-                        <div className="space-y-3">
-                            {simLogs.map((l, i) => (
-                                <div key={i} className="text-xs border-b border-slate-50 pb-2 last:border-0 flex gap-2">
-                                    <span className="font-bold text-slate-400 whitespace-nowrap">{l.time}</span>
-                                    <span className="text-slate-700">{l.msg}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    )
+  return (
+      <div className="p-4 space-y-6 pb-32 animate-in fade-in">
+           <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-6 rounded-3xl text-white shadow-xl shadow-purple-200">
+              <h1 className="text-2xl font-black flex items-center gap-2"><Target className="text-white" /> Автобиддер</h1>
+              <p className="text-sm opacity-90 mt-2">PID-регулятор ставок. Защита бюджета.</p>
+          </div>
+          <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+               <button onClick={()=>setActiveTab('config')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'config' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Настройки</button>
+               <button onClick={()=>setActiveTab('simulation')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'simulation' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>Логи (Live)</button>
+          </div>
+          {activeTab === 'config' ? (
+              <div className="space-y-4">
+                  <button onClick={() => setEditingId('new')} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2"><Plus size={20}/> Добавить кампанию</button>
+                  {(editingId === 'new' || editingId) && (
+                      <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-lg animate-in slide-in-from-top-4">
+                          <h3 className="font-bold mb-4">{editingId === 'new' ? 'Новая кампания' : 'Редактирование'}</h3>
+                          <div className="space-y-3">
+                              <input placeholder="ID Кампании WB" value={editForm.campaign_id} onChange={e=>setEditForm({...editForm, campaign_id: e.target.value})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/>
+                              <div className="grid grid-cols-2 gap-3">
+                                  <div><label className="text-[10px] font-bold text-slate-400 uppercase">Целевая поз.</label><input type="number" value={editForm.target_position} onChange={e=>setEditForm({...editForm, target_position: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/></div>
+                                  <div><label className="text-[10px] font-bold text-slate-400 uppercase">Макс. ставка</label><input type="number" value={editForm.max_bid} onChange={e=>setEditForm({...editForm, max_bid: Number(e.target.value)})} className="w-full bg-slate-50 p-3 rounded-xl font-bold outline-none"/></div>
+                              </div>
+                              <div className="bg-slate-50 p-3 rounded-xl"><p className="text-xs font-bold text-slate-400 mb-2">PID Коэффициенты (Advanced)</p><div className="flex gap-2"><input placeholder="Kp" value={editForm.kp} onChange={e=>setEditForm({...editForm, kp: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/><input placeholder="Ki" value={editForm.ki} onChange={e=>setEditForm({...editForm, ki: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/><input placeholder="Kd" value={editForm.kd} onChange={e=>setEditForm({...editForm, kd: parseFloat(e.target.value)})} className="flex-1 bg-white p-2 rounded-lg text-center font-bold text-sm outline-none"/></div></div>
+                              <div className="flex items-center gap-3"><span className="font-bold text-sm">Активен</span><input type="checkbox" checked={editForm.is_active} onChange={e=>setEditForm({...editForm, is_active: e.target.checked})} className="w-5 h-5 accent-indigo-600"/></div>
+                              <div className="flex gap-2 pt-2"><button onClick={()=>setEditingId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-slate-500">Отмена</button><button onClick={handleSaveConfig} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold">Сохранить</button></div>
+                          </div>
+                      </div>
+                  )}
+                  {configs.map(c => (
+                      <div key={c.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center">
+                          <div><div className="font-bold text-sm">ID {c.campaign_id}</div><div className="text-xs text-slate-400 mt-1">Target: #{c.target_position} | Max: {c.max_bid}₽</div></div>
+                          <div className="flex items-center gap-3"><span className={`text-[10px] font-bold px-2 py-1 rounded ${c.is_active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>{c.is_active ? 'ON' : 'OFF'}</span><button onClick={()=>{setEditingId(c.id); setEditForm(c)}} className="p-2 bg-slate-50 rounded-lg text-slate-400 hover:text-indigo-600"><Settings size={16}/></button></div>
+                      </div>
+                  ))}
+              </div>
+          ) : (
+              <div className="space-y-4">
+                   {simStats && <div className="bg-emerald-50 p-6 rounded-3xl border border-emerald-100 animate-in slide-in-from-bottom-4"><h3 className="font-bold text-emerald-800">Экономия (Прогноз)</h3><p className="text-3xl font-black text-emerald-600 my-2">{simStats.total_budget_saved} ₽</p><p className="text-xs text-emerald-700">За последние 24 часа в Safe Mode</p></div>}
+                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100"><div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">Лог операций</h3><button onClick={loadSim} className="text-indigo-600"><RefreshCw size={16}/></button></div><div className="space-y-3">{simLogs.map((l, i) => (<div key={i} className="text-xs border-b border-slate-50 pb-2 last:border-0 flex gap-2"><span className="font-bold text-slate-400 whitespace-nowrap">{l.time}</span><span className="text-slate-700">{l.msg}</span></div>))}</div></div>
+              </div>
+          )}
+      </div>
+  )
 }
 
 const SeoTrackerPage = () => {
@@ -1038,112 +937,35 @@ const SeoTrackerPage = () => {
 }
 
 const FinancePage = ({ onNavigate }) => {
-    const [products, setProducts] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [editingCost, setEditingCost] = useState(null);
-
-    const fetchProducts = async () => {
-        setLoading(true);
-        try {
-            const res = await fetch(`${API_URL}/api/finance/products`, {
-                headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }
-            });
-            if (res.ok) setProducts(await res.json());
-        } catch(e) { console.error(e); } finally { setLoading(false); }
-    };
-
-    useEffect(() => { fetchProducts(); }, []);
-
-    const handleUpdateCost = async (sku, formData) => {
-        try {
-            await fetch(`${API_URL}/api/finance/cost/${sku}`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-TG-Data': window.Telegram?.WebApp?.initData || "" 
-                },
-                body: JSON.stringify(formData)
-            });
-            setEditingCost(null);
-            fetchProducts();
-        } catch(e) { alert("Ошибка обновления"); }
-    };
-
-    return (
-        <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
-             <div className="flex justify-between items-center px-2">
-                <div>
-                    <h2 className="text-xl font-bold text-slate-800">Unit-экономика</h2>
-                    <p className="text-xs text-slate-400">Внутренняя аналитика (API)</p>
-                </div>
-                <button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button>
-            </div>
-
-            {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
-
-            {loading ? (
-                <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div>
-            ) : products.length === 0 ? (
-                <div className="text-center p-10 bg-white rounded-3xl border border-dashed border-slate-200">
-                    <p className="font-bold text-slate-500 mb-2">Нет данных</p>
-                    <p className="text-xs text-slate-400">Убедитесь, что подключен API токен и на остатках есть товары.</p>
-                </div>
-            ) : (
-                products.map((item) => (
-                    <div key={item.sku} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative group mb-3">
-                        <div className="flex justify-between items-start mb-3">
-                            <div className="min-w-0">
-                                <div className="font-bold truncate text-sm">SKU {item.sku}</div>
-                                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Остаток: {item.quantity} шт</div>
-                            </div>
-                            <div className="flex flex-col items-end gap-1">
-                                <button onClick={() => setEditingCost(item)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100">
-                                    <Calculator size={18} />
-                                </button>
-                                {item.supply && (
-                                    <span className={`text-[9px] font-bold px-2 py-1 rounded-lg ${item.supply.status === 'critical' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
-                                        {item.supply.days_left} дн.
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        
-                        {/* Waterfall / Progress */}
-                        <div className="h-1.5 w-full bg-slate-100 rounded-full flex overflow-hidden mb-3">
-                            <div className="bg-slate-400 h-full" style={{width: `${(item.input_data.cost_price / item.price)*100}%`}}/>
-                            <div className="bg-indigo-300 h-full" style={{width: `${(item.economics.costs_breakdown?.logistics || 50 / item.price)*100}%`}}/>
-                            <div className="bg-emerald-500 h-full flex-1"/>
-                        </div>
-
-                        <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
-                             <div>
-                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Себестоимость</span>
-                                <span className="font-bold text-slate-700">{item.input_data.cost_price} ₽</span>
-                             </div>
-                             <div className="text-center">
-                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Цена</span>
-                                <span className="font-bold text-slate-700">{item.price} ₽</span>
-                             </div>
-                             <div className="text-right">
-                                <span className="block text-[9px] text-slate-400 uppercase font-bold">Прибыль</span>
-                                <span className={`font-black ${item.economics.profit > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                                    {item.economics.cm3} ₽
-                                </span>
-                             </div>
-                        </div>
-                        <div className="mt-2 flex gap-2">
-                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                                 ROI: {item.economics.roi}%
-                             </span>
-                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
-                                 Маржа: {item.economics.margin_percent}%
-                             </span>
-                        </div>
-                    </div>
-                ))
-            )}
-        </div>
-    );
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editingCost, setEditingCost] = useState(null);
+  const fetchProducts = async () => {
+      setLoading(true);
+      try { const res = await fetch(`${API_URL}/api/finance/products`, { headers: { 'X-TG-Data': window.Telegram?.WebApp?.initData || "" } }); if (res.ok) setProducts(await res.json()); } catch(e) { console.error(e); } finally { setLoading(false); }
+  };
+  useEffect(() => { fetchProducts(); }, []);
+  const handleUpdateCost = async (sku, formData) => {
+      try { await fetch(`${API_URL}/api/finance/cost/${sku}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TG-Data': window.Telegram?.WebApp?.initData || "" }, body: JSON.stringify(formData) }); setEditingCost(null); fetchProducts(); } catch(e) { alert("Ошибка"); }
+  };
+  return (
+      <div className="p-4 space-y-4 pb-32 animate-in fade-in slide-in-from-bottom-4">
+           <div className="flex justify-between items-center px-2"><div><h2 className="text-xl font-black text-slate-800 flex items-center gap-2"><PieChart className="text-indigo-600"/> P&L Отчет</h2><p className="text-xs text-slate-400">Unit-экономика</p></div><button onClick={fetchProducts} className="p-2 bg-white rounded-full shadow-sm text-slate-400 active:rotate-180 transition-all"><RefreshCw size={18}/></button></div>
+          {editingCost && <CostEditModal item={editingCost} onClose={() => setEditingCost(null)} onSave={handleUpdateCost} />}
+          {loading ? <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600"/></div> : products.map((item) => (
+                  <div key={item.sku} className="bg-white rounded-[24px] border border-slate-100 shadow-sm mb-4 overflow-hidden">
+                      <div className="p-5 pb-2"><div className="flex justify-between items-start mb-4"><div><div className="font-black text-lg">SKU {item.sku}</div><div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Цена: {item.price} ₽ • Остаток: {item.quantity} шт</div></div><button onClick={() => setEditingCost(item)} className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all"><Calculator size={20} /></button></div>
+                          <div className="bg-slate-50 rounded-2xl p-4 space-y-3 mb-2">
+                              <div className="flex justify-between items-center border-b border-slate-200 pb-2"><span className="text-xs font-bold text-slate-500">Gross Sales</span><span className="font-black text-slate-800">{item.economics.gross_sales} ₽</span></div>
+                              <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-100"><span className="text-xs font-bold text-purple-600">CM2 (Операционная)</span><span className="font-bold">{item.economics.cm2} ₽</span></div>
+                              <div className={`flex justify-between items-center p-3 rounded-xl ${item.economics.is_toxic ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}><span className="font-black text-sm uppercase">Чистая прибыль</span><span className="font-black text-lg">{item.economics.cm3} ₽</span></div>
+                          </div>
+                      </div>
+                      <div className="bg-slate-50 px-5 py-3 border-t border-slate-100 flex justify-between items-center"><div className="flex gap-2"><span className={`text-[10px] font-bold px-2 py-1 rounded-lg ${item.economics.roi > 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>ROI: {item.economics.roi}%</span></div>{item.economics.is_toxic && <span className="flex items-center gap-1 text-[10px] font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg"><AlertTriangle size={12}/> Токсичный</span>}</div>
+                  </div>
+          ))}
+      </div>
+  );
 }
 
 const MonitorPage = () => {
