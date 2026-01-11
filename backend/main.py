@@ -909,6 +909,9 @@ async def generate_seo_pdf_report(req: SeoPdfRequest, user: User = Depends(get_c
         for item in req.faq:
             pdf.set_font(font_family, 'B', 10)
             pdf.multi_cell(0, 5, f"Q: {item.get('question', '')}")
+
+            pdf.set_x(pdf.l_margin)
+
             pdf.set_font(font_family, '', 10)
             pdf.multi_cell(0, 5, f"A: {item.get('answer', '')}")
             pdf.ln(3)
