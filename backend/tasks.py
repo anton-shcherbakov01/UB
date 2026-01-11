@@ -5,23 +5,30 @@ import os
 import redis
 import time
 from datetime import datetime, timedelta
+
 from celery_app import celery_app
 from parser_service import parser_service
 from analysis_service import analysis_service
 from wb_api_service import wb_api_service
+from bot_service import bot_service
 from bidder_engine import PIDController
 from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderConfig, BidderLog
 from clickhouse_models import ch_client
 from sqlalchemy import select
 
+# Импортируем функцию прогнозирования
+from forecasting import forecast_demand
+
 logger = logging.getLogger("CeleryTasks")
 
-# Настройка Redis клиента для хранения состояния PID (Hot Data)
+# Настройка Redis клиента
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
-# Префикс ключей для состояния биддера
+# Префиксы ключей Redis
 BIDDER_STATE_PREFIX = "bidder:state:"
+FORECAST_CACHE_PREFIX = "forecast:"
+POS_CACHE_PREFIX = "bidder:pos:"  # Кэш позиций, чтобы не парсить каждую минуту
 
 # --- HELPER FUNCTIONS ---
 
@@ -79,125 +86,142 @@ def save_seo_position_sync(user_id, sku, keyword, position):
 async def _process_bidder_async(campaign_id: int):
     """
     Асинхронный воркер обработки одной кампании.
-    Инкапсулирует всю логику: получение данных -> PID -> Решение -> Действие.
+    Инкапсулирует всю логику: получение данных -> Проверка позиции -> PID -> Решение -> Действие.
     """
     session = SyncSessionLocal()
     try:
-        # 1. Получаем конфиг из БД (Postgres)
+        # 1. Получаем конфиг из БД
         config = session.query(BidderConfig).join(User).filter(BidderConfig.campaign_id == campaign_id).first()
         if not config or not config.is_active:
-            return # Кампания выключена или удалена
+            return 
 
         user_token = config.user.wb_api_token
         if not user_token:
             logger.error(f"No token for campaign {campaign_id}")
             return
 
-        # 2. Получаем текущее состояние аукциона и метрики (WB API)
-        # get_campaign_info возвращает текущую ставку, статус и т.д.
-        # Для простоты, предположим, что она возвращает и CTR (реально нужно 2 запроса: info + stats)
+        # 2. Получаем текущее состояние аукциона (WB API)
         camp_info = await wb_api_service.get_campaign_info(user_token, campaign_id)
         
         if not camp_info:
             logger.warning(f"Failed to fetch info for {campaign_id}")
             return
 
-        current_bid = camp_info.get("price", 0) # CPM
+        current_bid = camp_info.get("price", 0) 
         status = camp_info.get("status", 0)
         
-        # Пропускаем, если кампания на паузе не нами (статус 9 - активна, 11 - пауза)
+        # Пропускаем, если кампания на паузе (статус 9 - активна, 11 - пауза)
         if status not in [9, 11]: 
             return
 
-        # 3. Эмуляция получения позиции (в реале нужен парсинг выдачи по config.keyword)
-        # Для примера используем парсер, но это тяжело для частого запуска.
-        # В продакшене лучше использовать легкое API чекера позиций.
-        current_pos = 10 # Default fallback
-        if config.keyword:
-             # Внимание: parser_service использует Selenium, это может быть медленно.
-             # В high-load системах здесь должен быть запрос к легкому микросервису парсинга.
-             # Для задачи используем заглушку, чтобы не блокировать воркер
-             # current_pos = parser_service.get_search_position(config.keyword, SKU_FROM_CAMPAIGN) 
-             # Эмулируем плавающее значение для теста PID
-             import random
-             current_pos = config.target_position + random.randint(-2, 5)
-             if current_pos < 1: current_pos = 1
+        # Пытаемся найти SKU товара в кампании (нужен для проверки позиции)
+        target_sku = None
+        items = camp_info.get("items", [])
+        if items and len(items) > 0:
+            target_sku = items[0].get("nmId") # Берем первый товар
 
+        # 3. Определение текущей позиции (Real Parsing + Caching)
+        current_pos = 100 # Default fallback (далеко)
+        
+        if config.keyword and target_sku:
+            # Проверяем кэш Redis, чтобы не парсить выдачу каждую минуту (экономим ресурсы)
+            pos_cache_key = f"{POS_CACHE_PREFIX}{campaign_id}:{config.keyword}"
+            cached_pos = redis_client.get(pos_cache_key)
+            
+            if cached_pos:
+                current_pos = int(cached_pos)
+            else:
+                # Если в кэше нет - парсим реально
+                # ВАЖНО: parser_service использует Selenium, это может быть медленно.
+                # В production лучше использовать легковесный HTTP клиент.
+                try:
+                    real_pos = parser_service.get_search_position(config.keyword, target_sku)
+                    if real_pos > 0:
+                        current_pos = real_pos
+                        # Кэшируем позицию на 10 минут
+                        redis_client.setex(pos_cache_key, 600, real_pos)
+                except Exception as e:
+                    logger.error(f"Parser error for bidder {campaign_id}: {e}")
+        
         # 4. Проверка Target CPA / CTR Safeguard
-        # Если CTR слишком низкий, мы сливаем бюджет. Пауза.
-        # (В реальном API данные по CTR приходят с задержкой, берем последние доступные)
-        # stats = await wb_api_service.get_campaign_stats(...) 
-        # ctr = stats.ctr
-        ctr = 2.0 # Stub
-        if ctr < config.min_ctr:
-             logger.info(f"Low CTR ({ctr}%) for {campaign_id}. Pausing/Lowering.")
-             # Здесь логика паузы или сброса до min_bid
-             # await wb_api_service.pause_campaign(user_token, campaign_id)
-             # Log and return
-
-        # 5. Получаем состояние PID из Redis (Hot State)
-        redis_key = f"{BIDDER_STATE_PREFIX}{campaign_id}"
-        state_data = redis_client.hgetall(redis_key)
+        # Получаем статистику (нужен отдельный запрос к /stat/days, здесь упрощено)
+        # Если API не возвращает CTR прямо сейчас, используем безопасное значение
+        # В реальной реализации здесь должен быть запрос: await wb_api_service.get_campaign_stats(...)
+        ctr = 2.0 # Заглушка, так как API статистики тяжелое. В prod нужно раскомментировать запрос.
         
-        prev_error = float(state_data.get("prev_error", 0.0))
-        accumulated_integral = float(state_data.get("integral", 0.0))
-        last_measurement = float(state_data.get("last_pos", current_pos))
-        last_update_ts = float(state_data.get("last_ts", time.time() - 60))
-
-        # 6. Расчет PID
-        pid = PIDController(
-            kp=config.kp, ki=config.ki, kd=config.kd,
-            min_bid=config.min_bid, max_bid=config.max_bid,
-            target_pos=config.target_position
-        )
-        
-        # Инжектим время последнего обновления для корректного dt
-        pid.last_time = last_update_ts
-
-        result = pid.update(
-            current_pos=current_pos,
-            current_bid=current_bid,
-            prev_error=prev_error,
-            accumulated_integral=accumulated_integral,
-            last_measurement=last_measurement
-        )
-        
-        new_bid = result["new_bid"]
-        action = result["action"]
-
-        # 7. Safe Mode & Execution
         applied_bid = current_bid
-        log_action = action
+        log_action = "hold"
         money_saved = 0.0
-        
-        if config.safe_mode:
-            log_action = "safe_mode"
-            # Если PID хотел понизить ставку, считаем это экономией
-            if new_bid < current_bid:
-                money_saved = current_bid - new_bid
-            # В Safe Mode не отправляем запрос в API WB
+        new_bid = current_bid
+        pid_components = {"P": 0, "I": 0, "D": 0}
+
+        # ЛОГИКА ЗАЩИТЫ БЮДЖЕТА
+        if ctr < config.min_ctr:
+             logger.info(f"Low CTR ({ctr}%) for {campaign_id}. Lowering to min bid.")
+             new_bid = config.min_bid
+             log_action = "paused_low_ctr"
+             
+             if not config.safe_mode and current_bid > config.min_bid:
+                 await wb_api_service.set_campaign_bid(user_token, campaign_id, new_bid)
+                 applied_bid = new_bid
         else:
-            if action == "update":
-                success = await wb_api_service.set_campaign_bid(user_token, campaign_id, new_bid)
-                if success:
-                    applied_bid = new_bid
-                    if new_bid < current_bid:
-                        money_saved = current_bid - new_bid
-                else:
-                    log_action = "error_api"
+            # 5. Получаем состояние PID из Redis
+            redis_key = f"{BIDDER_STATE_PREFIX}{campaign_id}"
+            state_data = redis_client.hgetall(redis_key)
+            
+            prev_error = float(state_data.get("prev_error", 0.0))
+            accumulated_integral = float(state_data.get("integral", 0.0))
+            last_measurement = float(state_data.get("last_pos", current_pos))
+            last_update_ts = float(state_data.get("last_ts", time.time() - 60))
 
-        # 8. Сохраняем новое состояние PID в Redis
-        new_state = {
-            "prev_error": result["prev_error"],
-            "integral": result["integral"],
-            "last_pos": result["last_measurement"],
-            "last_ts": time.time()
-        }
-        redis_client.hset(redis_key, mapping=new_state)
-        # TTL на сутки, чтобы мусор не копился
-        redis_client.expire(redis_key, 86400)
+            # 6. Расчет PID
+            pid = PIDController(
+                kp=config.kp, ki=config.ki, kd=config.kd,
+                min_bid=config.min_bid, max_bid=config.max_bid,
+                target_pos=config.target_position
+            )
+            pid.last_time = last_update_ts
 
-        # 9. Логируем в SQL (для отчетов)
+            result = pid.update(
+                current_pos=current_pos,
+                current_bid=current_bid,
+                prev_error=prev_error,
+                accumulated_integral=accumulated_integral,
+                last_measurement=last_measurement
+            )
+            
+            new_bid = result["new_bid"]
+            action = result["action"]
+            pid_components = result["components"]
+
+            # 7. Execution
+            log_action = action
+            
+            if config.safe_mode:
+                log_action = "safe_mode"
+                if new_bid < current_bid:
+                    money_saved = current_bid - new_bid
+            else:
+                if action == "update":
+                    success = await wb_api_service.set_campaign_bid(user_token, campaign_id, new_bid)
+                    if success:
+                        applied_bid = new_bid
+                        if new_bid < current_bid:
+                            money_saved = current_bid - new_bid
+                    else:
+                        log_action = "error_api"
+
+            # 8. Сохраняем состояние PID
+            new_state = {
+                "prev_error": result["prev_error"],
+                "integral": result["integral"],
+                "last_pos": result["last_measurement"],
+                "last_ts": time.time()
+            }
+            redis_client.hset(redis_key, mapping=new_state)
+            redis_client.expire(redis_key, 86400)
+
+        # 9. Логируем в БД
         log_entry = BidderLog(
             config_id=config.id,
             current_pos=current_pos,
@@ -207,16 +231,12 @@ async def _process_bidder_async(campaign_id: int):
             applied_bid=applied_bid,
             money_saved=money_saved,
             action_type=log_action,
-            message=f"P:{result['components']['P']:.1f} I:{result['components']['I']:.1f}"
+            message=f"P:{pid_components.get('P',0):.1f} I:{pid_components.get('I',0):.1f} CTR:{ctr}"
         )
         session.add(log_entry)
-        
-        # Обновляем last_check конфига
         config.last_check = datetime.utcnow()
         session.commit()
         
-        logger.info(f"Bidder {campaign_id}: Pos {current_pos}->{config.target_position} | Bid {current_bid}->{new_bid} | {log_action}")
-
     except Exception as e:
         logger.error(f"Bidder error {campaign_id}: {e}")
         session.rollback()
@@ -227,10 +247,6 @@ async def _process_bidder_async(campaign_id: int):
 
 @celery_app.task(name="process_campaign_bid")
 def process_campaign_bid(campaign_id: int):
-    """
-    Consumer: Воркер, который обрабатывает конкретную кампанию.
-    Запускает асинхронный event loop для выполнения IO-операций.
-    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(_process_bidder_async(campaign_id))
@@ -238,31 +254,80 @@ def process_campaign_bid(campaign_id: int):
 
 @celery_app.task(name="run_bidder_cycle")
 def run_bidder_cycle():
-    """
-    Producer: Мастер-процесс (Beat).
-    Сканирует активные кампании в БД и ставит задачи в очередь.
-    """
     session = SyncSessionLocal()
     try:
-        # Выбираем только активные кампании
         active_configs = session.query(BidderConfig.campaign_id).filter(BidderConfig.is_active == True).all()
-        
-        if not active_configs:
-            return "No active campaigns"
-
+        if not active_configs: return "No active campaigns"
         count = 0
         for (camp_id,) in active_configs:
-            # Отправляем задачу в очередь Celery (Redis)
             process_campaign_bid.delay(camp_id)
             count += 1
-            
         return f"Queued {count} campaigns"
     except Exception as e:
         return f"Error: {e}"
     finally:
         session.close()
 
-# --- EXISTING TASKS (Parse, AI, SEO) ---
+# --- FORECASTING TASK ---
+
+@celery_app.task(name="train_forecasting_models")
+def train_forecasting_models():
+    """
+    Ежедневная задача переобучения моделей Prophet.
+    """
+    logger.info("Starting Daily Forecasting Job...")
+    session = SyncSessionLocal()
+    
+    try:
+        users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def process_user(user):
+            try:
+                # Берем историю продаж (90 дней)
+                sales_data = await wb_api_service.get_sales_history(user.wb_api_token, days=90)
+                if not sales_data: return
+                
+                sales_map = {} 
+                for order in sales_data:
+                    sku = order.get('nmId')
+                    date_str = order.get('date', '')[:10]
+                    if not sku or not date_str: continue
+                    if sku not in sales_map: sales_map[sku] = {}
+                    sales_map[sku][date_str] = sales_map[sku].get(date_str, 0) + 1
+                
+                for sku, daily_map in sales_map.items():
+                    history_list = []
+                    today = datetime.now().date()
+                    days_depth = 90
+                    # Формируем список продаж от старых к новым
+                    for i in range(days_depth, 0, -1):
+                        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                        history_list.append(daily_map.get(d, 0))
+                    
+                    # Прогноз
+                    forecast = forecast_demand(history_list, horizon_days=30)
+                    
+                    if forecast['status'] == 'success':
+                        key = f"{FORECAST_CACHE_PREFIX}{sku}"
+                        # Кэшируем на 25 часов
+                        redis_client.setex(key, timedelta(hours=25), json.dumps(forecast))
+                        
+            except Exception as e:
+                logger.error(f"Error forecasting for user {user.id}: {e}")
+
+        tasks = [process_user(u) for u in users]
+        loop.run_until_complete(asyncio.gather(*tasks))
+        loop.close()
+        logger.info(f"Forecasting finished for {len(users)} users.")
+        
+    except Exception as e:
+        logger.error(f"Global Forecasting Error: {e}")
+    finally:
+        session.close()
+
+# --- OTHER TASKS ---
 
 @celery_app.task(bind=True, name="parse_and_save_sku")
 def parse_and_save_sku(self, sku: int, user_id: int = None):
@@ -306,15 +371,80 @@ def check_seo_position_task(self, sku: int, keyword: str, user_id: int):
 
 @celery_app.task(name="update_all_monitored_items")
 def update_all_monitored_items():
+    """Периодическое обновление цен для всех товаров в мониторинге"""
     session = SyncSessionLocal()
     try:
         skus = [i.sku for i in session.query(MonitoredItem).all()]
-        for sku in skus: parse_and_save_sku.delay(sku)
-    finally: session.close()
+        for sku in skus:
+            # Используем .delay чтобы не блокировать воркер
+            parse_and_save_sku.delay(sku)
+        return f"Queued updates for {len(skus)} items"
+    except Exception as e:
+        logger.error(f"Update error: {e}")
+    finally:
+        session.close()
 
 @celery_app.task(name="check_new_orders")
 def check_new_orders():
-    pass
+    """
+    Проверка новых заказов для всех пользователей.
+    Отправляет уведомления в Telegram.
+    """
+    logger.info("Checking new orders...")
+    session = SyncSessionLocal()
+    try:
+        # Берем только тех, у кого есть токен
+        users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def check_user(user):
+            try:
+                # Если проверки не было никогда, берем за последний час
+                last_check = user.last_order_check or (datetime.utcnow() - timedelta(hours=1))
+                
+                # Запрашиваем новые заказы
+                new_orders = await wb_api_service.get_new_orders_since(user.wb_api_token, last_check)
+                
+                if new_orders:
+                    total_sum = sum(item.get("priceWithDiscount", 0) for item in new_orders)
+                    count = len(new_orders)
+                    
+                    # Формируем сообщение
+                    msg = (
+                        f"💰 <b>Новые заказы: +{count} шт</b>\n"
+                        f"Сумма: {total_sum:,.0f} ₽\n\n"
+                    )
+                    # Добавляем детали по первым 3 товарам
+                    for order in new_orders[:3]:
+                        msg += f"▫️ {order.get('category', 'Товар')} - {int(order.get('priceWithDiscount', 0))} ₽\n"
+                    
+                    if count > 3:
+                        msg += f"... и еще {count - 3}"
+                        
+                    # Отправляем в телеграм
+                    await bot_service.send_message(user.telegram_id, msg)
+                
+                # Обновляем время проверки
+                # Важно: используем session.merge или update, т.к. user объект привязан к сессии
+                user.last_order_check = datetime.utcnow()
+                session.add(user)
+                session.commit()
+                
+            except Exception as e:
+                logger.error(f"Order check error for user {user.id}: {e}")
+                session.rollback()
+
+        tasks = [check_user(u) for u in users]
+        if tasks:
+            loop.run_until_complete(asyncio.gather(*tasks))
+        loop.close()
+        
+    except Exception as e:
+        logger.error(f"Global order check error: {e}")
+    finally:
+        session.close()
 
 @celery_app.task(bind=True, name="sync_financial_reports")
 def sync_financial_reports(self):

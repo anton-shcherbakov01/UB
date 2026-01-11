@@ -9,42 +9,36 @@ from statistics import mean, stdev
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-# Imports for DB access (Sync access inside async methods via run_in_executor usually, 
-# but for simplicity we assume this service might be called from tasks or async wrappers)
+# Imports for DB access
 from database import SyncSessionLocal, ProductCost
 from clickhouse_models import ch_client
+
+# ML Forecasting
+from forecasting import forecast_demand
 
 logger = logging.getLogger("AI-Service")
 
 class AnalysisService:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
-        self.ai_url = "https://api.artemox.com/v1/chat/completions" 
+        self.ai_url = "https://api.artemox.com/v1/chat/completions"
+        # Подключение к Redis для кэширования прогнозов (синхронное для этого сервиса)
+        import redis
+        self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True)
 
     def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime):
         """
         Расчет P&L (Profit and Loss) на основе данных ClickHouse и Postgres.
-        
-        Алгоритм:
-        1. ClickHouse: Получаем факт продаж, комиссии, логистики (агрегаты по дням и SKU).
-        2. Postgres: Получаем себестоимость (COGS), налоги, расходы на маркетинг.
-        3. Merge: Объединяем данные в памяти.
-        4. Calc: Считаем иерархию метрик (Gross -> Net -> CM1 -> CM2 -> CM3).
+        (Код метода без изменений из оригинального файла...)
         """
-        
         # 1. Запрос к OLAP (ClickHouse)
-        # Результат: [(day, nm_id, revenue, commission, logistics, penalty, additional, sales_cnt, return_cnt), ...]
         raw_data = ch_client.get_aggregated_pnl(user_id, date_from, date_to)
         
         if not raw_data:
             return []
 
-        # Собираем уникальные SKU для запроса себестоимости
         unique_skus = set(row[1] for row in raw_data)
         
-        # 2. Запрос к OLTP (Postgres) за себестоимостью
-        # В идеале здесь должна быть историческая таблица себестоимости.
-        # Пока берем текущую из ProductCost.
         session = SyncSessionLocal()
         costs_map = {}
         try:
@@ -62,7 +56,6 @@ class AnalysisService:
         finally:
             session.close()
 
-        # 3. Агрегация по дням
         daily_pnl = defaultdict(lambda: {
             "date": "", "gross_sales": 0, "returns_amount": 0, "net_sales": 0,
             "cogs": 0, "cm1": 0, 
@@ -74,7 +67,6 @@ class AnalysisService:
         for row in raw_data:
             day_date, sku, revenue, comm, log, penalty, add_pay, s_cnt, r_cnt = row
             
-            # Приведение типов (Decimal -> float для JSON)
             revenue = float(revenue)
             comm = float(comm)
             log = float(log)
@@ -84,66 +76,38 @@ class AnalysisService:
             metrics = daily_pnl[date_str]
             metrics["date"] = date_str
             
-            # Экономика товара
             cost_info = costs_map.get(sku, {"cogs": 0, "tax_rate": 6, "external_marketing": 0, "fulfillment": 0})
             
-            # Расчет COGS (Себестоимость проданных - Себестоимость возвращенных)
-            # Если return_amount в CH нет, используем r_cnt как прокси
-            # Важно: revenue в отчете реализации уже учитывает возвраты (они там с минусом), 
-            # но для COGS нам нужно знать физическое движение.
-            
-            # Упрощенная модель:
             item_cogs = cost_info["cogs"] * (s_cnt - r_cnt)
-            item_fulfillment = cost_info["fulfillment"] * s_cnt # Фулфилмент платим за отгрузку
+            item_fulfillment = cost_info["fulfillment"] * s_cnt 
             
-            # --- ИЕРАРХИЯ P&L ---
-            
-            # 1. Gross & Net Sales
-            # В отчете реализации WB `retail_amount` - это уже Net Sales (Продажи - Возвраты) по деньгам
             metrics["net_sales"] += revenue
             metrics["sales_count"] += s_cnt
             metrics["returns_count"] += r_cnt
-            
-            # 2. CM1 = Net Sales - COGS
             metrics["cogs"] += item_cogs
-            
-            # 3. CM2 = CM1 - WB Expenses (Commission + Logistics + Penalty)
             metrics["wb_commission"] += comm
             metrics["wb_logistics"] += log
             metrics["wb_penalties"] += penalty
             
-            # 4. CM3 = CM2 - Taxes - Marketing - Fulfillment
-            # Налог (УСН) считается от "Продаж" (положительной части revenue), не вычитая комиссию WB
-            # Грубая оценка: revenue (если > 0) * tax_rate
             tax_base = revenue if revenue > 0 else 0
             item_tax = tax_base * (cost_info["tax_rate"] / 100)
             metrics["tax"] += item_tax
-            
-            metrics["marketing"] += cost_info["external_marketing"] # Это daily fix cost на товар (упрощение)
-            # Если маркетинг задан на единицу, то: cost_info["external_marketing"] * s_cnt
-            
-            metrics["cm3"] += 0 # Посчитаем в конце
+            metrics["marketing"] += cost_info["external_marketing"]
+            metrics["cm3"] += 0
 
-        # Финализация расчетов
         result_list = []
         for date_key in sorted(daily_pnl.keys()):
             m = daily_pnl[date_key]
-            
-            m["gross_sales"] = m["net_sales"] # Если нет данных о возвратах в рублях отдельно, считаем Net=Gross
-            
+            m["gross_sales"] = m["net_sales"]
             m["cm1"] = m["net_sales"] - m["cogs"]
-            
             wb_expenses = m["wb_commission"] + m["wb_logistics"] + m["wb_penalties"]
             m["cm2"] = m["cm1"] - wb_expenses
-            
             other_expenses = m["tax"] + m["marketing"]
             m["cm3"] = m["cm2"] - other_expenses
             
-            # Округление для UI
             for k, v in m.items():
                 if isinstance(v, (int, float)):
                     m[k] = round(v, 2)
-            
             result_list.append(m)
             
         return result_list
@@ -165,43 +129,96 @@ class AnalysisService:
         }
         return raw_data
 
-    @staticmethod
-    def calculate_supply_metrics(current_stock: int, sales_history: list, lead_time_days: int = 14):
+    def calculate_supply_metrics(self, current_stock: int, sales_history: list, lead_time_days: int = 14, sku: int = None):
+        """
+        Расчет метрик пополнения с использованием ML-прогноза (Prophet).
+        
+        Формула Safety Stock: Z * sqrt( (Avg_Lead_Time * sigma_Demand^2) + (Avg_Demand^2 * sigma_Lead_Time^2) )
+        """
         if not sales_history:
             return {"status": "no_data", "message": "Нет данных", "recommendation": 0, "days_left": 999}
-        avg_daily_sales = mean(sales_history) if sales_history else 0
-        if avg_daily_sales == 0:
-             return {"status": "ok", "message": "Продаж нет", "recommendation": 0, "days_left": 999, "safety_stock": 0}
-        try: sigma_d = stdev(sales_history)
-        except: sigma_d = avg_daily_sales * 0.5
-        z_alpha = 1.65 
-        sigma_l = 2 
-        term1 = lead_time_days * (sigma_d ** 2)
-        term2 = (avg_daily_sales ** 2) * (sigma_l ** 2)
+
+        # 1. Получаем прогноз (Из кэша или считаем на лету)
+        forecast_data = None
+        if sku:
+            # Пытаемся достать свежий прогноз из Redis (созданный задачей Celery)
+            cached = self.redis.get(f"forecast:{sku}")
+            if cached:
+                try:
+                    forecast_data = json.loads(cached)
+                except: pass
+        
+        # Если кэша нет или он пуст - считаем на лету (fallback)
+        if not forecast_data:
+            # Примечание: на лету считать Prophet тяжело, но допустимо для 1 товара
+            forecast_data = forecast_demand(sales_history, horizon_days=lead_time_days)
+
+        # 2. Извлекаем метрики из прогноза
+        # Avg_Demand (прогнозный средний спрос в день на период поставки)
+        avg_daily_demand = forecast_data.get("forecast_avg_daily", 0)
+        
+        # Sigma_Demand (стандартное отклонение спроса)
+        sigma_d = forecast_data.get("sigma", 0)
+        
+        if avg_daily_demand == 0:
+             return {"status": "ok", "message": "Спрос отсутствует", "recommendation": 0, "days_left": 999, "safety_stock": 0}
+
+        # 3. Параметры Supply Chain
+        z_alpha = 1.65  # Уровень сервиса 95%
+        avg_lead_time = lead_time_days
+        sigma_lead_time = 2  # Отклонение времени поставки (дней) - эмпирическое
+
+        # 4. Расчет Safety Stock (Страховой запас)
+        # Формула: Z * sqrt( (Avg_Lead_Time * sigma_Demand^2) + (Avg_Demand^2 * sigma_Lead_Time^2) )
+        term1 = avg_lead_time * (sigma_d ** 2)
+        term2 = (avg_daily_demand ** 2) * (sigma_lead_time ** 2)
+        
         safety_stock = int(z_alpha * math.sqrt(term1 + term2))
-        cycle_stock = avg_daily_sales * lead_time_days
+
+        # 5. Расчет ROP (Точка заказа) и Cycle Stock
+        # ROP = (Прогнозный спрос за время доставки) + Safety Stock
+        demand_during_lead_time = avg_daily_demand * avg_lead_time
+        cycle_stock = int(demand_during_lead_time)
         rop = int(cycle_stock + safety_stock)
-        days_left = int(current_stock / avg_daily_sales)
+
+        # 6. Анализ текущего состояния
+        days_left = int(current_stock / avg_daily_demand) if avg_daily_demand > 0 else 999
         qty_to_order = 0
         status = "ok"
         message = "Запаса достаточно"
+
+        # Логика рекомендаций
         if current_stock <= rop:
-            target_level = rop + cycle_stock 
+            # Целевой уровень запаса: ROP + (циклический запас на N дней, например 30)
+            # Здесь упростим: заказываем столько, чтобы покрыть ROP + Cycle Stock (еще один период)
+            target_level = rop + (avg_daily_demand * 30) 
             qty_to_order = int(target_level - current_stock)
+            
             if qty_to_order < 0: qty_to_order = 0
+            
             if current_stock <= safety_stock:
                 status = "critical"
-                message = "Критический остаток!"
+                message = f"Критично! Остаток < SS ({safety_stock})"
             else:
                 status = "warning"
-                message = "Пора заказывать"
+                message = f"Пора заказывать (ROP: {rop})"
         elif days_left < lead_time_days + 5:
              status = "warning"
              message = "Планируйте поставку"
+
         return {
-            "status": status, "message": message, "days_left": days_left,
-            "metrics": {"avg_sales": round(avg_daily_sales, 1), "volatility": round(sigma_d, 1), "safety_stock": safety_stock, "rop": rop},
-            "recommendation": qty_to_order
+            "status": status, 
+            "message": message, 
+            "days_left": days_left,
+            "metrics": {
+                "avg_sales": round(avg_daily_demand, 1), # Прогнозное
+                "volatility": round(sigma_d, 1), 
+                "safety_stock": safety_stock, 
+                "rop": rop,
+                "lead_time": lead_time_days
+            },
+            "recommendation": qty_to_order,
+            "forecast_source": "prophet" if forecast_data.get("status") == "success" else "simple_avg"
         }
 
     @staticmethod
