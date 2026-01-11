@@ -59,14 +59,24 @@ class SeleniumWBParser:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         ]
 
-    def _get_aiohttp_proxy(self) -> Optional[str]:
-        """Формирует строку прокси для aiohttp"""
+    def _get_aiohttp_proxy(self, rotate: bool = False) -> Optional[str]:
+        """
+        Формирует строку прокси для aiohttp.
+        Если rotate=True, добавляет session-ID к юзернейму (для резистентных прокси).
+        """
         if self.proxy_host and self.proxy_port:
             if self.proxy_user and self.proxy_pass:
-                return f"http://{self.proxy_user}:{self.proxy_pass}@{self.proxy_host}:{self.proxy_port}"
+                user = self.proxy_user
+                if rotate:
+                    # Генерируем случайную сессию для ротации IP
+                    session_id = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8))
+                    # Формат user-session-ID часто используется провайдерами (BrightData, IPRoyal и т.д.)
+                    # Если ваш провайдер не поддерживает это, он просто проигнорирует или вернет ошибку (тогда fallback сработает)
+                    user = f"{user}-session-{session_id}"
+                return f"http://{user}:{self.proxy_pass}@{self.proxy_host}:{self.proxy_port}"
             return f"http://{self.proxy_host}:{self.proxy_port}"
         return None
-        
+
     # --- ЛОГИКА ПОИСКА КОРЗИН (Legacy/Core) ---
     
     def _calc_basket_static(self, sku: int) -> str:
@@ -415,7 +425,7 @@ class SeleniumWBParser:
             
             # Ждем загрузки карточек
             try:
-                WebDriverWait(driver, 20).until(
+                WebDriverWait(driver, 25).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".product-card, .product-card__wrapper"))
                 )
                 time.sleep(3) # Небольшая пауза для рендеринга JS
@@ -473,31 +483,37 @@ class SeleniumWBParser:
 
     async def get_search_position_v2(self, query: str, target_sku: int, dest: str = GEO_ZONES["moscow"]):
         """
-        Гибридный поиск: API (с прокси) -> если Fail/429 -> Selenium
+        Гибридный поиск: API (с ротацией прокси) -> если Fail/429 -> Selenium
         """
         target_sku = int(target_sku)
         url = "https://search.wb.ru/exactmatch/ru/common/v7/search"
         params = {"ab_testing": "false", "appType": "1", "curr": "rub", "dest": dest, "query": query, "resultset": "catalog", "sort": "popular", "spp": "30", "suppressSpellcheck": "false"}
         
-        proxy_url = self._get_aiohttp_proxy()
-        
         # 1. Попытка через API (быстро)
-        max_retries = 2
+        max_retries = 3
         api_failed = False
         
         for attempt in range(max_retries):
+            # Включаем ротацию IP для каждого запроса
+            proxy_url = self._get_aiohttp_proxy(rotate=True)
             headers = {"User-Agent": random.choice(self.user_agents), "Accept": "*/*"}
+            
             try:
                 async with aiohttp.ClientSession() as session:
-                    # ВАЖНО: Передаем proxy
-                    async with session.get(url, params=params, headers=headers, proxy=proxy_url, timeout=10) as resp:
+                    async with session.get(url, params=params, headers=headers, proxy=proxy_url, timeout=12) as resp:
                         
                         if resp.status == 429:
                             logger.warning(f"API 429 (Att {attempt+1}).")
-                            await asyncio.sleep(random.uniform(1, 3))
+                            await asyncio.sleep(random.uniform(2, 4))
+                            # Важно: если это последняя попытка, цикл завершится, 
+                            # и флаг api_failed останется False по умолчанию, если не задать здесь.
+                            # Но мы инициализировали api_failed = False.
+                            # Если 429, мы просто идем на следующий круг.
+                            # Если круги кончились, мы выйдем из цикла.
                             continue
                             
                         if resp.status != 200:
+                            logger.warning(f"API Bad Status {resp.status}. Switching to fallback.")
                             api_failed = True
                             break
                         
@@ -505,13 +521,15 @@ class SeleniumWBParser:
                         products = data.get("data", {}).get("products") or data.get("products", [])
                         
                         if not products:
-                            # Пустой ответ API часто означает бот-блок, пробуем Selenium
+                            # Пустой ответ API часто означает бот-блок
                             logger.warning("API returned empty products list. Switching to Fallback.")
                             api_failed = True
                             break
 
+                        # Если мы получили список товаров, значит API работает корректно
                         organic_counter = 0
                         found = False
+                        
                         for index, item in enumerate(products):
                             item_id = int(item.get("id", 0))
                             is_ad = bool(item.get("log") or item.get("adId") or item.get("cpm"))
@@ -527,19 +545,27 @@ class SeleniumWBParser:
                                 }
                         
                         # Если прошли весь список API и не нашли, значит товара реально нет в топе
-                        if not found:
-                             return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+                        # Это УСПЕШНЫЙ результат (позиция 0), фоллбек не нужен
+                        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
             except Exception as e:
                 logger.error(f"API Connection Error: {e}")
-                api_failed = True
-                break
+                # Если ошибка соединения, пробуем еще раз (continue)
+                # Если это последняя попытка, цикл закончится
+                await asyncio.sleep(1)
+                continue
         
-        # 2. Fallback to Selenium (если API заблочили или вернул пустоту)
-        if api_failed:
-            return await self.get_search_position_selenium_fallback(query, target_sku)
-            
-        return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
+        # 2. Fallback to Selenium
+        # Сюда мы попадаем, если:
+        # - Случился break (api_failed=True)
+        # - Закончились попытки (все были 429 или Exception)
+        
+        # Если попытки кончились, но api_failed явно не выставлен (например, были только 429),
+        # мы все равно должны запустить фоллбек.
+        # То есть, если мы не вернули return выше, значит API не дал ответа.
+        
+        logger.info("API attempts exhausted or failed. Executing Selenium Fallback.")
+        return await self.get_search_position_selenium_fallback(query, target_sku)
 
     def get_search_position(self, query: str, target_sku: int):
         try:
