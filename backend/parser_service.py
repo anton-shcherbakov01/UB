@@ -59,6 +59,14 @@ class SeleniumWBParser:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
         ]
 
+    def _get_aiohttp_proxy(self) -> Optional[str]:
+        """Формирует строку прокси для aiohttp"""
+        if self.proxy_host and self.proxy_port:
+            if self.proxy_user and self.proxy_pass:
+                return f"http://{self.proxy_user}:{self.proxy_pass}@{self.proxy_host}:{self.proxy_port}"
+            return f"http://{self.proxy_host}:{self.proxy_port}"
+        return None
+        
     # --- ЛОГИКА ПОИСКА КОРЗИН (Legacy/Core) ---
     
     def _calc_basket_static(self, sku: int) -> str:
