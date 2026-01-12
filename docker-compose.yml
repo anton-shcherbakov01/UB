@@ -12,11 +12,9 @@ services:
       - POSTGRES_DB=wb_monitor
       - LANG=C.UTF-8
     volumes:
-      - postgres_data_clean:/var/lib/postgresql/data
+      # ИМЯ ТОМА ИЗМЕНЕНО для чистого старта
+      - postgres_data_final:/var/lib/postgresql/data
     ports: ["5432:5432"]
-    # УДАЛЕНО: healthcheck. 
-    # Причина: pg_isready в Alpine вызывает спам ошибок авторизации в логах.
-    # Проверка готовности базы осуществляется внутри приложений (api/worker) через скрипт migrate.py.
     logging:
       driver: "json-file"
       options:
@@ -58,7 +56,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # --- Backend API ---
+  # --- Backend API (ГЛАВНЫЙ ПО МИГРАЦИЯМ) ---
   api:
     build: 
       context: ./backend
@@ -72,6 +70,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # API запускает миграции
+      - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - CLICKHOUSE_HOST=clickhouse
@@ -79,7 +79,6 @@ services:
       - HEADLESS=True
     depends_on: 
       db:
-        # ИЗМЕНЕНО: service_started вместо service_healthy, т.к. healthcheck удален
         condition: service_started
       redis:
         condition: service_started
@@ -91,7 +90,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # --- Celery Worker ---
+  # --- Celery Worker (ТОЛЬКО ЖДЕТ БД) ---
   worker:
     build: 
       context: ./backend
@@ -104,6 +103,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # Worker НЕ запускает миграции, чтобы не было конфликтов
+      - RUN_MIGRATIONS=false
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
@@ -112,7 +113,6 @@ services:
       - HEADLESS=True
     depends_on: 
       db:
-        # ИЗМЕНЕНО: service_started вместо service_healthy
         condition: service_started
       redis:
         condition: service_started
@@ -124,7 +124,7 @@ services:
         max-size: "20m"
         max-file: "5"
 
-  # --- Celery Beat ---
+  # --- Celery Beat (ТОЛЬКО ЖДЕТ БД) ---
   beat:
     build: 
       context: ./backend
@@ -136,6 +136,8 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # Beat НЕ запускает миграции
+      - RUN_MIGRATIONS=false
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
     depends_on: 
@@ -148,5 +150,6 @@ services:
         max-file: "3"
 
 volumes:
-  postgres_data_clean:
+  # Новый том для чистого старта
+  postgres_data_final:
   clickhouse_data:
