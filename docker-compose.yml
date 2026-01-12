@@ -7,8 +7,6 @@ services:
     container_name: wb_postgres
     restart: always
     # Отключаем чтение .env для базы, чтобы гарантировать использование пароля из environment ниже
-    # env_file:
-    #   - ./backend/.env
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=wb_secret_password
@@ -19,10 +17,10 @@ services:
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
-      # FIX: Запускаем проверку от имени пользователя postgres.
-      # Это дает доступ к unix-сокету и использует доверенную (trust) авторизацию без пароля.
-      # Ошибки в логах исчезнут, так как TCP использоваться не будет.
-      test: ["CMD-SHELL", "su-exec postgres pg_isready -U postgres"]
+      # FIX: Используем полную строку подключения (URI) с паролем.
+      # Это железобетонный вариант: мы авторизуемся так же, как и само приложение.
+      # Это устранит ошибки в логах, так как пароль теперь передается корректно.
+      test: ["CMD-SHELL", "pg_isready -d 'postgresql://postgres:wb_secret_password@127.0.0.1:5432/wb_monitor'"]
       interval: 10s
       timeout: 5s
       retries: 5
