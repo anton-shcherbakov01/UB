@@ -6,25 +6,17 @@ services:
     image: postgres:15-alpine
     container_name: wb_postgres
     restart: always
-    # Отключаем чтение .env для базы, чтобы гарантировать использование пароля из environment ниже
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=wb_secret_password
       - POSTGRES_DB=wb_monitor
       - LANG=C.UTF-8
     volumes:
-      # Оставляем postgres_data_clean
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
-    healthcheck:
-      # FIX: Используем полную строку подключения (URI) с паролем.
-      # Это железобетонный вариант: мы авторизуемся так же, как и само приложение.
-      # Это устранит ошибки в логах, так как пароль теперь передается корректно.
-      test: ["CMD-SHELL", "pg_isready -d 'postgresql://postgres:wb_secret_password@127.0.0.1:5432/wb_monitor'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    # Ограничиваем логи базы данных
+    # УДАЛЕНО: healthcheck. 
+    # Причина: pg_isready в Alpine вызывает спам ошибок авторизации в логах.
+    # Проверка готовности базы осуществляется внутри приложений (api/worker) через скрипт migrate.py.
     logging:
       driver: "json-file"
       options:
@@ -72,7 +64,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_api
-    # Используем entrypoint, который мы создали ранее, или стандартную команду
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes: 
       - ./backend:/app
@@ -82,19 +73,18 @@ services:
       - ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379/0
-      # Убеждаемся, что пароль здесь совпадает с паролем в сервисе db
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
     depends_on: 
       db:
-        condition: service_healthy
+        # ИЗМЕНЕНО: service_started вместо service_healthy, т.к. healthcheck удален
+        condition: service_started
       redis:
         condition: service_started
       clickhouse:
         condition: service_started
-    # ВАЖНО: Ротация логов. Максимум 3 файла по 10Мб.
     logging:
       driver: "json-file"
       options:
@@ -116,19 +106,18 @@ services:
     environment:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
-      # Убеждаемся, что пароль здесь совпадает с паролем в сервисе db
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
     depends_on: 
       db:
-        condition: service_healthy
+        # ИЗМЕНЕНО: service_started вместо service_healthy
+        condition: service_started
       redis:
         condition: service_started
       clickhouse:
         condition: service_started
-    # ВАЖНО: Ротация логов для воркера (он пишет больше всех)
     logging:
       driver: "json-file"
       options:
@@ -159,6 +148,5 @@ services:
         max-file: "3"
 
 volumes:
-  # Используем тот же том, что и в прошлый раз, база там уже корректная
   postgres_data_clean:
   clickhouse_data:
