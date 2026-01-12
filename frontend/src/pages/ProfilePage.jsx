@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, ExternalLink } from 'lucide-react';
+import { User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, AlertTriangle } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import TariffCard from '../components/TariffCard';
 
@@ -9,15 +9,41 @@ const ProfilePage = ({ onNavigate }) => {
     const [wbToken, setWbToken] = useState('');
     const [tokenLoading, setTokenLoading] = useState(false);
     const [payLoading, setPayLoading] = useState(false);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
-        fetch(`${API_URL}/api/user/tariffs`, { headers: getTgHeaders() }).then(r=>r.json()).then(setTariffs);
-        fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() }).then(r=>r.json()).then(data => {
-            setUser(data);
-            if (data.has_wb_token) {
-                setWbToken(data.wb_token_preview);
-            }
-        });
+        // Загрузка тарифов
+        fetch(`${API_URL}/api/user/tariffs`, { headers: getTgHeaders() })
+            .then(r => r.json())
+            .then(data => {
+                if (Array.isArray(data)) setTariffs(data);
+            })
+            .catch(e => console.error("Tariffs error:", e));
+
+        // Загрузка профиля с обработкой ошибок
+        fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() })
+            .then(async r => {
+                if (!r.ok) {
+                    const text = await r.text();
+                    try {
+                        const json = JSON.parse(text);
+                        throw new Error(json.detail || `Ошибка ${r.status}`);
+                    } catch {
+                        throw new Error(`Ошибка сервера: ${r.status}`);
+                    }
+                }
+                return r.json();
+            })
+            .then(data => {
+                setUser(data);
+                if (data && data.has_wb_token) {
+                    setWbToken(data.wb_token_preview || '');
+                }
+            })
+            .catch(e => {
+                console.error("Profile fetch failed:", e);
+                setError(e.message);
+            });
     }, []);
 
     const payStars = async (plan) => {
@@ -29,15 +55,15 @@ const ProfilePage = ({ onNavigate }) => {
                 body: JSON.stringify({plan_id: plan.id, amount: plan.stars})
             });
             const d = await res.json();
-            if (d.invoice_link) {
-                 window.Telegram?.WebApp?.openInvoice(d.invoice_link, (status) => {
+            if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
+                 window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
                      if (status === 'paid') {
                          alert("Оплата прошла успешно!");
                          window.location.reload();
                      }
                  });
             } else {
-                alert("Ошибка создания ссылки");
+                alert("Ошибка создания ссылки или приложение открыто не в Telegram");
             }
         } catch (e) {
             alert(e.message);
@@ -48,7 +74,6 @@ const ProfilePage = ({ onNavigate }) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
         try {
-            // Запрос на создание платежа в ЮKassa
             const res = await fetch(`${API_URL}/api/payment/yookassa/create`, {
                 method: 'POST',
                 headers: getTgHeaders(),
@@ -58,7 +83,6 @@ const ProfilePage = ({ onNavigate }) => {
             const data = await res.json();
             
             if (res.ok && data.payment_url) {
-                // Открываем ссылку на оплату во внешнем браузере/WebView
                 if (window.Telegram?.WebApp?.openLink) {
                     window.Telegram.WebApp.openLink(data.payment_url);
                 } else {
@@ -83,13 +107,15 @@ const ProfilePage = ({ onNavigate }) => {
                 headers: getTgHeaders(),
                 body: JSON.stringify({token: wbToken})
             });
-            const data = await res.json();
-            if (res.status === 200) {
+            
+            if (res.ok) {
                 alert("Токен успешно сохранен!");
+                // Перезагружаем профиль
                 const uRes = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
-                setUser(await uRes.json());
+                if(uRes.ok) setUser(await uRes.json());
             } else {
-                throw new Error(data.detail || "Ошибка");
+                const d = await res.json();
+                throw new Error(d.detail || "Ошибка сохранения");
             }
         } catch (e) {
             alert(e.message);
@@ -107,13 +133,15 @@ const ProfilePage = ({ onNavigate }) => {
                 headers: getTgHeaders()
             });
             setWbToken('');
-            setUser({...user, has_wb_token: false});
+            setUser(prev => ({...prev, has_wb_token: false}));
+        } catch(e) {
+            console.error(e);
         } finally {
             setTokenLoading(false);
         }
     };
 
-    // Modified TariffCard to accept payRubles handler
+    // Компонент карточки тарифа
     const RenderTariffCard = ({ plan }) => (
         <div className={`p-5 rounded-2xl border-2 transition-all ${plan.current ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-100 bg-white'}`}>
             <div className="flex justify-between items-start mb-3">
@@ -165,13 +193,26 @@ const ProfilePage = ({ onNavigate }) => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+            {error && (
+                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex items-start gap-3">
+                    <AlertTriangle className="text-red-500 shrink-0" size={20}/>
+                    <div>
+                        <h3 className="font-bold text-red-800 text-sm">Ошибка доступа</h3>
+                        <p className="text-xs text-red-600 mt-1">{error}</p>
+                        <p className="text-xs text-slate-400 mt-2">
+                            Если вы запускаете локально (без Telegram), убедитесь что Backend запущен с <code>DEBUG_MODE=True</code>
+                        </p>
+                    </div>
+                </div>
+            )}
+
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
                 <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
                     <User size={32} />
                 </div>
                 <div>
-                    <h2 className="text-xl font-bold">{user?.name || 'Гость'}</h2>
-                    <p className="text-sm text-slate-400">@{user?.username}</p>
+                    <h2 className="text-xl font-bold">{user?.name || 'Загрузка...'}</h2>
+                    <p className="text-sm text-slate-400">@{user?.username || '...'}</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                         <div className="inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
                             {user?.plan || 'Free'} Plan
@@ -226,7 +267,6 @@ const ProfilePage = ({ onNavigate }) => {
                  </button>
             )}
 
-            {/* Legal Footer */}
             <div className="mt-8 pt-8 border-t border-slate-100 text-center space-y-2">
                 <div className="flex justify-center gap-4 text-xs text-slate-400">
                     <a href="#" className="hover:text-slate-600 transition-colors">Публичная оферта</a>

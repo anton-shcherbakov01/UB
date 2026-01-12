@@ -76,6 +76,8 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
+      # Enable Debug Mode for local development (bypass Telegram Auth)
+      - DEBUG_MODE="True"
     depends_on: 
       db:
         condition: service_started
