@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    RefreshCw, Loader2, Calculator, TrendingUp, 
-    TrendingDown, DollarSign, PieChart, Info 
+    Loader2, Calculator, DollarSign, Info 
 } from 'lucide-react';
 import { 
-    BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, 
+    BarChart, Bar, Tooltip, ResponsiveContainer, 
     Cell, ReferenceLine 
 } from 'recharts';
 import { API_URL, getTgHeaders } from '../config';
@@ -47,38 +46,40 @@ const FinancePage = ({ onNavigate }) => {
         } catch(e) { alert("Ошибка обновления"); }
     };
 
-    // Агрегация данных для P&L (имитация общих данных на основе товаров)
+    // Агрегация данных на основе реальных остатков и Unit-экономики
     const pnlStats = useMemo(() => {
         let grossSales = 0;
         let cogs = 0;
-        let logistics = 0; // Имитация
-        let commission = 0; // Имитация
+        let logistics = 0; 
+        let commission = 0; 
         
         products.forEach(p => {
-            const revenue = p.price * p.quantity; // Предполагаем продажу всего стока для модели
-            // В реальности здесь должны быть данные о продажах за период, 
-            // но для MVP берем проекцию по текущим остаткам или данные из API если они есть
-            
-            // Поскольку API отдает unit_economy на единицу:
-            // profit = price - commission - logistics - cost
-            const unitProfit = p.unit_economy.profit;
-            const unitCost = p.cost_price;
-            
-            // Упрощенная модель "Месячной проекции" на основе текущей скорости (mock)
-            const velocity = p.supply?.metrics?.avg_daily_demand || 0.5;
+            // Если нет данных о продажах (скорости), используем 0, а не заглушки
+            const velocity = p.supply?.metrics?.avg_daily_demand || 0;
             const monthlySales = velocity * 30;
             
-            grossSales += p.price * monthlySales;
-            cogs += unitCost * monthlySales;
-            // Комиссия ~23%, Логистика ~50р (из main.py)
-            commission += (p.price * 0.23) * monthlySales;
-            logistics += 50 * monthlySales;
+            if (monthlySales > 0) {
+                grossSales += p.price * monthlySales;
+                cogs += p.cost_price * monthlySales;
+                // Рассчитываем затраты исходя из юнит-экономики одного товара
+                // (p.price - profit - cost) = (commission + logistics)
+                const expenses = p.price - p.unit_economy.profit - p.cost_price;
+                
+                // Примерно делим (можно уточнить, если API будет отдавать детали)
+                // Логистика фикс 50р * кол-во
+                const logCost = 50 * monthlySales;
+                logistics += logCost;
+                commission += (expenses * monthlySales) - logCost;
+            }
         });
 
-        const netSales = grossSales; // Минус возвраты (пока 0)
+        // Если продаж нет вообще, показываем нули
+        if (grossSales === 0 && cogs === 0) return [];
+
+        const netSales = grossSales;
         const cm1 = netSales - cogs;
         const cm2 = cm1 - logistics - commission;
-        const marketing = cm2 * 0.1; // 10% от CM2 на рекламу (пример)
+        const marketing = cm2 * 0.1; 
         const ebitda = cm2 - marketing;
 
         return [
@@ -137,42 +138,48 @@ const FinancePage = ({ onNavigate }) => {
                 <div className="flex justify-center p-20"><Loader2 className="animate-spin text-emerald-600" size={32}/></div>
             ) : viewMode === 'pnl' ? (
                 <div className="space-y-4 animate-in slide-in-from-right-8">
-                    {/* P&L Dashboard */}
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                        <h3 className="font-bold text-lg mb-4">Проекция месяца (EBITDA)</h3>
-                        <div className="h-64 w-full">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={pnlStats}>
-                                    <Tooltip 
-                                        cursor={{fill: '#f1f5f9'}}
-                                        contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.1)'}}
-                                    />
-                                    <ReferenceLine y={0} stroke="#cbd5e1" />
-                                    <Bar dataKey="value" radius={[4, 4, 4, 4]}>
-                                        {pnlStats.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.value > 0 ? (entry.type === 'total' ? '#10b981' : '#3b82f6') : '#ef4444'} />
-                                        ))}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 mt-4">
-                            {pnlStats.map((s, i) => (
-                                <div key={i} className="flex justify-between text-sm border-b border-slate-50 last:border-0 py-2">
-                                    <span className="text-slate-500">{s.name}</span>
-                                    <span className={`font-bold ${s.value > 0 ? 'text-slate-800' : 'text-red-500'}`}>
-                                        {s.value.toLocaleString()} ₽
-                                    </span>
+                        <h3 className="font-bold text-lg mb-4">Проекция (по текущей скорости)</h3>
+                        {pnlStats.length > 0 ? (
+                            <>
+                                <div className="h-64 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={pnlStats}>
+                                            <Tooltip 
+                                                cursor={{fill: '#f1f5f9'}}
+                                                contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.1)'}}
+                                            />
+                                            <ReferenceLine y={0} stroke="#cbd5e1" />
+                                            <Bar dataKey="value" radius={[4, 4, 4, 4]}>
+                                                {pnlStats.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.value > 0 ? (entry.type === 'total' ? '#10b981' : '#3b82f6') : '#ef4444'} />
+                                                ))}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
                                 </div>
-                            ))}
-                        </div>
+                                <div className="grid grid-cols-2 gap-2 mt-4">
+                                    {pnlStats.map((s, i) => (
+                                        <div key={i} className="flex justify-between text-sm border-b border-slate-50 last:border-0 py-2">
+                                            <span className="text-slate-500">{s.name}</span>
+                                            <span className={`font-bold ${s.value > 0 ? 'text-slate-800' : 'text-red-500'}`}>
+                                                {s.value.toLocaleString()} ₽
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="text-center text-slate-400 py-10">
+                                Нет данных о продажах для прогноза P&L.
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex gap-3 items-start">
                         <Info className="text-blue-600 min-w-[20px]" size={20}/>
                         <p className="text-xs text-blue-800 leading-relaxed">
-                            <strong>Dual-Ledger System:</strong> Данные являются предварительными (Provisional). 
-                            Точная сверка (Reconciliation) происходит каждый понедельник после загрузки фин. отчетов WB.
+                            <strong>Отказ от ответственности:</strong> Расчеты строятся на основе текущих остатков и загруженных данных. Для точного отчета используйте раздел "Отчеты".
                         </p>
                     </div>
                 </div>

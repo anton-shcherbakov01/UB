@@ -7,7 +7,7 @@ from redis import asyncio as aioredis
 from dotenv import load_dotenv
 
 from celery_app import REDIS_URL
-from routers import users, finance, monitoring, seo, ai, payments, admin
+from routers import users, finance, monitoring, seo, ai, payments, admin, bidder
 
 load_dotenv()
 logger = logging.getLogger("API")
@@ -31,12 +31,10 @@ app.include_router(seo.router)
 app.include_router(ai.router)
 app.include_router(payments.router)
 app.include_router(admin.router)
+app.include_router(bidder.router) # Новый роутер
 
 @app.on_event("startup")
 async def on_startup(): 
-    """
-    Инициализация кэша и других сервисов.
-    """
     try:
         r = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
         FastAPICache.init(RedisBackend(r), prefix="fastapi-cache")

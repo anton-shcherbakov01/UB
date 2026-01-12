@@ -13,10 +13,10 @@ const SupplyPage = () => {
     const [products, setProducts] = useState([]);
 
     useEffect(() => {
-        // Загружаем коэффициенты
+        // Загружаем реальные коэффициенты
         fetch(`${API_URL}/api/internal/coefficients`, { headers: getTgHeaders() })
             .then(r => r.json())
-            .then(setCoeffs)
+            .then(data => Array.isArray(data) ? setCoeffs(data) : setCoeffs([]))
             .catch(console.error);
 
         // Загружаем товары для отображения метрик ROP/Safety Stock
@@ -44,7 +44,7 @@ const SupplyPage = () => {
     };
 
     const StockHealthCard = ({ item }) => {
-        if (!item.supply) return null;
+        if (!item.supply || item.supply.status === 'unknown') return null;
         const { status, days_left, metrics, recommendation } = item.supply;
         
         let colorClass = 'bg-slate-50 border-slate-100';
@@ -65,7 +65,7 @@ const SupplyPage = () => {
             icon = <PackageCheck size={16} className="text-emerald-500"/>;
         }
 
-        const fillPercent = Math.min(100, (metrics.current_stock / (metrics.rop * 1.5)) * 100);
+        const fillPercent = metrics.rop > 0 ? Math.min(100, (metrics.current_stock / (metrics.rop * 1.5)) * 100) : 100;
 
         return (
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-3">
@@ -79,7 +79,6 @@ const SupplyPage = () => {
                     </div>
                 </div>
                 
-                {/* Visual Bar */}
                 <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden mb-2">
                     <div 
                         className={`h-full rounded-full transition-all duration-500 ${status === 'ok' ? 'bg-emerald-500' : status === 'warning' ? 'bg-orange-500' : 'bg-red-500'}`} 
@@ -100,10 +99,9 @@ const SupplyPage = () => {
                 <h1 className="text-2xl font-black flex items-center gap-2">
                     <Truck className="text-white" /> Supply Chain
                 </h1>
-                <p className="text-sm opacity-90 mt-2 font-medium">Умная логистика и пополнение</p>
+                <p className="text-sm opacity-90 mt-2 font-medium">Умная логистика</p>
             </div>
 
-            {/* Transit Calculator */}
             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                  <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
                      <Scale size={20} className="text-indigo-600"/> 
@@ -131,7 +129,6 @@ const SupplyPage = () => {
 
                  {calculation && (
                      <div className="space-y-3 animate-in slide-in-from-top-4">
-                         {/* Direct Route Card */}
                          <div className={`p-4 rounded-2xl border-2 transition-all ${!calculation.is_profitable ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100 opacity-60'}`}>
                              <div className="flex justify-between items-center mb-1">
                                  <span className="font-bold text-sm flex items-center gap-1"><MapPin size={14}/> Коледино (Прямая)</span>
@@ -140,7 +137,6 @@ const SupplyPage = () => {
                              <div className="text-[10px] text-slate-500">1500₽ база + {volume}л × 30₽</div>
                          </div>
 
-                         {/* Transit Route Card */}
                          <div className={`p-4 rounded-2xl border-2 transition-all ${calculation.is_profitable ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100 opacity-60'}`}>
                              <div className="flex justify-between items-center mb-1">
                                  <span className="font-bold text-sm flex items-center gap-1"><Truck size={14}/> Казань (Транзит)</span>
@@ -156,15 +152,41 @@ const SupplyPage = () => {
                      </div>
                  )}
             </div>
+
+            {coeffs.length > 0 && (
+                 <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+                    <h3 className="font-bold text-slate-800 mb-2">Коэффициенты складов</h3>
+                    <div className="overflow-x-auto pb-2">
+                        <table className="w-full text-left text-xs">
+                            <thead>
+                                <tr className="text-slate-400 border-b border-slate-50">
+                                    <th className="py-2">Склад</th>
+                                    <th className="py-2">Короба</th>
+                                    <th className="py-2">Монопаллеты</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {coeffs.slice(0, 5).map((c, i) => (
+                                    <tr key={i} className="border-b border-slate-50 last:border-0">
+                                        <td className="py-2 font-bold">{c.warehouseName}</td>
+                                        <td className="py-2">{c.boxDeliveryBase !== '-' ? c.boxDeliveryBase : '—'}</td>
+                                        <td className="py-2">{c.palletDeliveryBase !== '-' ? c.palletDeliveryBase : '—'}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                 </div>
+            )}
             
             <h3 className="font-bold text-lg px-2 text-slate-800">Здоровье склада (ROP)</h3>
             <div>
-                {products
-                    .filter(p => p.supply) // Показываем только товары с расчетами supply
-                    .map(item => <StockHealthCard key={item.sku} item={item} />)
-                }
-                {products.length === 0 && !loading && (
-                    <div className="text-center p-8 text-slate-400">Нет данных для прогноза</div>
+                {products.length > 0 ? (
+                    products
+                        .filter(p => p.supply && p.supply.status !== 'unknown')
+                        .map(item => <StockHealthCard key={item.sku} item={item} />)
+                ) : (
+                    <div className="text-center p-8 text-slate-400">Нет данных для прогноза. Добавьте API ключ и дождитесь накопления статистики.</div>
                 )}
             </div>
         </div>

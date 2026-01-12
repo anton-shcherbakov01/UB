@@ -1,6 +1,5 @@
 import json
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +24,7 @@ class TransitCalcRequest(BaseModel):
 async def get_internal_stats(user: User = Depends(get_current_user)):
     """Получение статистики (Заказы, Остатки) через официальный API"""
     if not user.wb_api_token:
+        # Без токена возвращаем нули, но не заглушки
         return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
     
     stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
@@ -32,43 +32,43 @@ async def get_internal_stats(user: User = Depends(get_current_user)):
 
 @router.get("/internal/stories")
 async def get_stories(user: User = Depends(get_current_user)):
-    """Генерация умных сторис"""
+    """Генерация сторис на основе реальных данных"""
     stories = []
     
+    # 1. Продажи
     if user.wb_api_token:
         stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
         orders_sum = stats.get('orders_today', {}).get('sum', 0)
-        trend = random.choice(["+", "-"]) 
-        percent = random.randint(5, 25)
         
         stories.append({
             "id": 1, 
             "title": "Продажи", 
             "val": f"{orders_sum // 1000}k ₽" if orders_sum > 1000 else f"{orders_sum} ₽",
-            "subtitle": f"{trend}{percent}% ко вчера",
-            "color": "bg-emerald-500" if trend == "+" else "bg-red-500"
+            "subtitle": "Сегодня",
+            "color": "bg-emerald-500"
         })
     else:
         stories.append({
-            "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Видеть продажи"
+            "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Нет данных"
         })
 
+    # 2. Биддер
     if user.subscription_plan == "free":
         stories.append({
-            "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Теряешь ~15%"
+            "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Upgrade"
         })
     else:
         stories.append({
-            "id": 2, "title": "Биддер", "val": "Active", "color": "bg-purple-500", "subtitle": "Safe Mode ON"
+            "id": 2, "title": "Биддер", "val": "Active", "color": "bg-purple-500", "subtitle": "Safe Mode"
         })
 
-    stories.append({
-        "id": 3, "title": "Лидер", "val": "Худи", "color": "bg-blue-500", "subtitle": "Топ продаж"
-    })
-
-    stories.append({
-        "id": 4, "title": "Склад", "val": "OK", "color": "bg-green-500", "subtitle": "Запаса > 14 дн"
-    })
+    # 3. Склад (Реальные данные)
+    if user.wb_api_token:
+        stocks = await wb_api_service.get_dashboard_stats(user.wb_api_token)
+        qty = stocks.get('stocks', {}).get('total_quantity', 0)
+        stories.append({
+            "id": 3, "title": "Склад", "val": f"{qty}", "color": "bg-blue-500", "subtitle": "Всего шт."
+        })
 
     return stories
 
@@ -77,7 +77,7 @@ async def get_my_products_finance(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    """Получение списка СВОИХ товаров для Unit-экономики."""
+    """Получение списка СВОИХ товаров для Unit-экономики (Real Data)."""
     if not user.wb_api_token: 
         return []
     
@@ -85,6 +85,7 @@ async def get_my_products_finance(
     if not stocks: 
         return []
     
+    # Агрегация остатков по SKU (nmId)
     sku_map = {}
     for s in stocks:
         sku = s.get('nmId')
@@ -99,6 +100,7 @@ async def get_my_products_finance(
     
     skus = list(sku_map.keys())
     
+    # Получаем себестоимость из БД
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
     costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
     
@@ -109,8 +111,12 @@ async def get_my_products_finance(
         cost = costs_map.get(sku, 0)
         selling_price = data['price'] * (1 - data['discount']/100)
         
-        commission = selling_price * 0.23
-        logistics = 50 
+        # Убираем хардкод 0.23, используем приближенные реальные значения или 0.
+        # В идеале нужно тянуть комиссию категории через API, но пока считаем 25% как базовую ставку для P&L
+        commission_rate = 0.25 
+        commission = selling_price * commission_rate
+        logistics = 50 # Базовая логистика, можно уточнить через калькулятор тарифов
+        
         profit = selling_price - commission - logistics - cost
         roi = round((profit / cost * 100), 1) if cost > 0 else 0
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
@@ -122,16 +128,21 @@ async def get_my_products_finance(
                 forecast_json = json.loads(cached_forecast)
                 supply_data = analysis_service.calculate_supply_metrics(
                     current_stock=data['quantity'],
-                    sales_history=[], 
+                    sales_history=[], # История берется внутри сервиса прогнозирования если надо, здесь заглушка не нужна
                     forecast_data=forecast_json
                 )
         
+        # Если прогноза нет, не добавляем фейковую скорость продаж
         if not supply_data:
-            sales_velocity = random.uniform(0.5, 5.0) 
-            supply_data = analysis_service.calculate_supply_metrics(
-                current_stock=data['quantity'],
-                sales_history=[{'qty': sales_velocity}] 
-            )
+            # Просто возвращаем текущий сток без прогноза
+            supply_data = {
+                "status": "unknown",
+                "recommendation": "Нет данных для прогноза (нужны продажи > 14 дней)",
+                "metrics": {
+                    "safety_stock": 0, "rop": 0, "days_left": 0, 
+                    "avg_daily_demand": 0, "current_stock": data['quantity']
+                }
+            }
 
         result.append({
             "sku": sku,
@@ -170,21 +181,12 @@ async def set_product_cost(
 
 @router.get("/internal/coefficients")
 async def get_supply_coefficients(user: User = Depends(get_current_user)):
+    """Получение реальных коэффициентов приемки"""
+    if not user.wb_api_token:
+        return []
     return await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
 
 @router.post("/internal/transit_calc")
 async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
-    return analysis_service.calculate_transit_benefit(req.volume)
-
-@router.get("/bidder/simulation")
-async def get_bidder_simulation(user: User = Depends(get_current_user)):
-    return {
-        "status": "safe_mode",
-        "campaigns_active": 3,
-        "total_budget_saved": random.randint(5000, 25000),
-        "logs": [
-            {"time": (datetime.now() - timedelta(minutes=5)).strftime("%H:%M"), "msg": "Кампания 'Платья': Ставка конкурента 500₽ -> Оптимизировано до 155₽"},
-            {"time": (datetime.now() - timedelta(minutes=15)).strftime("%H:%M"), "msg": "Кампания 'Блузки': Удержание 2 места (Target CPA)"},
-            {"time": (datetime.now() - timedelta(minutes=45)).strftime("%H:%M"), "msg": "Аукцион перегрет. Реклама на паузе."}
-        ]
-    }
+    # Логика расчета использует реальные тарифы (зашиты в сервис или получаются динамически)
+    return await wb_api_service.calculate_transit(req.volume, req.destination)
