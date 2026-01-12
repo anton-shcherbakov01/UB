@@ -27,7 +27,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8000
 
 # Используем Entrypoint для преднастройки (миграций) перед запуском
-# ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 # Команда по умолчанию (если не переопределена в docker-compose)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
