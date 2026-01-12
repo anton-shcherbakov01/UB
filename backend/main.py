@@ -152,7 +152,9 @@ async def on_startup():
     Здесь мы инициализируем только кэш.
     """
     try:
-        r = redis_async.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
+        from redis import asyncio as aioredis
+        
+        r = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
         FastAPICache.init(RedisBackend(r), prefix="fastapi-cache")
         logger.info("✅ Redis cache initialized successfully")
     except Exception as e:
