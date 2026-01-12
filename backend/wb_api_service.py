@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import json
 import socket
+import requests # Fallback library
 from aiohttp import AsyncResolver
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -12,7 +13,6 @@ logger = logging.getLogger("WB-API-Service")
 class WBApiService:
     """
     Сервис для работы с официальным API Wildberries.
-    Реализован принудительный IPv4 и Google DNS для Docker-среды.
     """
     
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
@@ -24,10 +24,7 @@ class WBApiService:
 
     def _get_connector(self):
         """
-        Создает TCP коннектор с:
-        1. Принудительным IPv4 (socket.AF_INET)
-        2. Отключенной проверкой SSL (ssl=False)
-        3. Явным резолвером Google DNS (8.8.8.8), чтобы обойти глюки Docker DNS
+        Создает TCP коннектор с принудительным IPv4 и Google DNS.
         """
         resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
         return aiohttp.TCPConnector(
@@ -38,13 +35,10 @@ class WBApiService:
 
     async def _request_with_retry(self, url, headers, params=None, method='GET', json_data=None, retries=3):
         backoff = 1
-        
         req_headers = headers.copy()
-        # Маскируемся под браузер
         if "User-Agent" not in req_headers:
             req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-        # Создаем новую сессию для каждого запроса (или пачки), чтобы не держать тухлые соединения
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
             for attempt in range(retries):
                 try:
@@ -58,14 +52,12 @@ class WBApiService:
                             return await resp.json()
                         elif resp.status == 429:
                             logger.warning(f"WB API Rate Limit (429): {url}")
-                            if attempt < retries - 1:
-                                await asyncio.sleep(backoff)
-                                backoff *= 2
-                                continue
+                            await asyncio.sleep(backoff)
+                            backoff *= 2
+                            continue
                         elif resp.status == 204:
                             return None
                         else:
-                            # Логируем ошибку, но пробуем еще раз если это 5xx
                             text = await resp.text()
                             if resp.status >= 500:
                                 logger.warning(f"WB API Server Error {resp.status}: {text[:100]}")
@@ -73,21 +65,57 @@ class WBApiService:
                                 logger.info(f"WB API Client Error {resp.status}: {text[:100]}")
                             
                             if resp.status < 500 and resp.status != 429:
-                                return None # Не повторяем 4xx ошибки
+                                return None 
                                 
-                except aiohttp.ClientConnectorError as e:
-                    logger.error(f"DNS/Connection Error ({attempt+1}/{retries}) for {url}: {e}")
-                    await asyncio.sleep(backoff)
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout ({attempt+1}/{retries}) for {url}")
-                    await asyncio.sleep(backoff)
                 except Exception as e:
-                    logger.error(f"Unexpected Request Error: {e}")
-                    return None
-                
-                await asyncio.sleep(backoff)
+                    logger.error(f"Request Error ({attempt+1}/{retries}): {e}")
+                    await asyncio.sleep(backoff)
         
         return None
+
+    async def check_token(self, token: str) -> bool:
+        """
+        Проверка токена.
+        Усиленная версия:
+        1. Пробует aiohttp.
+        2. Если ошибка сети - пробует requests (синхронно).
+        3. Логирует точную причину провала.
+        """
+        if not token: return False
+        
+        url = f"{self.BASE_URL}/incomes"
+        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+        headers = {"Authorization": token}
+        
+        logger.info(f"🔍 Checking WB token...")
+
+        # Попытка 1: Async (Aiohttp)
+        try:
+            async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                    if resp.status == 401:
+                        logger.warning("❌ Token Rejected: 401 Unauthorized (WB API denied access)")
+                        return False
+                    if resp.status == 200:
+                        logger.info("✅ Token Valid (Aiohttp confirmed)")
+                        return True
+                    logger.info(f"⚠️ WB API responded with status {resp.status} (Assuming token is valid but API issues)")
+                    return True # Если API лежит (500), токен скорее всего верный
+        except Exception as e:
+            logger.error(f"⚠️ Async check failed (DNS/Network): {e}. Switching to fallback...")
+
+        # Попытка 2: Sync (Requests) - часто работает стабильнее в Docker
+        try:
+            # requests использует системный резолвер, который может работать лучше
+            resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
+            if resp.status_code == 401:
+                logger.warning("❌ Token Rejected: 401 Unauthorized (Requests fallback)")
+                return False
+            logger.info("✅ Token Valid (Requests fallback confirmed)")
+            return True
+        except Exception as e:
+            logger.error(f"❌ CRITICAL: Both Async and Sync checks failed. Network is down? Error: {e}")
+            return False
 
     def _get_cache_key(self, token, method, params):
         token_part = token[-10:] if token else "none"
@@ -112,36 +140,19 @@ class WBApiService:
             
         return data
 
-    async def check_token(self, token: str) -> bool:
-        if not token: return False
-        url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-        headers = {"Authorization": token}
-        
-        try:
-            async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-                async with session.get(url, headers=headers, params=params, timeout=5) as resp:
-                    return resp.status != 401
-        except:
-            return False
-
     async def get_dashboard_stats(self, token: str):
         if not token: return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
-        
         today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
         orders_task = self._get_orders(token, today_str, use_cache=True)
         stocks_task = self._get_stocks(token, today_str, use_cache=True)
-        
         orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
         return {"orders_today": orders_res, "stocks": stocks_res}
 
     async def get_new_orders_since(self, token: str, last_check: datetime):
         if not last_check: last_check = datetime.now() - timedelta(hours=1)
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
-        
         orders_data = await self._get_orders(token, date_from_str, use_cache=False)
         if not orders_data or "items" not in orders_data: return []
-        
         new_orders = []
         for order in orders_data["items"]:
             try:
@@ -164,7 +175,6 @@ class WBApiService:
         headers = {"Authorization": token} if token else {}
         today = datetime.now().strftime("%Y-%m-%d")
         params = {"date": today}
-
         data = await self._get_cached_or_request(url, headers, params, use_cache=True)
         if data and isinstance(data, dict):
              if 'response' in data and 'data' in data['response']:
@@ -180,22 +190,12 @@ class WBApiService:
             "transit_kazan": {"rate": transit_rate, "logistics": transit_log, "total": transit_base + (liters * transit_rate) + transit_log}
         }
 
-    # --- ADVERT API (BIDDER) ---
-
     async def get_advert_campaigns(self, token: str):
-        """
-        Получение списка кампаний (Реклама > Список кампаний).
-        """
         url_ids = f"{self.ADV_URL}/promotion/adverts"
         headers = {"Authorization": token}
-        
-        # Запрашиваем активные (9) и на паузе (11)
         ids_payload = {"status": [9, 11], "type": [6, 8, 9]}
         campaigns_list = await self._request_with_retry(url_ids, headers, method='POST', json_data=ids_payload)
-        
-        if not campaigns_list:
-            return []
-        
+        if not campaigns_list: return []
         results = []
         for camp in campaigns_list:
             if isinstance(camp, dict):
@@ -228,9 +228,7 @@ class WBApiService:
         url = f"https://advert-api.wb.ru/adv/v0/advert"
         headers = {"Authorization": token}
         params = {"id": campaign_id}
-        
         data = await self._request_with_retry(url, headers, params=params)
-        
         if data and "params" in data:
             params_list = data.get("params", [])
             if params_list:
@@ -245,11 +243,8 @@ class WBApiService:
     async def update_bid(self, token: str, campaign_id: int, new_bid: int):
         url = f"https://advert-api.wb.ru/adv/v0/save"
         headers = {"Authorization": token}
-        
         current_info = await self.get_current_bid_info(token, campaign_id)
-        if not current_info or "subjectId" not in current_info:
-            return
-            
+        if not current_info or "subjectId" not in current_info: return
         payload = {
             "advertId": campaign_id,
             "type": 6, 
