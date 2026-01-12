@@ -19,8 +19,9 @@ services:
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
-      # FIX: Добавляем пароль в проверку, так как pg_isready иногда пытается подключиться через TCP вместо сокета
-      test: ["CMD-SHELL", "PGPASSWORD=wb_secret_password pg_isready -U postgres -d wb_monitor"]
+      # FIX: Используем Unix-сокет (-h /var/run/postgresql) вместо TCP.
+      # Это использует локальную авторизацию (trust), которая не требует пароля и не гадит в логи.
+      test: ["CMD-SHELL", "pg_isready -U postgres -h /var/run/postgresql"]
       interval: 10s
       timeout: 5s
       retries: 5
