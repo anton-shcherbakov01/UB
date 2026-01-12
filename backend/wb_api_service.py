@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import json
 import socket
+from aiohttp import AsyncResolver
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -11,6 +12,7 @@ logger = logging.getLogger("WB-API-Service")
 class WBApiService:
     """
     Сервис для работы с официальным API Wildberries.
+    Реализован принудительный IPv4 и Google DNS для Docker-среды.
     """
     
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
@@ -22,55 +24,68 @@ class WBApiService:
 
     def _get_connector(self):
         """
-        Создает TCP коннектор с принудительным IPv4.
-        Решает проблему 'Name or service not known' в Docker.
+        Создает TCP коннектор с:
+        1. Принудительным IPv4 (socket.AF_INET)
+        2. Отключенной проверкой SSL (ssl=False)
+        3. Явным резолвером Google DNS (8.8.8.8), чтобы обойти глюки Docker DNS
         """
-        return aiohttp.TCPConnector(family=socket.AF_INET, ssl=False)
+        resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
+        return aiohttp.TCPConnector(
+            family=socket.AF_INET, 
+            ssl=False, 
+            resolver=resolver
+        )
 
     async def _request_with_retry(self, url, headers, params=None, method='GET', json_data=None, retries=3):
         backoff = 1
         
         req_headers = headers.copy()
+        # Маскируемся под браузер
         if "User-Agent" not in req_headers:
             req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-        # Создаем сессию с forced IPv4 для каждого запроса (или группы)
+        # Создаем новую сессию для каждого запроса (или пачки), чтобы не держать тухлые соединения
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
             for attempt in range(retries):
                 try:
                     if method == 'GET':
-                        coro = session.get(url, headers=req_headers, params=params, timeout=15)
+                        coro = session.get(url, headers=req_headers, params=params, timeout=10)
                     else:
-                        coro = session.post(url, headers=req_headers, json=json_data, timeout=15)
+                        coro = session.post(url, headers=req_headers, json=json_data, timeout=10)
 
                     async with coro as resp:
                         if resp.status == 200:
                             return await resp.json()
                         elif resp.status == 429:
+                            logger.warning(f"WB API Rate Limit (429): {url}")
                             if attempt < retries - 1:
                                 await asyncio.sleep(backoff)
                                 backoff *= 2
                                 continue
-                            logger.warning(f"WB API 429 Limit: {url}")
                         elif resp.status == 204:
                             return None
                         else:
+                            # Логируем ошибку, но пробуем еще раз если это 5xx
                             text = await resp.text()
-                            if resp.status != 401:
-                                logger.warning(f"WB API {resp.status} on {url}: {text[:200]}")
-                            return None
+                            if resp.status >= 500:
+                                logger.warning(f"WB API Server Error {resp.status}: {text[:100]}")
+                            elif resp.status != 401:
+                                logger.info(f"WB API Client Error {resp.status}: {text[:100]}")
                             
+                            if resp.status < 500 and resp.status != 429:
+                                return None # Не повторяем 4xx ошибки
+                                
                 except aiohttp.ClientConnectorError as e:
-                    if attempt == retries - 1:
-                        logger.error(f"Network Error (DNS/Connection) for {url}: {e}")
+                    logger.error(f"DNS/Connection Error ({attempt+1}/{retries}) for {url}: {e}")
                     await asyncio.sleep(backoff)
                 except asyncio.TimeoutError:
-                    if attempt == retries - 1:
-                        logger.error(f"Timeout connecting to {url}")
+                    logger.error(f"Timeout ({attempt+1}/{retries}) for {url}")
                     await asyncio.sleep(backoff)
                 except Exception as e:
                     logger.error(f"Unexpected Request Error: {e}")
                     return None
+                
+                await asyncio.sleep(backoff)
         
         return None
 
@@ -168,9 +183,13 @@ class WBApiService:
     # --- ADVERT API (BIDDER) ---
 
     async def get_advert_campaigns(self, token: str):
+        """
+        Получение списка кампаний (Реклама > Список кампаний).
+        """
         url_ids = f"{self.ADV_URL}/promotion/adverts"
         headers = {"Authorization": token}
         
+        # Запрашиваем активные (9) и на паузе (11)
         ids_payload = {"status": [9, 11], "type": [6, 8, 9]}
         campaigns_list = await self._request_with_retry(url_ids, headers, method='POST', json_data=ids_payload)
         
