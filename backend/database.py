@@ -7,8 +7,12 @@ from datetime import datetime
 
 # Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
-# Для Воркера (Celery) используем синхронный драйвер
-DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
+# Для синхронного драйвера (Celery/Migrate) убираем +asyncpg
+if "+asyncpg" in DATABASE_URL_ASYNC:
+    DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
+else:
+    # Fallback если вдруг передали строку без драйвера
+    DATABASE_URL_SYNC = DATABASE_URL_ASYNC
 
 # 1. Асинхронный движок (FastAPI)
 engine_async = create_async_engine(DATABASE_URL_ASYNC, echo=False)

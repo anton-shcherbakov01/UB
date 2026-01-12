@@ -23,7 +23,7 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
-from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, Payment
+from database import get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, Payment
 from celery_app import celery_app, REDIS_URL
 from tasks import (
     parse_and_save_sku, 
