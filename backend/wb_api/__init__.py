@@ -1,16 +1,15 @@
-from .base import WBBaseClient
-from .promotion import WBPromotionMixin
+from .base import WBApiBase
 from .statistics import WBStatisticsMixin
-from .content import WBContentMixin
+from .promotion import WBPromotionMixin
 
-class WBApiService(WBPromotionMixin, WBStatisticsMixin, WBContentMixin):
+class WBApiService(WBStatisticsMixin, WBPromotionMixin, WBApiBase):
     """
     Единый фасад для работы с API Wildberries.
-    Наследует методы всех миксинов.
+    Наследует методы из миксинов Statistics и Promotion, а также Base.
     """
     pass
 
-# Создаем синглтон для использования во всем приложении
+# Создаем синглтон, как было в оригинальном файле
 wb_api_service = WBApiService()
 
 __all__ = ["wb_api_service", "WBApiService"]

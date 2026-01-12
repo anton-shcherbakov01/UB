@@ -1,92 +1,99 @@
 import logging
 import asyncio
 import aiohttp
+import json
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
-from enum import Enum
 
 logger = logging.getLogger("WB-API-Base")
 
-class WBEndpoint(Enum):
-    # Advertising
-    ADV_LIST = "https://advert-api.wildberries.ru/adv/v1/promotion/count"
-    ADV_INFO = "https://advert-api.wildberries.ru/adv/v1/promotion/adverts"
-    ADV_CPA = "https://advert-api.wildberries.ru/adv/v1/promotion/adverts" # POST specific
-    ADV_BIDS = "https://advert-api.wildberries.ru/adv/v0/cpm"
-    ADV_STATS = "https://advert-api.wildberries.ru/adv/v2/fullstats"
+class WBApiBase:
+    """
+    Базовый класс для работы с API WB.
+    Содержит общие настройки, кэширование и метод отправки запросов.
+    """
     
-    # Statistics
-    STATS_ORDERS = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
-    STATS_STOCKS = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
-    STATS_SALES = "https://statistics-api.wildberries.ru/api/v1/supplier/sales"
-    STATS_REPORT = "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod"
+    BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
+    COMMON_URL = "https://common-api.wildberries.ru/api/v1" 
+    ADV_URL = "https://advert-api.wb.ru/adv/v1" 
     
-    # Content
-    CONTENT_CARDS = "https://suppliers-api.wildberries.ru/content/v2/get/cards/list"
+    # In-Memory Cache: { "token_method_params": (timestamp, data) }
+    _cache: Dict[str, Any] = {}
+    _cache_ttl = 300 # 5 минут (TTL)
 
-class WBBaseClient:
-    def __init__(self):
-        # Семафор для ограничения одновременных запросов (Rate Limiting)
-        self._semaphore = asyncio.Semaphore(10)
-        self._timeout = aiohttp.ClientTimeout(total=30, connect=10)
+    async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
+        """
+        Выполняет запрос с повторными попытками при 429/5xx ошибках.
+        """
+        backoff = 2
+        
+        for attempt in range(retries):
+            try:
+                if method == 'GET':
+                    coro = session.get(url, headers=headers, params=params, timeout=20)
+                else:
+                    coro = session.post(url, headers=headers, json=json_data, timeout=20)
 
-    async def _request(
-        self, 
-        method: str, 
-        url: str, 
-        token: str, 
-        params: Optional[Dict] = None, 
-        json_data: Optional[Dict] = None,
-        retries: int = 3,
-        backoff_factor: float = 1.5
-    ) -> Any:
-        headers = {
-            "Authorization": token,
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+                async with coro as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    elif resp.status == 429:
+                        logger.warning(f"WB API Rate Limit (429) on {url}. Retrying in {backoff}s...")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2 
+                    elif resp.status >= 500:
+                        logger.warning(f"WB API Server Error ({resp.status}). Retrying...")
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                    elif resp.status == 204:
+                         return None # No content
+                    else:
+                        text = await resp.text()
+                        logger.error(f"WB API Error {resp.status} on {url}: {text}")
+                        return None
+            except Exception as e:
+                logger.error(f"Request failed: {e}")
+                await asyncio.sleep(backoff)
+        
+        return None
 
-        async with self._semaphore:
-            for attempt in range(retries):
-                try:
-                    async with aiohttp.ClientSession(timeout=self._timeout) as session:
-                        async with session.request(
-                            method, url, params=params, json=json_data, headers=headers
-                        ) as response:
-                            
-                            # Handle Rate Limits
-                            if response.status == 429:
-                                wait_time = backoff_factor ** (attempt + 1)
-                                logger.warning(f"Rate Limit 429 on {url}. Waiting {wait_time}s...")
-                                await asyncio.sleep(wait_time)
-                                continue
+    def _get_cache_key(self, token, method, params):
+        token_part = token[-10:] if token else "none"
+        param_str = json.dumps(params, sort_keys=True)
+        return f"{token_part}:{method}:{param_str}"
 
-                            # Handle Auth Errors
-                            if response.status == 401:
-                                logger.error(f"Unauthorized 401 on {url}. Check Token.")
-                                return None
+    async def _get_cached_or_request(self, session, url, headers, params, use_cache=True):
+        if not use_cache:
+            return await self._request_with_retry(session, url, headers, params)
 
-                            if response.status >= 500:
-                                logger.warning(f"Server Error {response.status} on {url}. Retry {attempt+1}/{retries}")
-                                await asyncio.sleep(1)
-                                continue
-
-                            if response.status not in (200, 201, 204):
-                                text = await response.text()
-                                logger.error(f"WB API Error {response.status} on {url}: {text}")
-                                return None
-                            
-                            try:
-                                return await response.json()
-                            except:
-                                return await response.text()
-
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout on {url}")
-                except Exception as e:
-                    logger.error(f"Request failed: {str(e)}")
-                    if attempt == retries - 1:
-                        raise e
-                
-                await asyncio.sleep(1)
+        cache_key = self._get_cache_key(headers.get("Authorization"), url, params)
+        
+        if cache_key in self._cache:
+            ts, data = self._cache[cache_key]
+            if (datetime.now() - ts).total_seconds() < self._cache_ttl:
+                return data
+        
+        data = await self._request_with_retry(session, url, headers, params)
+        
+        if data is not None:
+            self._cache[cache_key] = (datetime.now(), data)
             
-            return None
+        return data
+
+    async def check_token(self, token: str) -> bool:
+        if not token: 
+            return False
+        
+        url = f"{self.BASE_URL}/incomes"
+        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                    if resp.status == 401:
+                        return False
+                    return True
+            except Exception as e:
+                logger.error(f"Token check error: {e}")
+                return False

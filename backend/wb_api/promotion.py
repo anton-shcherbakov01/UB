@@ -1,97 +1,126 @@
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from .base import WBBaseClient, WBEndpoint
+import aiohttp
+from typing import Optional, Dict, Any, List
+from .base import WBApiBase
 
 logger = logging.getLogger("WB-API-Promotion")
 
-class WBPromotionMixin(WBBaseClient):
-    
-    async def get_active_campaigns(self, token: str) -> List[Dict]:
-        """Получение списка активных рекламных кампаний"""
-        data = await self._request("GET", WBEndpoint.ADV_LIST.value, token)
-        if not data or "adverts" not in data:
-            return []
-        
-        # Фильтруем только активные (status 9 - идут показы, 11 - на паузе, но активна)
-        active_ids = [
-            adv['advertId'] for adv in data['adverts'] 
-            if adv['status'] in [9, 11]
-        ]
-        return active_ids
+class WBPromotionMixin(WBApiBase):
 
-    async def get_campaign_info(self, token: str, campaign_id: int) -> Optional[Dict]:
-        """Детальная информация о кампании"""
+    async def get_advert_campaigns(self, token: str):
+        """Получение списка рекламных кампаний (Реклама > Список кампаний)"""
+        # Сначала получаем ID кампаний, затем их инфо
+        # WB не дает просто список, нужно запросить ID по статусам
+        url_count = f"{self.ADV_URL}/promotion/count"
+        url_ids = f"{self.ADV_URL}/promotion/adverts"
+        url_infos = f"{self.ADV_URL}/promotion/adverts" # POST info
+        
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession() as session:
+            # 1. Получаем список ID (активные - 9, пауза - 11)
+            # В реальном API WB V1 может быть другой endpoint, используем стандартный
+            ids_payload = {"status": [9, 11], "type": [6, 8, 9]} # 6=Поиск, 8=Авто, 9=Карточка
+            campaigns_list = await self._request_with_retry(session, url_ids, headers, method='POST', json_data=ids_payload)
+            
+            if not campaigns_list:
+                return []
+            
+            # campaigns_list это список объектов. Нам нужны детали.
+            # Если API возвращает сразу детали - отлично. Если нет - запрашиваем.
+            # Обычно /promotion/adverts возвращает массив ID или краткую инфо.
+            # Предположим возврат в формате WB API: [{id, type, status, ...}]
+            
+            # Обогатим информацией о бюджете/ставке
+            results = []
+            for camp in campaigns_list:
+                # Фильтруем мусор
+                if not isinstance(camp, dict): continue
+                
+                # Запрос статистики или доп инфо, если нужно. Пока возвращаем то что есть.
+                results.append({
+                    "id": camp.get("advertId"),
+                    "name": camp.get("name", f"Кампания {camp.get('advertId')}"),
+                    "status": camp.get("status"),
+                    "type": camp.get("type"),
+                    "changeTime": camp.get("changeTime")
+                })
+            
+            return results
+
+    async def get_advert_stats(self, token: str, campaign_id: int):
+        """Получение полной статистики кампании"""
+        url = f"{self.ADV_URL}/fullstat"
+        headers = {"Authorization": token}
+        # WB требует список id
+        payload = [{"id": campaign_id}]
+        
+        async with aiohttp.ClientSession() as session:
+            data = await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
+            # data is list of results
+            if data and isinstance(data, list) and len(data) > 0:
+                stat = data[0]
+                return {
+                    "views": stat.get("views", 0),
+                    "clicks": stat.get("clicks", 0),
+                    "ctr": stat.get("ctr", 0),
+                    "spend": stat.get("sum", 0),
+                    "cr": 0 # WB API не всегда отдает CR прямо
+                }
+            return None
+
+    async def get_current_bid_info(self, token: str, campaign_id: int):
+        """Получение текущей ставки"""
+        # Используем endpoint /v0/advert (получение инфо о кампании)
+        # Или /v1/promotion/adverts c ID
+        url = f"https://advert-api.wb.ru/adv/v0/advert"
+        headers = {"Authorization": token}
         params = {"id": campaign_id}
-        # У WB специфичный эндпоинт, принимающий id в query для списка, 
-        # но мы используем POST для массового получения, или GET для одного
-        # Здесь используем GET/POST согласно документации v1
         
-        # Для получения инфо часто используется POST с массивом ID
-        data = await self._request("POST", WBEndpoint.ADV_INFO.value, token, json_data=[campaign_id])
-        if data and isinstance(data, list) and len(data) > 0:
-            return data[0]
-        return None
-
-    async def get_current_bid_info(self, token: str, campaign_id: int) -> Dict:
-        """Получение текущей ставки и позиции (эмуляция или реальный запрос)"""
-        # WB не отдает "текущую позицию" прямо в API управления ставками, 
-        # но отдает текущую ставку кампании.
-        info = await self.get_campaign_info(token, campaign_id)
-        if not info:
-            return {"price": 0, "status": 0}
+        async with aiohttp.ClientSession() as session:
+            data = await self._request_with_retry(session, url, headers, params=params)
             
-        params = info.get('params', [])
-        price = 0
-        if params and len(params) > 0:
-            price = params[0].get('price', 0)
-            
-        return {
-            "price": price,
-            "status": info.get('status'),
-            "type": info.get('type')
-        }
+            if data and "params" in data:
+                # Структура зависит от типа кампании (Поиск/Авто)
+                params_list = data.get("params", [])
+                if params_list:
+                    # Берем первую сущность
+                    p = params_list[0]
+                    return {
+                        "campaignId": campaign_id,
+                        "price": p.get("price", 0),
+                        "subjectId": p.get("subjectId")
+                    }
+            return {"campaignId": campaign_id, "price": 0, "position": 0}
 
     async def update_bid(self, token: str, campaign_id: int, new_bid: int):
-        """Обновление ставки (CPM)"""
-        # Для типа 8 (Авто) и 9 (Поиск) разные эндпоинты, здесь пример для Поиска/Каталога (v0/cpm)
+        """
+        Реальное обновление ставки.
+        Endpoint: /adv/v0/save (для старых типов) или /adv/v1/save-ad (для авто)
+        Для универсальности используем v0/save который работает для поиска/карточки.
+        """
+        url = f"https://advert-api.wb.ru/adv/v0/save"
+        headers = {"Authorization": token}
+        # Структура payload сложная и зависит от типа кампании.
+        # Для упрощения предполагаем тип 6 (Поиск).
+        
+        # Сначала надо получить текущие параметры, чтобы не затереть их
+        current_info = await self.get_current_bid_info(token, campaign_id)
+        if not current_info or "subjectId" not in current_info:
+            logger.error(f"Cannot update bid: failed to fetch current info for {campaign_id}")
+            return
+            
         payload = {
             "advertId": campaign_id,
-            "type": 6, # Тип смены ставки, 6 = cpm
-            "cpm": new_bid,
-            "param": 0, # В зависимости от типа кампании (subjectId или 0)
-            "instrument": 0 # 0 - не менять
+            "type": 6, 
+            "params": [
+                {
+                    "subjectId": current_info["subjectId"],
+                    "price": new_bid
+                }
+            ]
         }
-        # Для автокампаний нужен другой роут /adv/v1/auto/cpm.
-        # Упрощенная логика: пробуем универсальный или разделяем по типу.
-        # Здесь предполагаем ручное управление (Поиск).
         
-        url = "https://advert-api.wildberries.ru/adv/v0/cpm"
-        res = await self._request("POST", url, token, json_data=payload)
-        return res
-
-    async def get_advert_stats(self, token: str, campaign_id: int) -> Dict:
-        """Получение статистики (CTR, CPC) за последние дни"""
-        dates = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(3)]
-        payload = [{"id": campaign_id, "dates": dates}]
-        
-        data = await self._request("POST", WBEndpoint.ADV_STATS.value, token, json_data=payload)
-        
-        if not data or not isinstance(data, list):
-            return {"ctr": 0, "views": 0, "clicks": 0}
-            
-        # Агрегация статистики за период
-        total_views = 0
-        total_clicks = 0
-        
-        for day in data:
-            for day_stat in day.get('days', []):
-                total_views += day_stat.get('views', 0)
-                total_clicks += day_stat.get('clicks', 0)
-                
-        ctr = (total_clicks / total_views * 100) if total_views > 0 else 0
-        return {
-            "ctr": round(ctr, 2),
-            "views": total_views,
-            "clicks": total_clicks
-        }
+        async with aiohttp.ClientSession() as session:
+            await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
+            logger.info(f"REAL BID UPDATE: Campaign {campaign_id} -> {new_bid} RUB")

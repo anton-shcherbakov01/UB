@@ -1,41 +1,132 @@
-import logging
-from typing import List, Dict, Any, Optional
+import asyncio
+import aiohttp
 from datetime import datetime, timedelta
-from .base import WBBaseClient, WBEndpoint
+from typing import Optional, Dict, Any, List
+from .base import WBApiBase
 
-logger = logging.getLogger("WB-API-Stats")
+class WBStatisticsMixin(WBApiBase):
+    
+    async def get_dashboard_stats(self, token: str):
+        """Сводка: Заказы сегодня и остатки"""
+        if not token: return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
 
-class WBStatisticsMixin(WBBaseClient):
+        async with aiohttp.ClientSession() as session:
+            today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
+            
+            orders_task = self._get_orders(session, token, today_str, use_cache=True)
+            stocks_task = self._get_stocks(session, token, today_str, use_cache=True)
+            
+            orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
+            
+            return {
+                "orders_today": orders_res,
+                "stocks": stocks_res
+            }
 
-    async def get_new_orders_since(self, token: str, last_check_dt: datetime) -> List[Dict]:
-        """Получение заказов с момента последней проверки"""
-        # API отдает заказы по дате обновления. Берем с запасом 2 дня, фильтруем в коде.
-        date_from = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    async def get_new_orders_since(self, token: str, last_check: datetime):
+        if not last_check:
+            last_check = datetime.now() - timedelta(hours=1)
         
-        params = {"dateFrom": date_from, "flag": 0}
-        data = await self._request("GET", WBEndpoint.STATS_ORDERS.value, token, params=params)
+        date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        
+        async with aiohttp.ClientSession() as session:
+            orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
+            
+            if not orders_data or "items" not in orders_data:
+                return []
+            
+            new_orders = []
+            for order in orders_data["items"]:
+                try:
+                    order_date = datetime.strptime(order["date"], "%Y-%m-%dT%H:%M:%S")
+                    if order_date > last_check:
+                        new_orders.append(order)
+                except: continue
+                
+            return new_orders
+
+    async def get_my_stocks(self, token: str):
+        if not token: return []
+        
+        today = datetime.now().strftime("%Y-%m-%dT00:00:00")
+        url = f"{self.BASE_URL}/stocks"
+        params = {"dateFrom": today}
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession() as session:
+             data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+             return data if isinstance(data, list) else []
+
+    async def get_warehouse_coeffs(self, token: str):
+        """
+        Получение реальных коэффициентов приемки.
+        """
+        url = f"{self.COMMON_URL}/tariffs/box"
+        headers = {"Authorization": token} if token else {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        params = {"date": today}
+
+        async with aiohttp.ClientSession() as session:
+            data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+            if data and 'response' in data and 'data' in data['response']:
+                return data['response']['data']
+            return []
+
+    async def calculate_transit(self, liters: int, destination: str = "Koledino"):
+        # Логика калькулятора остается на бэкенде, но коэффициенты можно брать из get_warehouse_coeffs
+        # Для простоты оставляем расчет, но убираем заглушку рандома
+        direct_base = 1500
+        direct_rate = 30
+        
+        transit_base = 500 
+        transit_rate = 10 
+        transit_logistics = 1000 
+        
+        return {
+            "destination": destination,
+            "direct": {
+                "rate": direct_rate,
+                "total": direct_base + (liters * direct_rate)
+            },
+            "transit_kazan": {
+                "rate": transit_rate,
+                "logistics": transit_logistics,
+                "total": transit_base + (liters * transit_rate) + transit_logistics
+            }
+        }
+
+    async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
+        url = f"{self.BASE_URL}/orders"
+        params = {"dateFrom": date_from}
+        headers = {"Authorization": token}
+        
+        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
         
         if not data:
-            return []
-            
-        new_orders = []
-        last_ts = last_check_dt.timestamp() if last_check_dt else 0
+            return {"count": 0, "sum": 0, "items": []}
         
-        for order in data:
-            # lastChangeDate - строка вида 2023-01-01T12:00:00
-            try:
-                # Отсекаем секунды если есть доли
-                date_str = order.get('lastChangeDate', '').split('.')[0] 
-                order_dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
-                if order_dt.timestamp() > last_ts:
-                    new_orders.append(order)
-            except ValueError:
-                continue
-                
-        return new_orders
+        if isinstance(data, list):
+            valid_orders = [x for x in data if not x.get("isCancel")]
+            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            return {
+                "count": len(valid_orders),
+                "sum": int(total_sum),
+                "items": valid_orders
+            }
+        return {"count": 0, "sum": 0, "items": []}
 
-    async def get_stocks(self, token: str) -> List[Dict]:
-        """Получение остатков"""
-        date_from = datetime.now().strftime("%Y-%m-%dT00:00:00")
+    async def _get_stocks(self, session, token: str, date_from: str, use_cache=True):
+        url = f"{self.BASE_URL}/stocks"
         params = {"dateFrom": date_from}
-        return await self._request("GET", WBEndpoint.STATS_STOCKS.value, token, params=params) or []
+        headers = {"Authorization": token}
+        
+        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        
+        if not data:
+            return {"total_quantity": 0}
+            
+        if isinstance(data, list):
+            total_qty = sum(item.get("quantity", 0) for item in data)
+            return {"total_quantity": total_qty}
+            
+        return {"total_quantity": 0}
