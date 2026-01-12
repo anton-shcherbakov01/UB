@@ -19,9 +19,9 @@ services:
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
-      # FIX: Используем Unix-сокет (-h /var/run/postgresql) вместо TCP.
-      # Это использует локальную авторизацию (trust), которая не требует пароля и не гадит в логи.
-      test: ["CMD-SHELL", "pg_isready -U postgres -h /var/run/postgresql"]
+      # FIX: Самый надежный способ. Явно экспортируем пароль и проверяем через TCP (127.0.0.1).
+      # Это устранит ошибки "password authentication failed" в логах.
+      test: ["CMD-SHELL", "export PGPASSWORD=wb_secret_password && pg_isready -U postgres -d wb_monitor -h 127.0.0.1"]
       interval: 10s
       timeout: 5s
       retries: 5
