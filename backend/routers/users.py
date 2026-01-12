@@ -49,7 +49,8 @@ async def save_wb_token(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    """Сохранение токена API Статистики WB"""
+    """Сохранение токена API WB"""
+    # Проверяем токен (хотя бы один сервис должен ответить)
     is_valid = await wb_api_service.check_token(req.token)
     if not is_valid:
         raise HTTPException(status_code=400, detail="Неверный токен или ошибка API WB")
@@ -60,6 +61,14 @@ async def save_wb_token(
     # Trigger initial sync
     sync_financial_reports.delay(user.id)
     return {"status": "saved", "message": "Токен успешно сохранен, запущена синхронизация"}
+
+@router.get("/token/scopes")
+async def get_token_scopes(user: User = Depends(get_current_user)):
+    """Диагностика прав токена"""
+    if not user.wb_api_token:
+        return {"statistics": False, "standard": False, "promotion": False, "questions": False}
+    
+    return await wb_api_service.get_token_scopes(user.wb_api_token)
 
 @router.delete("/token")
 async def delete_wb_token(

@@ -4,9 +4,12 @@ import asyncio
 import json
 import socket
 import requests # Fallback library
-# from aiohttp import AsyncResolver # Removed to fix aiodns error
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
+
+# Suppress insecure request warnings
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 logger = logging.getLogger("WB-API-Service")
 
@@ -18,6 +21,7 @@ class WBApiService:
     BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
     COMMON_URL = "https://common-api.wildberries.ru/api/v1" 
     ADV_URL = "https://advert-api.wb.ru/adv/v1" 
+    QUESTIONS_URL = "https://feedbacks-api.wildberries.ru/api/v1"
     
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 
@@ -25,7 +29,6 @@ class WBApiService:
     def _get_connector(self):
         """
         Создает TCP коннектор с принудительным IPv4.
-        Убран AsyncResolver, так как нет aiodns.
         """
         return aiohttp.TCPConnector(
             family=socket.AF_INET, 
@@ -61,7 +64,7 @@ class WBApiService:
                             if resp.status >= 500:
                                 logger.warning(f"WB API Server Error {resp.status}: {text[:100]}")
                             elif resp.status != 401:
-                                logger.info(f"WB API Client Error {resp.status}: {text[:100]}")
+                                logger.debug(f"WB API Client Error {resp.status}: {text[:100]}")
                             
                             if resp.status < 500 and resp.status != 429:
                                 return None 
@@ -72,66 +75,69 @@ class WBApiService:
         
         return None
 
-    async def _check_url_availability(self, url, headers, params, name="API"):
-        """Помощник для проверки конкретного URL с fallback"""
-        # 1. Async Try
-        try:
-            async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
-                    if resp.status == 200: return 200
-                    if resp.status == 401: return 401
-                    return resp.status
-        except Exception as e:
-            logger.warning(f"Async check for {name} failed: {e}")
-
-        # 2. Sync Fallback
+    def _sync_check(self, url, params, headers, name):
+        """Синхронная проверка через requests (более надежна в Docker)"""
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
-            return resp.status_code
+            if resp.status_code == 200:
+                return True
+            # Если 500 или 429 - считаем токен валидным, так как достучались
+            if resp.status_code >= 500 or resp.status_code == 429:
+                return True
+            return False
         except Exception as e:
-            logger.error(f"Sync check for {name} failed: {e}")
-            return 0 # Network error
-
-    async def check_token(self, token: str) -> bool:
-        """
-        Умная проверка токена.
-        Проверяет доступ к Statistics API. Если 401, проверяет Common API,
-        чтобы подсказать пользователю, если он перепутал тип токена.
-        """
-        if not token: return False
-        
-        # 1. Проверяем API Статистики (Целевой)
-        stats_url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-        headers = {"Authorization": token}
-        
-        logger.info(f"🔍 Checking Statistics Token...")
-        code = await self._check_url_availability(stats_url, headers, params, "Statistics API")
-        
-        if code == 200:
-            logger.info("✅ Token Valid (Statistics API)")
-            return True
-        
-        if code == 401:
-            # 2. Если Статистика отказала, проверяем "Стандартный" API
-            logger.warning("❌ Statistics API responded 401. Checking if it's a Standard token...")
-            common_url = f"{self.COMMON_URL}/tariffs/box"
-            common_params = {"date": datetime.now().strftime("%Y-%m-%d")}
-            
-            code_common = await self._check_url_availability(common_url, headers, common_params, "Common API")
-            
-            if code_common == 200:
-                logger.error("⚠️ DIAGNOSIS: You provided a 'Standard' token! This app requires a 'Statistics' token.")
-            else:
-                logger.error("❌ Token invalid for both Statistics and Standard APIs.")
-            
+            logger.error(f"Check {name} failed: {e}")
             return False
 
-        if code >= 500:
-            logger.info(f"⚠️ WB API Error {code}, but assuming token is valid to not block user.")
-            return True # Пропускаем, если API WB лежит
+    async def check_token(self, token: str) -> bool:
+        """Простая проверка валидности (для сохранения)"""
+        scopes = await self.get_token_scopes(token)
+        # Если хотя бы один сервис доступен - токен рабочий
+        return any(scopes.values())
 
-        return False
+    async def get_token_scopes(self, token: str) -> Dict[str, bool]:
+        """
+        Полная диагностика токена по всем API.
+        """
+        if not token: 
+            return {"statistics": False, "standard": False, "promotion": False, "questions": False}
+
+        headers = {
+            "Authorization": token,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        
+        scopes = {}
+        
+        # 1. Статистика (Склады)
+        scopes["statistics"] = self._sync_check(
+            f"{self.BASE_URL}/stocks", 
+            {"dateFrom": datetime.now().strftime("%Y-%m-%d")}, 
+            headers, "Statistics"
+        )
+
+        # 2. Стандартный (Тарифы) - нужен для Unit-экономики
+        scopes["standard"] = self._sync_check(
+            f"{self.COMMON_URL}/tariffs/box", 
+            {"date": datetime.now().strftime("%Y-%m-%d")}, 
+            headers, "Standard"
+        )
+
+        # 3. Реклама (Счетчик кампаний)
+        scopes["promotion"] = self._sync_check(
+            f"{self.ADV_URL}/promotion/count", 
+            None, 
+            headers, "Promotion"
+        )
+
+        # 4. Вопросы/Отзывы (Список вопросов)
+        scopes["questions"] = self._sync_check(
+            f"{self.QUESTIONS_URL}/questions", 
+            {"isAnswered": "false", "take": 1}, 
+            headers, "Questions"
+        )
+
+        return scopes
 
     def _get_cache_key(self, token, method, params):
         token_part = token[-10:] if token else "none"

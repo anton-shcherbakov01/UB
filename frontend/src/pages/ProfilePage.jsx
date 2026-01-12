@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, AlertTriangle } from 'lucide-react';
+import { User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
-import TariffCard from '../components/TariffCard';
 
 const ProfilePage = ({ onNavigate }) => {
     const [tariffs, setTariffs] = useState([]);
@@ -10,6 +9,8 @@ const ProfilePage = ({ onNavigate }) => {
     const [tokenLoading, setTokenLoading] = useState(false);
     const [payLoading, setPayLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [scopes, setScopes] = useState(null);
+    const [scopesLoading, setScopesLoading] = useState(false);
 
     useEffect(() => {
         // Загрузка тарифов
@@ -20,14 +21,14 @@ const ProfilePage = ({ onNavigate }) => {
             })
             .catch(e => console.error("Tariffs error:", e));
 
-        // Загрузка профиля с обработкой ошибок
+        // Загрузка профиля
         fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() })
             .then(async r => {
                 if (!r.ok) {
                     const text = await r.text();
                     try {
                         const json = JSON.parse(text);
-                        throw new Error(json.detail || `Ошибка ${r.status}`);
+                        throw new Error(json.detail || `Статус ${r.status}`);
                     } catch {
                         throw new Error(`Ошибка сервера: ${r.status}`);
                     }
@@ -38,13 +39,23 @@ const ProfilePage = ({ onNavigate }) => {
                 setUser(data);
                 if (data && data.has_wb_token) {
                     setWbToken(data.wb_token_preview || '');
+                    fetchScopes();
                 }
             })
             .catch(e => {
                 console.error("Profile fetch failed:", e);
-                setError(e.message);
+                setError(`${e.message}`);
             });
     }, []);
+
+    const fetchScopes = () => {
+        setScopesLoading(true);
+        fetch(`${API_URL}/api/user/token/scopes`, { headers: getTgHeaders() })
+            .then(r => r.json())
+            .then(setScopes)
+            .catch(console.error)
+            .finally(() => setScopesLoading(false));
+    };
 
     const payStars = async (plan) => {
         if (!plan.stars) return;
@@ -63,7 +74,7 @@ const ProfilePage = ({ onNavigate }) => {
                      }
                  });
             } else {
-                alert("Ошибка создания ссылки или приложение открыто не в Telegram");
+                alert("Ошибка создания ссылки или нет Telegram WebApp");
             }
         } catch (e) {
             alert(e.message);
@@ -110,9 +121,12 @@ const ProfilePage = ({ onNavigate }) => {
             
             if (res.ok) {
                 alert("Токен успешно сохранен!");
-                // Перезагружаем профиль
                 const uRes = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
-                if(uRes.ok) setUser(await uRes.json());
+                if(uRes.ok) {
+                    const uData = await uRes.json();
+                    setUser(uData);
+                    fetchScopes(); // Обновляем права
+                }
             } else {
                 const d = await res.json();
                 throw new Error(d.detail || "Ошибка сохранения");
@@ -133,6 +147,7 @@ const ProfilePage = ({ onNavigate }) => {
                 headers: getTgHeaders()
             });
             setWbToken('');
+            setScopes(null);
             setUser(prev => ({...prev, has_wb_token: false}));
         } catch(e) {
             console.error(e);
@@ -141,7 +156,13 @@ const ProfilePage = ({ onNavigate }) => {
         }
     };
 
-    // Компонент карточки тарифа
+    const ScopeBadge = ({ label, active, loading }) => (
+        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${active ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'}`}>
+            {loading ? <Loader2 size={12} className="animate-spin"/> : active ? <CheckCircle2 size={14}/> : <XCircle size={14}/>}
+            {label}
+        </div>
+    );
+
     const RenderTariffCard = ({ plan }) => (
         <div className={`p-5 rounded-2xl border-2 transition-all ${plan.current ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-100 bg-white'}`}>
             <div className="flex justify-between items-start mb-3">
@@ -194,14 +215,13 @@ const ProfilePage = ({ onNavigate }) => {
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             {error && (
-                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex items-start gap-3">
-                    <AlertTriangle className="text-red-500 shrink-0" size={20}/>
-                    <div>
-                        <h3 className="font-bold text-red-800 text-sm">Ошибка доступа</h3>
-                        <p className="text-xs text-red-600 mt-1">{error}</p>
-                        <p className="text-xs text-slate-400 mt-2">
-                            Если вы запускаете локально (без Telegram), убедитесь что Backend запущен с <code>DEBUG_MODE=True</code>
-                        </p>
+                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex flex-col gap-2">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="text-red-500 shrink-0" size={20}/>
+                        <div>
+                            <h3 className="font-bold text-red-800 text-sm">Ошибка загрузки</h3>
+                            <p className="text-xs text-red-600 mt-1">{error}</p>
+                        </div>
                     </div>
                 </div>
             )}
@@ -243,8 +263,22 @@ const ProfilePage = ({ onNavigate }) => {
                         <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500"><X size={16}/></button>
                     )}
                 </div>
+                
+                {/* SCOPES DISPLAY */}
+                {(user?.has_wb_token || scopes) && (
+                    <div className="mt-4">
+                        <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">Доступные разделы API</div>
+                        <div className="flex flex-wrap gap-2">
+                            <ScopeBadge label="Статистика" active={scopes?.statistics} loading={scopesLoading} />
+                            <ScopeBadge label="Контент/Цены" active={scopes?.standard} loading={scopesLoading} />
+                            <ScopeBadge label="Реклама" active={scopes?.promotion} loading={scopesLoading} />
+                            <ScopeBadge label="Вопросы" active={scopes?.questions} loading={scopesLoading} />
+                        </div>
+                    </div>
+                )}
+
                 {!user?.has_wb_token && (
-                    <button onClick={saveToken} disabled={tokenLoading} className="w-full mt-3 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm">
+                    <button onClick={saveToken} disabled={tokenLoading} className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm">
                         {tokenLoading ? <Loader2 className="animate-spin" /> : 'Сохранить токен'}
                     </button>
                 )}
