@@ -20,3 +20,4 @@ numpy
 scipy
 sentence-transformers
 scikit-learn
+httpx
