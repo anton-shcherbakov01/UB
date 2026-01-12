@@ -60,19 +60,19 @@ const ProfilePage = ({ onNavigate }) => {
     const payStars = async (plan) => {
         if (!plan.stars) return;
         try {
-            const res = await fetch(`${API_URL}/api/payment/stars_link`, { 
-                method: 'POST', 
+            const res = await fetch(`${API_URL}/api/payment/stars_link`, {
+                method: 'POST',
                 headers: getTgHeaders(),
-                body: JSON.stringify({plan_id: plan.id, amount: plan.stars})
+                body: JSON.stringify({ plan_id: plan.id, amount: plan.stars })
             });
             const d = await res.json();
             if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
-                 window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
-                     if (status === 'paid') {
-                         alert("Оплата прошла успешно!");
-                         window.location.reload();
-                     }
-                 });
+                window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
+                    if (status === 'paid') {
+                        alert("Оплата прошла успешно!");
+                        window.location.reload();
+                    }
+                });
             } else {
                 alert("Ошибка создания ссылки или нет Telegram WebApp");
             }
@@ -90,9 +90,7 @@ const ProfilePage = ({ onNavigate }) => {
                 headers: getTgHeaders(),
                 body: JSON.stringify({ plan_id: plan.id })
             });
-            
             const data = await res.json();
-            
             if (res.ok && data.payment_url) {
                 if (window.Telegram?.WebApp?.openLink) {
                     window.Telegram.WebApp.openLink(data.payment_url);
@@ -110,19 +108,21 @@ const ProfilePage = ({ onNavigate }) => {
     };
 
     const saveToken = async () => {
+        // Блокируем сохранение маскированного токена
         if (!wbToken || wbToken.includes("*****")) return;
+        
         setTokenLoading(true);
         try {
-             const res = await fetch(`${API_URL}/api/user/token`, { 
-                method: 'POST', 
+            const res = await fetch(`${API_URL}/api/user/token`, {
+                method: 'POST',
                 headers: getTgHeaders(),
-                body: JSON.stringify({token: wbToken})
+                body: JSON.stringify({ token: wbToken })
             });
             
             if (res.ok) {
                 alert("Токен успешно сохранен!");
                 const uRes = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
-                if(uRes.ok) {
+                if (uRes.ok) {
                     const uData = await uRes.json();
                     setUser(uData);
                     fetchScopes(); // Обновляем права
@@ -142,14 +142,11 @@ const ProfilePage = ({ onNavigate }) => {
         if (!confirm("Удалить токен?")) return;
         setTokenLoading(true);
         try {
-             await fetch(`${API_URL}/api/user/token`, { 
-                method: 'DELETE', 
-                headers: getTgHeaders()
-            });
+            await fetch(`${API_URL}/api/user/token`, { method: 'DELETE', headers: getTgHeaders() });
             setWbToken('');
             setScopes(null);
-            setUser(prev => ({...prev, has_wb_token: false}));
-        } catch(e) {
+            setUser(prev => ({ ...prev, has_wb_token: false }));
+        } catch (e) {
             console.error(e);
         } finally {
             setTokenLoading(false);
@@ -158,7 +155,7 @@ const ProfilePage = ({ onNavigate }) => {
 
     const ScopeBadge = ({ label, active, loading }) => (
         <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${active ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'}`}>
-            {loading ? <Loader2 size={12} className="animate-spin"/> : active ? <CheckCircle2 size={14}/> : <XCircle size={14}/>}
+            {loading ? <Loader2 size={12} className="animate-spin" /> : active ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
             {label}
         </div>
     );
@@ -175,13 +172,13 @@ const ProfilePage = ({ onNavigate }) => {
                 </div>
                 {plan.stars > 0 && (
                     <div className="text-right">
-                         <div className="text-amber-500 font-bold text-sm flex items-center justify-end gap-1">
-                             ★ {plan.stars}
-                         </div>
+                        <div className="text-amber-500 font-bold text-sm flex items-center justify-end gap-1">
+                            ★ {plan.stars}
+                        </div>
                     </div>
                 )}
             </div>
-            
+
             <ul className="space-y-2 mb-4">
                 {plan.features.map((f, i) => (
                     <li key={i} className="text-sm text-slate-600 flex items-center gap-2">
@@ -193,18 +190,11 @@ const ProfilePage = ({ onNavigate }) => {
 
             {!plan.current && plan.price !== "0 ₽" && (
                 <div className="grid grid-cols-2 gap-2 mt-4">
-                    <button 
-                        onClick={() => payStars(plan)}
-                        className="flex items-center justify-center gap-2 py-2.5 bg-amber-400 text-white rounded-xl font-bold text-sm hover:bg-amber-500 transition-colors"
-                    >
+                    <button onClick={() => payStars(plan)} className="flex items-center justify-center gap-2 py-2.5 bg-amber-400 text-white rounded-xl font-bold text-sm hover:bg-amber-500 transition-colors">
                         <span>Stars</span>
                     </button>
-                    <button 
-                        onClick={() => payRubles(plan)}
-                        disabled={payLoading}
-                        className="flex items-center justify-center gap-2 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors"
-                    >
-                        {payLoading ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16}/>}
+                    <button onClick={() => payRubles(plan)} disabled={payLoading} className="flex items-center justify-center gap-2 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors">
+                        {payLoading ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
                         <span>РФ Карта</span>
                     </button>
                 </div>
@@ -212,12 +202,17 @@ const ProfilePage = ({ onNavigate }) => {
         </div>
     );
 
+    // Логика состояния кнопки: 
+    // Дизейблим если идет загрузка ИЛИ (если токен уже есть и поле содержит маску '*****')
+    // Это предотвращает отправку маскированного токена, но разрешает отправку, если пользователь начал вводить новый
+    const isSaveDisabled = tokenLoading || (user?.has_wb_token && wbToken.includes('*****')) || !wbToken;
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             {error && (
                 <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex flex-col gap-2">
                     <div className="flex items-start gap-3">
-                        <AlertTriangle className="text-red-500 shrink-0" size={20}/>
+                        <AlertTriangle className="text-red-500 shrink-0" size={20} />
                         <div>
                             <h3 className="font-bold text-red-800 text-sm">Ошибка загрузки</h3>
                             <p className="text-xs text-red-600 mt-1">{error}</p>
@@ -238,9 +233,9 @@ const ProfilePage = ({ onNavigate }) => {
                             {user?.plan || 'Free'} Plan
                         </div>
                         {user?.days_left > 0 && (
-                             <div className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold">
+                            <div className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold">
                                 {user.days_left} дн.
-                             </div>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -251,19 +246,23 @@ const ProfilePage = ({ onNavigate }) => {
                     <Key className="text-indigo-600" size={20} />
                     <h2 className="font-bold text-lg">API Ключ WB</h2>
                 </div>
+
                 <div className="relative">
-                    <input 
-                        type="text" 
+                    <input
+                        type="text"
                         value={wbToken}
                         onChange={(e) => setWbToken(e.target.value)}
+                        onFocus={(e) => { if (user?.has_wb_token) e.target.select() }} // Удобство для выделения старого токена
                         placeholder="Введите токен..."
-                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100"
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100 transition-all"
                     />
                     {user?.has_wb_token && (
-                        <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500"><X size={16}/></button>
+                        <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500 transition-colors">
+                            <X size={16} />
+                        </button>
                     )}
                 </div>
-                
+
                 {/* SCOPES DISPLAY */}
                 {(user?.has_wb_token || scopes) && (
                     <div className="mt-4">
@@ -277,11 +276,18 @@ const ProfilePage = ({ onNavigate }) => {
                     </div>
                 )}
 
-                {!user?.has_wb_token && (
-                    <button onClick={saveToken} disabled={tokenLoading} className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm">
-                        {tokenLoading ? <Loader2 className="animate-spin" /> : 'Сохранить токен'}
-                    </button>
-                )}
+                {/* Кнопка сохранения теперь видна всегда, но блокируется если токен не изменен */}
+                <button
+                    onClick={saveToken}
+                    disabled={isSaveDisabled}
+                    className={`w-full mt-4 py-3 rounded-xl font-bold text-sm transition-all flex justify-center items-center gap-2
+                        ${isSaveDisabled
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 active:scale-95 hover:bg-indigo-700'
+                        }`}
+                >
+                    {tokenLoading ? <Loader2 className="animate-spin" size={18} /> : (user?.has_wb_token ? 'Обновить токен' : 'Сохранить токен')}
+                </button>
             </div>
 
             <h2 className="font-bold text-lg px-2 mt-4">Тарифы</h2>
@@ -290,15 +296,15 @@ const ProfilePage = ({ onNavigate }) => {
                     <RenderTariffCard key={plan.id} plan={plan} />
                 ))}
             </div>
-            
+
             {user?.is_admin && (
-                 <button onClick={() => onNavigate('admin')} className="w-full bg-slate-900 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between active:scale-95 transition-transform mt-4">
-                     <div className="flex items-center gap-3">
-                         <Shield size={20} className="text-emerald-400"/>
-                         <span className="font-bold text-sm">Админ-панель</span>
-                     </div>
-                     <ArrowUpRight size={18}/>
-                 </button>
+                <button onClick={() => onNavigate('admin')} className="w-full bg-slate-900 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between active:scale-95 transition-transform mt-4">
+                    <div className="flex items-center gap-3">
+                        <Shield size={20} className="text-emerald-400" />
+                        <span className="font-bold text-sm">Админ-панель</span>
+                    </div>
+                    <ArrowUpRight size={18} />
+                </button>
             )}
 
             <div className="mt-8 pt-8 border-t border-slate-100 text-center space-y-2">
@@ -308,7 +314,7 @@ const ProfilePage = ({ onNavigate }) => {
                     <a href="#" className="hover:text-slate-600 transition-colors">Политика конфиденциальности</a>
                 </div>
                 <p className="text-[10px] text-slate-300">
-                    Сервис не является аффилированным лицом Wildberries.<br/>
+                    Сервис не является аффилированным лицом Wildberries.<br />
                     Обработка персональных данных в соответствии с 152-ФЗ.
                 </p>
             </div>
