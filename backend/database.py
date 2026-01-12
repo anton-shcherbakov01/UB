@@ -7,11 +7,11 @@ from datetime import datetime
 
 # Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
-# Для синхронного драйвера (Celery/Migrate) убираем +asyncpg
+
+# Для синхронного драйвера (Celery/Migrate)
 if "+asyncpg" in DATABASE_URL_ASYNC:
     DATABASE_URL_SYNC = DATABASE_URL_ASYNC.replace("+asyncpg", "")
 else:
-    # Fallback если вдруг передали строку без драйвера
     DATABASE_URL_SYNC = DATABASE_URL_ASYNC
 
 # 1. Асинхронный движок (FastAPI)
@@ -33,38 +33,35 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     subscription_plan = Column(String, default="free")
     
-    # Новые поля для API WB и уведомлений
+    # Поля API WB
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
     
-    # --- SaaS / Monetization Fields (RF Compliance) ---
-    # Хранение сроков подписки на сервере (не полагаемся на сторы)
+    # SaaS поля
     subscription_expires_at = Column(DateTime, nullable=True)
     is_recurring = Column(Boolean, default=False)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # Связи
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
     history = relationship("SearchHistory", back_populates="user", cascade="all, delete-orphan")
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
     seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
     bidder_logs = relationship("BidderLog", back_populates="user", cascade="all, delete-orphan")
+    bidder_settings = relationship("BidderSettings", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
 
 class Payment(Base):
-    """
-    Таблица транзакций (Financial Audit Trail).
-    Необходима для соответствия требованиям фискализации и истории операций.
-    """
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     
-    provider_payment_id = Column(String, index=True) # ID платежа в ЮKassa
-    amount = Column(Integer) # В копейках или целых, зависит от логики. Будем хранить в рублях.
+    provider_payment_id = Column(String, index=True)
+    amount = Column(Integer)
     currency = Column(String, default="RUB")
-    status = Column(String) # pending, succeeded, canceled
-    plan_id = Column(String) # pro, business
+    status = Column(String)
+    plan_id = Column(String)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     confirmed_at = Column(DateTime, nullable=True)
@@ -72,10 +69,6 @@ class Payment(Base):
     user = relationship("User", back_populates="payments")
 
 class ProductCost(Base):
-    """
-    Таблица для хранения себестоимости СОБСТВЕННЫХ товаров пользователя.
-    Используется для расчета Unit-экономики и P&L во внутренней аналитике.
-    """
     __tablename__ = "product_costs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -86,9 +79,6 @@ class ProductCost(Base):
     user = relationship("User", back_populates="costs")
 
 class MonitoredItem(Base):
-    """
-    Таблица для ВНЕШНЕГО мониторинга (конкуренты).
-    """
     __tablename__ = "monitored_items"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -122,24 +112,40 @@ class SearchHistory(Base):
     user = relationship("User", back_populates="history")
 
 class SeoPosition(Base):
-    """
-    Новая таблица: Трекинг позиций (SERP)
-    """
     __tablename__ = "seo_positions"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger)
     keyword = Column(String)
-    position = Column(Integer, default=0) # 0 - не найдено в топ-100
+    position = Column(Integer, default=0)
     last_check = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="seo_keywords")
 
+class BidderSettings(Base):
+    """
+    Настройки автобиддера для конкретной кампании.
+    """
+    __tablename__ = "bidder_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    campaign_id = Column(BigInteger, unique=True, index=True)
+    
+    is_active = Column(Boolean, default=False)
+    target_pos = Column(Integer, default=1)   # Целевая позиция
+    max_bid = Column(Integer, default=500)    # Максимальная ставка (RUB)
+    min_bid = Column(Integer, default=125)    # Минимальная ставка
+    
+    # Safety Layers
+    target_cpa = Column(Integer, default=0)   # Целевая цена действия (0 = выкл)
+    max_cpm = Column(Integer, default=2000)   # Хард лимит CPM
+    strategy = Column(String, default="pid")  # 'pid', 'shadowing', 'fixed'
+    
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    
+    user = relationship("User", back_populates="bidder_settings")
+
 class BidderLog(Base):
-    """
-    NEW: Логирование работы RTB биддера.
-    Используется для демонстрации эффективности Safe Mode и отладки.
-    """
     __tablename__ = "bidder_logs"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
@@ -151,10 +157,9 @@ class BidderLog(Base):
     previous_bid = Column(Integer)
     calculated_bid = Column(Integer)
     
-    # "Сэкономлено" = (Ставка конкурента - Наша ставка) или (Старая ставка - Новая ставка)
     saved_amount = Column(Integer, default=0)
     
-    action = Column(String) # 'update', 'safe_mode', 'paused', 'low_ctr'
+    action = Column(String) # 'update', 'safe_mode', 'paused', 'low_ctr', 'cpa_guard'
     timestamp = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="bidder_logs")

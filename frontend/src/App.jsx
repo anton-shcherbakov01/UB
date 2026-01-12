@@ -10,7 +10,7 @@ import FinancePage from './pages/FinancePage';
 import AIAnalysisPage from './pages/AIAnalysisPage';
 import SeoGeneratorPage from './pages/SeoGeneratorPage';
 import SeoTrackerPage from './pages/SeoTrackerPage';
-import BidderPage from './pages/BidderPage';
+import BidderDashboard from './pages/BidderDashboard';
 import SupplyPage from './pages/SupplyPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
@@ -35,7 +35,7 @@ export default function App() {
           case 'ai': return <AIAnalysisPage user={user} />;
           case 'seo': return <SeoGeneratorPage />;
           case 'seo_tracker': return <SeoTrackerPage />; 
-          case 'bidder': return <BidderPage />; 
+          case 'bidder': return <BidderDashboard />; 
           case 'supply': return <SupplyPage />; 
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;

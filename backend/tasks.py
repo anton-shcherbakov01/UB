@@ -100,24 +100,13 @@ def save_seo_position_sync(user_id, sku, keyword, position):
         session.close()
 
 def log_bidder_action_sync(user_id, campaign_id, current_pos, target_pos, prev_bid, calc_bid, action):
-    """
-    Saves bidder action to Postgres log.
-    """
     session = SyncSessionLocal()
     try:
-        saved = 0
-        if prev_bid and calc_bid:
-            saved = prev_bid - calc_bid
-            
+        saved = (prev_bid - calc_bid) if (prev_bid and calc_bid) else 0
         log = BidderLog(
-            user_id=user_id,
-            campaign_id=campaign_id,
-            current_pos=current_pos,
-            target_pos=target_pos,
-            previous_bid=prev_bid,
-            calculated_bid=calc_bid,
-            saved_amount=saved,
-            action=action
+            user_id=user_id, campaign_id=campaign_id, current_pos=current_pos,
+            target_pos=target_pos, previous_bid=prev_bid, calculated_bid=calc_bid,
+            saved_amount=saved, action=action
         )
         session.add(log)
         session.commit()
@@ -206,43 +195,38 @@ def train_forecasting_models():
 # --- REAL-TIME BIDDER LOGIC (ASYNC WORKER) ---
 
 class BidderWorker:
-    """
-    Async Processor for Campaign Bidding.
-    """
-    def __init__(self, user_id: int, token: str):
+    def __init__(self, user_id: int, token: str, settings: BidderSettings):
         self.user_id = user_id
         self.token = token
-        # Config (can be moved to DB settings per campaign)
-        self.config = {
-            "target_pos": 2, 
-            "min_bid": 125, 
-            "max_bid": 1000, 
-            "safe_mode": True, # ! Important for testing
-            "kp": 1.5, "ki": 0.1, "kd": 0.5,
-            "min_ctr": 2.5 # Minimum CTR to continue aggressive bidding
+        self.settings = {
+            "target_pos": settings.target_pos,
+            "min_bid": settings.min_bid,
+            "max_bid": settings.max_bid,
+            "target_cpa": settings.target_cpa,
+            "max_cpm": settings.max_cpm,
+            "strategy": settings.strategy
         }
+        self.campaign_id = settings.campaign_id
+        self.is_active = settings.is_active
 
-    async def process_campaign(self, campaign_id: int):
-        campaign_key = f"bidder:state:{campaign_id}"
+    async def process_campaign(self):
+        if not self.is_active: return
+
+        campaign_key = f"bidder:state:{self.campaign_id}"
         
-        # 1. Check Metrics (Target CPA safeguard)
-        stats = await wb_api_service.get_advert_stats(self.token, campaign_id)
-        if stats and stats.get('ctr', 0) < self.config['min_ctr']:
-            logger.warning(f"Campaign {campaign_id} paused due to low CTR {stats.get('ctr')}%")
-            # Logic to pause campaign or set min bid
-            log_bidder_action_sync(self.user_id, campaign_id, 0, 0, 0, 0, "paused_low_ctr")
-            return
+        # 1. Fetch Stats for CPA Guard (CTR, Conversions)
+        stats = await wb_api_service.get_advert_stats(self.token, self.campaign_id)
+        if not stats:
+            logger.warning(f"No stats for campaign {self.campaign_id}")
+            stats = {"ctr": 1.5, "views": 0} # Safe defaults
 
-        # 2. Get Current State from WB
-        info = await wb_api_service.get_current_bid_info(self.token, campaign_id)
+        # 2. Get Current Auction State
+        info = await wb_api_service.get_current_bid_info(self.token, self.campaign_id)
         current_bid = info.get('price', 0)
         current_pos = info.get('position', 100)
         
-        # 3. Load PID State from Redis
-        integral = 0.0
-        prev_meas = None
-        last_update = 0.0
-        
+        # 3. Load PID State
+        integral, prev_meas, last_update = 0.0, None, 0.0
         if r_client:
             state = r_client.hgetall(campaign_key)
             if state:
@@ -250,23 +234,30 @@ class BidderWorker:
                 prev_meas = float(state.get('prev_meas')) if state.get('prev_meas') else None
                 last_update = float(state.get('last_update', 0.0))
 
-        # 4. Calculate DT
         now = datetime.now().timestamp()
         dt = now - last_update if last_update > 0 else 1.0
-        
-        # 5. PID Calculation
+
+        # 4. PID Calculation
         pid = PIDController(
-            kp=self.config['kp'],
-            ki=self.config['ki'],
-            kd=self.config['kd'],
-            target_pos=self.config['target_pos'],
-            min_bid=self.config['min_bid'],
-            max_bid=self.config['max_bid']
+            target_pos=self.settings['target_pos'],
+            min_bid=self.settings['min_bid'],
+            max_bid=self.settings['max_bid']
         )
         pid.load_state(integral, prev_meas)
+        pid_bid = pid.update(current_pos, current_bid, dt)
+
+        # 5. Strategy & Safety Layer
+        strategy_manager = StrategyManager(self.settings)
+        # Assuming conversion rate ~ 3% if not available (stats API limitations)
+        # In full production, we would fetch CR from /statistics/orders filtered by advertising tags
+        conv_rate = stats.get('cr', 0.03) 
         
-        new_bid = pid.update(current_pos, current_bid, dt)
-        
+        final_bid, action_reason = strategy_manager.decide_bid(
+            pid_bid=pid_bid,
+            current_metrics={"ctr": stats.get('ctr', 0), "cr": conv_rate},
+            competitor_bid=None # In future: fetch competitor from parsed results
+        )
+
         # 6. Save State
         new_integral, new_prev_meas = pid.get_state()
         if r_client:
@@ -275,76 +266,63 @@ class BidderWorker:
                 'prev_meas': new_prev_meas if new_prev_meas else '',
                 'last_update': now
             })
-            r_client.expire(campaign_key, 3600) # Expire after 1 hour of inactivity
+            r_client.expire(campaign_key, 3600)
 
-        # 7. Apply or Safe Mode
-        action_type = "update"
-        if self.config['safe_mode']:
-            logger.info(f"[SAFE MODE] Camp {campaign_id}: Pos {current_pos} -> {self.config['target_pos']}. Bid {current_bid} -> {new_bid}")
-            action_type = "safe_mode"
+        # 7. Execute Update
+        if final_bid != current_bid:
+            await wb_api_service.update_bid(self.token, self.campaign_id, final_bid)
+            logger.info(f"Camp {self.campaign_id}: {current_bid} -> {final_bid} ({action_reason})")
         else:
-            if new_bid != current_bid:
-                await wb_api_service.update_bid(self.token, campaign_id, new_bid)
-                logger.info(f"Updated Camp {campaign_id}: {current_bid} -> {new_bid}")
-            else:
-                action_type = "no_change"
+            action_reason = "hold"
 
         # 8. Log
-        log_bidder_action_sync(self.user_id, campaign_id, current_pos, self.config['target_pos'], current_bid, new_bid, action_type)
+        log_bidder_action_sync(
+            self.user_id, self.campaign_id, current_pos, 
+            self.settings['target_pos'], current_bid, final_bid, action_reason
+        )
 
 # --- PRODUCER TASK ---
 
 @celery_app.task(name="bidder_producer_task")
 def bidder_producer_task():
     """
-    Master process: Finds active users and campaigns, queues them for workers.
-    Runs every X minutes (e.g., 5 min).
+    Finds active campaigns in DB and launches workers.
     """
     session = SyncSessionLocal()
     try:
-        # Get users with Business plan and token
-        users = session.query(User).filter(
-            User.subscription_plan == 'business',
-            User.wb_api_token.isnot(None)
-        ).all()
+        # Fetch active settings directly
+        active_settings = session.query(BidderSettings).filter(BidderSettings.is_active == True).all()
+        logger.info(f"Bidder Producer: Found {len(active_settings)} active campaigns.")
         
-        logger.info(f"Bidder Producer: Found {len(users)} eligible users.")
-        
-        for user in users:
-            # For each user, trigger consumer
-            bidder_consumer_task.delay(user.id, user.wb_api_token)
-            
+        for setting in active_settings:
+            # Lazy load user token
+            user = session.query(User).filter(User.id == setting.user_id).first()
+            if user and user.wb_api_token:
+                bidder_consumer_task.delay(user.id, user.wb_api_token, setting.campaign_id)
     finally:
         session.close()
 
-# --- CONSUMER TASK ---
-
 @celery_app.task(bind=True, name="bidder_consumer_task")
-def bidder_consumer_task(self, user_id: int, token: str):
-    """
-    Worker process: Async wrapper to handle multiple campaigns for a user.
-    """
-    async def run_cycle():
-        # 1. Get Campaigns
-        campaigns = await wb_api_service.get_advert_campaigns(token)
-        worker = BidderWorker(user_id, token)
-        
-        tasks = []
-        for camp in campaigns:
-            # Filter only active campaigns (status 9 = Active usually)
-            if camp.get('status') in [9, 11]: 
-                tasks.append(worker.process_campaign(camp['id']))
-        
-        if tasks:
-            await asyncio.gather(*tasks)
-
+def bidder_consumer_task(self, user_id: int, token: str, campaign_id: int):
+    session = SyncSessionLocal()
     try:
+        setting = session.query(BidderSettings).filter(
+            BidderSettings.campaign_id == campaign_id, 
+            BidderSettings.user_id == user_id
+        ).first()
+        
+        if not setting: return
+
+        worker = BidderWorker(user_id, token, setting)
+        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_cycle())
+        loop.run_until_complete(worker.process_campaign())
         loop.close()
     except Exception as e:
-        logger.error(f"Bidder Consumer failed for user {user_id}: {e}")
+        logger.error(f"Bidder Worker Error for Camp {campaign_id}: {e}")
+    finally:
+        session.close()
 
 
 # --- HIGH-LOAD FINANCIAL SYNC (EXISTING) ---

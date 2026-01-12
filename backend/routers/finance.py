@@ -15,6 +15,8 @@ router = APIRouter(prefix="/api", tags=["Finance"])
 
 class CostUpdateRequest(BaseModel):
     cost_price: int
+    logistics: Optional[int] = 50
+    commission_percent: Optional[float] = 25.0
 
 class TransitCalcRequest(BaseModel):
     volume: int 
@@ -87,7 +89,6 @@ async def get_my_products_finance(
         if not stocks: 
             return []
     except Exception:
-        # Если API лежит, возвращаем пустой список, чтобы не крашить фронт
         return []
     
     sku_map = {}
@@ -103,34 +104,42 @@ async def get_my_products_finance(
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
+    
+    # Загружаем настройки расходов из БД
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
-    costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
+    costs_map = {c.sku: c for c in costs_res.scalars().all()}
     
     result = []
     r_client = get_redis_client()
 
     for sku, data in sku_map.items():
-        cost = costs_map.get(sku, 0)
+        cost_obj = costs_map.get(sku)
+        
+        # Используем настройки пользователя или дефолтные значения
+        cost_price = cost_obj.cost_price if cost_obj else 0
+        logistics_val = cost_obj.logistics if cost_obj else 50
+        commission_pct = cost_obj.commission_percent if cost_obj else 25.0
+        
         selling_price = data['price'] * (1 - data['discount']/100)
         
-        commission_rate = 0.25 
-        commission = selling_price * commission_rate
-        logistics = 50 
+        commission = selling_price * (commission_pct / 100.0)
         
-        profit = selling_price - commission - logistics - cost
-        roi = round((profit / cost * 100), 1) if cost > 0 else 0
+        profit = selling_price - commission - logistics_val - cost_price
+        roi = round((profit / cost_price * 100), 1) if cost_price > 0 else 0
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
         
         supply_data = None
         if r_client:
             cached_forecast = r_client.get(f"forecast:{user.id}:{sku}")
             if cached_forecast:
-                forecast_json = json.loads(cached_forecast)
-                supply_data = analysis_service.calculate_supply_metrics(
-                    current_stock=data['quantity'],
-                    sales_history=[],
-                    forecast_data=forecast_json
-                )
+                try:
+                    forecast_json = json.loads(cached_forecast)
+                    supply_data = analysis_service.calculate_supply_metrics(
+                        current_stock=data['quantity'],
+                        sales_history=[],
+                        forecast_data=forecast_json
+                    )
+                except: pass
         
         if not supply_data:
             supply_data = {
@@ -146,7 +155,9 @@ async def get_my_products_finance(
             "sku": sku,
             "quantity": data['quantity'],
             "price": int(selling_price),
-            "cost_price": cost,
+            "cost_price": cost_price,
+            "logistics": logistics_val,
+            "commission_percent": commission_pct,
             "unit_economy": {
                 "profit": int(profit),
                 "roi": roi,
@@ -169,13 +180,21 @@ async def set_product_cost(
     
     if cost_obj:
         cost_obj.cost_price = req.cost_price
+        cost_obj.logistics = req.logistics
+        cost_obj.commission_percent = req.commission_percent
         cost_obj.updated_at = datetime.utcnow()
     else:
-        cost_obj = ProductCost(user_id=user.id, sku=sku, cost_price=req.cost_price)
+        cost_obj = ProductCost(
+            user_id=user.id, 
+            sku=sku, 
+            cost_price=req.cost_price,
+            logistics=req.logistics,
+            commission_percent=req.commission_percent
+        )
         db.add(cost_obj)
     
     await db.commit()
-    return {"status": "saved", "cost_price": req.cost_price}
+    return {"status": "saved", "data": req.dict()}
 
 @router.get("/internal/coefficients")
 async def get_supply_coefficients(user: User = Depends(get_current_user)):

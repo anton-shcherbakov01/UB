@@ -266,22 +266,18 @@ class WBApiService:
     # --- ADVERT API METHODS (REAL) ---
 
     async def get_advert_campaigns(self, token: str):
-        """Получение списка рекламных кампаний (Реклама > Список кампаний)"""
         url_ids = f"{self.ADV_URL}/promotion/adverts"
         headers = {"Authorization": token}
-        
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-            # 1. Получаем список ID (активные - 9, пауза - 11)
-            ids_payload = {"status": [9, 11], "type": [6, 8, 9]} # 6=Поиск, 8=Авто, 9=Карточка
+            # 6=Поиск, 8=Авто, 9=Карточка
+            ids_payload = {"status": [9, 11], "type": [6, 8, 9]}
             campaigns_list = await self._request_with_retry(session, url_ids, headers, method='POST', json_data=ids_payload)
             
-            if not campaigns_list:
-                return []
+            if not campaigns_list: return []
             
             results = []
             for camp in campaigns_list:
                 if not isinstance(camp, dict): continue
-                
                 results.append({
                     "id": camp.get("advertId"),
                     "name": camp.get("name", f"Кампания {camp.get('advertId')}"),
@@ -289,11 +285,10 @@ class WBApiService:
                     "type": camp.get("type"),
                     "changeTime": camp.get("changeTime")
                 })
-            
             return results
 
     async def get_advert_stats(self, token: str, campaign_id: int):
-        """Получение полной статистики кампании"""
+        """Возвращает статистику для расчета CPA Guard (CTR, Spend, Views)."""
         url = f"{self.ADV_URL}/fullstat"
         headers = {"Authorization": token}
         payload = [{"id": campaign_id}]
@@ -302,24 +297,30 @@ class WBApiService:
             data = await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
             if data and isinstance(data, list) and len(data) > 0:
                 stat = data[0]
+                # Берем данные за 'days' (последние доступные), суммируем для точности
+                days = stat.get("days", [])
+                total_views = sum(d.get("views", 0) for d in days)
+                total_clicks = sum(d.get("clicks", 0) for d in days)
+                total_sum = sum(d.get("sum", 0) for d in days)
+                
+                ctr = (total_clicks / total_views * 100) if total_views > 0 else 0
+                
                 return {
-                    "views": stat.get("views", 0),
-                    "clicks": stat.get("clicks", 0),
-                    "ctr": stat.get("ctr", 0),
-                    "spend": stat.get("sum", 0),
-                    "cr": 0 
+                    "views": total_views,
+                    "clicks": total_clicks,
+                    "ctr": round(ctr, 2),
+                    "spend": total_sum,
+                    "cr": 0.03 # Placeholder, реальный CR нужен из API статистики
                 }
             return None
 
     async def get_current_bid_info(self, token: str, campaign_id: int):
-        """Получение текущей ставки"""
         url = f"https://advert-api.wb.ru/adv/v0/advert"
         headers = {"Authorization": token}
         params = {"id": campaign_id}
         
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
             data = await self._request_with_retry(session, url, headers, params=params)
-            
             if data and "params" in data:
                 params_list = data.get("params", [])
                 if params_list:
@@ -327,32 +328,23 @@ class WBApiService:
                     return {
                         "campaignId": campaign_id,
                         "price": p.get("price", 0),
-                        "subjectId": p.get("subjectId")
+                        "subjectId": p.get("subjectId"),
+                        "position": 100 # WB API часто не отдает позицию прямо, нужен парсинг выдачи
                     }
-            return {"campaignId": campaign_id, "price": 0, "position": 0}
+            return {"campaignId": campaign_id, "price": 0, "position": 100}
 
     async def update_bid(self, token: str, campaign_id: int, new_bid: int):
-        """
-        Реальное обновление ставки.
-        """
         url = f"https://advert-api.wb.ru/adv/v0/save"
         headers = {"Authorization": token}
         
-        # Сначала надо получить текущие параметры
         current_info = await self.get_current_bid_info(token, campaign_id)
         if not current_info or "subjectId" not in current_info:
-            logger.error(f"Cannot update bid: failed to fetch current info for {campaign_id}")
             return
             
         payload = {
             "advertId": campaign_id,
             "type": 6, 
-            "params": [
-                {
-                    "subjectId": current_info["subjectId"],
-                    "price": new_bid
-                }
-            ]
+            "params": [{"subjectId": current_info["subjectId"], "price": new_bid}]
         }
         
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
