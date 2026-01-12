@@ -6,9 +6,18 @@ export const getTgHeaders = () => {
         'Accept': 'application/json',
     };
     
-    // Получаем данные инициализации Telegram Mini App
-    if (window.Telegram?.WebApp?.initData) {
-        headers['X-TG-Data'] = window.Telegram.WebApp.initData;
+    // Безопасная проверка: код не упадет, даже если window.Telegram undefined
+    try {
+        if (
+            typeof window !== 'undefined' && 
+            window.Telegram && 
+            window.Telegram.WebApp && 
+            window.Telegram.WebApp.initData
+        ) {
+            headers['X-TG-Data'] = window.Telegram.WebApp.initData;
+        }
+    } catch (e) {
+        console.warn("Telegram WebApp initData missing (running locally?)", e);
     }
     
     return headers;
