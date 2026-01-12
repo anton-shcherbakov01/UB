@@ -1,0 +1,211 @@
+import logging
+import asyncio
+import aiohttp
+import json
+import redis
+import pandas as pd
+from datetime import datetime, timedelta
+
+from celery_app import celery_app, REDIS_URL
+from wb_api_service import wb_api_service
+from clickhouse_models import ch_service
+from database import SyncSessionLocal, User
+from forecasting import forecast_demand
+
+logger = logging.getLogger("Tasks-Finance")
+
+try:
+    r_client = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    logger.error(f"Redis connect error: {e}")
+    r_client = None
+
+class FinancialSyncProcessor:
+    WB_STATS_URL = "https://statistics-api.wildberries.ru/api/v5/supplier/reportDetailByPeriod"
+    WB_ORDERS_URL = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
+    BATCH_SIZE = 5000
+    
+    def __init__(self, token: str, user_id: int):
+        self.token = token
+        self.user_id = user_id
+        self.headers = {"Authorization": token}
+        self.semaphore = asyncio.Semaphore(3)
+        self.buffer = []
+
+    async def _fetch_with_retry(self, session, url, params, retries=3):
+        for i in range(retries):
+            async with self.semaphore:
+                try:
+                    async with session.get(url, params=params, headers=self.headers, timeout=60) as resp:
+                        if resp.status == 429:
+                            await asyncio.sleep(2 ** (i + 1))
+                            continue
+                        if resp.status != 200:
+                            logger.error(f"WB API Error {resp.status}: {await resp.text()}")
+                            return None
+                        return await resp.json()
+                except Exception as e:
+                    logger.warning(f"Fetch attempt {i} failed: {e}")
+                    await asyncio.sleep(1)
+        return None
+
+    def _flush_buffer(self):
+        if not self.buffer: return
+        try:
+            df = pd.DataFrame(self.buffer)
+            numeric_cols = ['retail_price', 'retail_amount', 'retail_price_withdisc_rub', 'delivery_rub', 'ppvz_for_pay', 'penalty', 'additional_payment', 'ppvz_sales_commission', 'ppvz_reward']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            date_cols = ['create_dt', 'order_dt', 'sale_dt', 'rr_dt']
+            for col in date_cols:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors='coerce').fillna(datetime.now())
+
+            records = df.to_dict('records')
+            ch_service.insert_reports(records)
+            logger.info(f" flushed {len(records)} records to ClickHouse for user {self.user_id}")
+            self.buffer = []
+        except Exception as e:
+            logger.error(f"Failed to flush buffer: {e}")
+            self.buffer = []
+
+    async def sync_actual_reports(self, date_from: datetime, date_to: datetime):
+        async with aiohttp.ClientSession() as session:
+            rrdid = 0
+            while True:
+                params = {
+                    "dateFrom": date_from.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "dateTo": date_to.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "limit": 1000,
+                    "rrdid": rrdid
+                }
+                data = await self._fetch_with_retry(session, self.WB_STATS_URL, params)
+                if not data: break
+
+                processed_batch = []
+                for row in data:
+                    row['supplier_id'] = self.user_id
+                    if not row.get('rr_dt'): row['rr_dt'] = row.get('create_dt')
+                    processed_batch.append(row)
+                    rrdid = row.get('rrd_id', rrdid)
+
+                self.buffer.extend(processed_batch)
+                if len(self.buffer) >= self.BATCH_SIZE:
+                    self._flush_buffer()
+                
+                if len(data) < 1000: break
+        
+        self._flush_buffer()
+
+    async def sync_provisional_orders(self):
+        date_from = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        async with aiohttp.ClientSession() as session:
+            params = {"dateFrom": date_from, "flag": 0} 
+            data = await self._fetch_with_retry(session, self.WB_ORDERS_URL, params)
+            if not data: return
+
+            for order in data:
+                report_row = {
+                    "rrd_id": order.get("odid", 0),
+                    "realizationreport_id": 0,
+                    "supplier_id": self.user_id,
+                    "nm_id": order.get("nmId"),
+                    "gi_id": 0,
+                    "subject_name": order.get("category"),
+                    "brand_name": order.get("brand"),
+                    "sa_name": order.get("article"),
+                    "ts_name": "",
+                    "barcode": "",
+                    "doc_type_name": "Provisional_Order",
+                    "office_name": order.get("warehouseName"),
+                    "supplier_oper_name": "",
+                    "site_country": order.get("regionName"),
+                    "create_dt": order.get("date"),
+                    "order_dt": order.get("date"),
+                    "sale_dt": order.get("date"),
+                    "rr_dt": datetime.now(),
+                    "quantity": 1,
+                    "retail_price": order.get("priceBeforeDisc", 0),
+                    "retail_amount": order.get("priceWithDiscount", 0),
+                    "sale_percent": order.get("discountPercent", 0),
+                    "commission_percent": 25.00,
+                    "retail_price_withdisc_rub": order.get("priceWithDiscount", 0),
+                    "delivery_rub": 50.00,
+                    "ppvz_sales_commission": order.get("priceWithDiscount", 0) * 0.25,
+                    "penalty": 0,
+                    "additional_payment": 0,
+                    "return_amount": 0,
+                    "delivery_amount": 1,
+                    "product_discount_for_report": 0,
+                    "supplier_promo": 0,
+                    "rid": order.get("gNumber", 0)
+                }
+                self.buffer.append(report_row)
+            self._flush_buffer()
+
+    async def run_full_sync(self):
+        end = datetime.now()
+        start = end - timedelta(days=30)
+        logger.info(f"Starting Actual Sync for user {self.user_id}")
+        await self.sync_actual_reports(start, end)
+        logger.info(f"Starting Provisional Sync for user {self.user_id}")
+        await self.sync_provisional_orders()
+
+@celery_app.task(bind=True, name="sync_financial_reports")
+def sync_financial_reports(self, user_id: int):
+    self.update_state(state='PROGRESS', meta={'status': 'Initializing Sync...'})
+    session = SyncSessionLocal()
+    try:
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user or not user.wb_api_token:
+            return {"status": "error", "message": "No token"}
+        token = user.wb_api_token
+    finally:
+        session.close()
+
+    processor = FinancialSyncProcessor(token, user_id)
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(processor.run_full_sync())
+        loop.close()
+        return {"status": "success", "message": "Financial data synced"}
+    except Exception as e:
+        logger.error(f"Sync failed for user {user_id}: {e}")
+        return {"status": "error", "error": str(e)}
+
+@celery_app.task(name="train_forecasting_models")
+def train_forecasting_models():
+    logger.info("Starting forecasting training cycle...")
+    try:
+        ch_client = ch_service.get_client()
+        query_items = "SELECT DISTINCT supplier_id, nm_id FROM wb_analytics.realization_reports WHERE sale_dt > now() - INTERVAL 90 DAY"
+        result = ch_client.query(query_items)
+        items = result.result_rows
+        
+        logger.info(f"Found {len(items)} items to forecast.")
+        
+        for row in items:
+            supplier_id, sku = row
+            query_history = """
+            SELECT toDate(sale_dt) as ds, sum(quantity) as y
+            FROM wb_analytics.realization_reports
+            WHERE supplier_id = %(uid)s AND nm_id = %(sku)s AND doc_type_name = 'Продажа'
+            GROUP BY ds ORDER BY ds ASC
+            """
+            history_res = ch_client.query(query_history, parameters={'uid': supplier_id, 'sku': sku})
+            history_rows = history_res.result_rows
+            
+            if not history_rows: continue
+            
+            sales_history = [{"date": str(h[0]), "qty": int(h[1])} for h in history_rows]
+            forecast_result = forecast_demand(sales_history, horizon_days=30)
+            
+            if r_client and forecast_result.get("status") == "success":
+                key = f"forecast:{supplier_id}:{sku}"
+                r_client.set(key, json.dumps(forecast_result), ex=90000)
+                
+    except Exception as e:
+        logger.error(f"Forecasting cycle failed: {e}")

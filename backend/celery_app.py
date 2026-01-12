@@ -4,11 +4,17 @@ from celery.schedules import crontab
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+# Обновляем include, указывая новые модули
 celery_app = Celery(
     "wb_bot_worker",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['tasks'] 
+    include=[
+        'tasks.monitoring',
+        'tasks.seo',
+        'tasks.finance',
+        'tasks.bidder'
+    ] 
 )
 
 celery_app.conf.update(
@@ -41,7 +47,6 @@ celery_app.conf.update(
             "task": "bidder_producer_task",
             "schedule": 300.0,
         },
-        # --- NEW: Daily Forecasting at 3 AM ---
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
             "schedule": crontab(hour=3, minute=0),
