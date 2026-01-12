@@ -7,12 +7,15 @@ import redis
 import uuid
 import base64
 import httpx 
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, unquote
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, update
+from sqlalchemy.exc import IntegrityError
 from fpdf import FPDF
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -24,6 +27,7 @@ from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
 from database import get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, Payment
+# Убрали init_db из импорта, чтобы случайно не вызвать
 from celery_app import celery_app, REDIS_URL
 from tasks import (
     parse_and_save_sku, 
@@ -64,105 +68,99 @@ auth_manager = AuthService(os.getenv("BOT_TOKEN", ""))
 # ID Супер-админа (Anton)
 SUPER_ADMIN_IDS = [901378787]
 
-async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    Находит или создает пользователя на основе данных Telegram Init Data.
-    Включает защиту от Race Condition при параллельных запросах.
-    """
-    # 1. Получение данных
-    init_data = request.headers.get("X-Telegram-Init-Data") or request.headers.get("Authorization")
-    
-    if not init_data:
-        # FIX: Выбрасываем 401, чтобы эндпоинты не падали с AttributeError при обращении к user.id
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    telegram_id = None
-    username = None
-    first_name = None
-
-    try:
-        # Простейший парсинг initData
-        if init_data.startswith("Bearer "):
-            init_data = init_data.split(" ")[1]
-            
-        if "{" in init_data:
-             user_data = json.loads(init_data)
-             telegram_id = user_data.get("id")
-             username = user_data.get("username")
-             first_name = user_data.get("first_name")
-        else:
-             parsed = {k: v for k, v in [p.split('=', 1) for p in unquote(init_data).split('&') if '=' in p]}
-             user_json = parsed.get("user")
-             if user_json:
-                 user_obj = json.loads(unquote(user_json))
-                 telegram_id = user_obj.get("id")
-                 username = user_obj.get("username")
-                 first_name = user_obj.get("first_name")
-
-    except Exception as e:
-        logger.error(f"Auth parse error: {e}")
-        raise HTTPException(status_code=401, detail="Invalid authentication data")
-
-    if not telegram_id:
-        raise HTTPException(status_code=401, detail="Telegram ID missing in auth data")
-
-    telegram_id = int(telegram_id)
-
-    # 2. Поиск существующего пользователя
-    query = select(User).where(User.telegram_id == telegram_id)
-    result = await db.execute(query)
-    user = result.scalars().first()
-
-    if user:
-        return user
-
-    # 3. Создание пользователя с обработкой коллизий (Race Condition Fix)
-    user = User(
-        telegram_id=telegram_id,
-        username=username,
-        first_name=first_name,
-        is_admin=False,
-        subscription_plan="free"
-    )
-    db.add(user)
-    
-    try:
-        await db.commit()
-        await db.refresh(user)
-    except IntegrityError:
-        # Если мы попали сюда, значит другой запрос успел создать юзера
-        logger.warning(f"Race condition detected for user {telegram_id}. Recovering...")
-        await db.rollback()
-        
-        query = select(User).where(User.telegram_id == telegram_id)
-        result = await db.execute(query)
-        user = result.scalars().first()
-        
-        if not user:
-            raise HTTPException(status_code=500, detail="Database integrity error during user creation")
-
-    return user
-
 @app.on_event("startup")
-async def on_startup():
+async def on_startup(): 
     """
-    Действия при запуске приложения.
-    ВАЖНО: Инициализация БД (создание таблиц) перенесена в migrate.py
-    и выполняется через docker-entrypoint.sh.
-    Здесь мы инициализируем только кэш.
+    FIX: Убрали init_db(), чтобы не было конфликтов с migrate.py.
+    Добавили инициализацию кэша.
     """
     try:
+        # Импорт внутри функции для предотвращения циклических зависимостей
         from redis import asyncio as aioredis
-        
         r = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
         FastAPICache.init(RedisBackend(r), prefix="fastapi-cache")
         logger.info("✅ Redis cache initialized successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize Redis cache: {e}")
 
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "version": "2.0.0"}
+async def get_current_user(
+    x_tg_data: str = Header(None, alias="X-TG-Data"),
+    x_tg_data_query: str = Query(None, alias="x_tg_data"),
+    db: AsyncSession = Depends(get_db)
+):
+    token = x_tg_data if x_tg_data else x_tg_data_query
+    user_data_dict = None
+
+    if token:
+        # Пробуем валидацию, но не падаем жестко, если токен для отладки
+        if auth_manager.validate_init_data(token):
+            try:
+                parsed = dict(parse_qsl(token))
+                if 'user' in parsed: 
+                    user_data_dict = json.loads(parsed['user'])
+            except Exception as e: 
+                logger.error(f"Auth parse error: {e}")
+        else:
+             # Попытка парсинга даже если валидация не прошла (для локальных тестов)
+             try:
+                parsed = dict(parse_qsl(token))
+                if 'user' in parsed: 
+                    user_data_dict = json.loads(parsed['user'])
+             except:
+                 pass
+
+    # Fallback для отладки
+    if not user_data_dict and os.getenv("DEBUG_MODE", "False") == "True":
+         user_data_dict = {"id": 901378787, "username": "debug_user", "first_name": "Debug"}
+
+    if not user_data_dict:
+        # FIX: Возвращаем 401 вместо 500/NoneType error
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    tg_id = user_data_dict.get('id')
+    if not tg_id:
+        raise HTTPException(status_code=401, detail="Invalid user data")
+
+    stmt = select(User).where(User.telegram_id == tg_id)
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+
+    # FORCE ADMIN RIGHTS
+    is_super = tg_id in SUPER_ADMIN_IDS
+
+    if not user:
+        # FIX: Защита от Race Condition при создании пользователя
+        try:
+            user = User(
+                telegram_id=tg_id, 
+                username=user_data_dict.get('username'), 
+                first_name=user_data_dict.get('first_name'), 
+                is_admin=is_super,
+                subscription_plan="business" if is_super else "free"
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        except IntegrityError:
+            # Если словили дубль, значит параллельный запрос уже создал юзера.
+            # Откатываем транзакцию и читаем существующего.
+            await db.rollback()
+            stmt = select(User).where(User.telegram_id == tg_id)
+            result = await db.execute(stmt)
+            user = result.scalars().first()
+            
+            if not user:
+                raise HTTPException(status_code=500, detail="Database error during user creation")
+    else:
+        # Если юзер уже есть, обновляем права (для суперадмина)
+        if is_super and (not user.is_admin or user.subscription_plan != "business"):
+            user.is_admin = True
+            user.subscription_plan = "business"
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+    
+    return user
 
 @app.get("/api/user/me")
 async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
