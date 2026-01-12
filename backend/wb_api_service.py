@@ -2,9 +2,6 @@ import logging
 import aiohttp
 import asyncio
 import json
-import socket
-import os
-from aiohttp import AsyncResolver
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -15,26 +12,13 @@ class WBApiService:
     Сервис для работы с официальным API Wildberries (Statistics API + Common API + Advert API).
     """
     
-    # Используем ENV если есть, иначе дефолтные
-    BASE_URL = os.getenv("WB_STATS_URL", "https://statistics-api.wildberries.ru/api/v1/supplier")
-    COMMON_URL = os.getenv("WB_COMMON_URL", "https://common-api.wildberries.ru/api/v1") 
-    ADV_URL = os.getenv("WB_ADV_URL", "https://advert-api.wb.ru/adv/v1") 
+    BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
+    COMMON_URL = "https://common-api.wildberries.ru/api/v1" 
+    ADV_URL = "https://advert-api.wb.ru/adv/v1" 
     
     # In-Memory Cache: { "token_method_params": (timestamp, data) }
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 # 5 минут (TTL)
-
-    def _get_connector(self):
-        """
-        Возвращаем стандартный TCPConnector.
-        Убрали принудительный AsyncResolver(8.8.8.8), так как это ломает сеть
-        в некоторых Docker-конфигурациях и корпоративных сетях.
-        Docker сам предоставит нужный DNS.
-        """
-        return aiohttp.TCPConnector(
-            family=socket.AF_INET, 
-            ssl=False
-        )
 
     async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
         """
@@ -64,13 +48,8 @@ class WBApiService:
                          return None # No content
                     else:
                         text = await resp.text()
-                        # Логируем ошибку, но не спамим на 401
-                        if resp.status != 401:
-                            logger.error(f"WB API Error {resp.status} on {url}: {text[:200]}")
+                        logger.error(f"WB API Error {resp.status} on {url}: {text}")
                         return None
-            except aiohttp.ClientConnectorError as e:
-                logger.error(f"DNS/Connection Error ({attempt+1}/{retries}) to {url}: {e}")
-                await asyncio.sleep(backoff)
             except Exception as e:
                 logger.error(f"Request failed: {e}")
                 await asyncio.sleep(backoff)
@@ -101,86 +80,28 @@ class WBApiService:
         return data
 
     async def check_token(self, token: str) -> bool:
-        """
-        Проверка токена.
-        Пробуем Statistics API, затем Common API (для токенов без статистики).
-        """
         if not token: 
             return False
         
+        url = f"{self.BASE_URL}/incomes"
+        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
         headers = {"Authorization": token}
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-            # 1. Попытка через API Статистики (incomes)
+        async with aiohttp.ClientSession() as session:
             try:
-                url_stats = f"{self.BASE_URL}/incomes"
-                params_stats = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-                
-                async with session.get(url_stats, headers=headers, params=params_stats, timeout=10) as resp:
-                    if resp.status == 200:
-                        logger.info("Token valid (Statistics scope)")
-                        return True
+                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
                     if resp.status == 401:
-                        logger.warning("Token check: Statistics API returned 401. Trying Common API...")
-                    else:
-                        logger.warning(f"Token check: Statistics API returned {resp.status}")
+                        return False
+                    return True
             except Exception as e:
-                logger.error(f"Token check (Stats) error: {e}")
-
-            # 2. Попытка через Common API (tariffs) - работает для токенов "Стандартный"
-            try:
-                url_common = f"{self.COMMON_URL}/tariffs/box"
-                params_common = {"date": datetime.now().strftime("%Y-%m-%d")}
-
-                async with session.get(url_common, headers=headers, params=params_common, timeout=10) as resp:
-                    if resp.status == 200:
-                        logger.info("Token valid (Common scope)")
-                        return True
-                    if resp.status == 401:
-                        logger.warning("Token check: Common API returned 401. Token invalid.")
-            except Exception as e:
-                logger.error(f"Token check (Common) error: {e}")
-
-        return False
-        
-    async def get_token_scopes(self, token: str):
-        """
-        Определяет, к каким разделам есть доступ (Stats, Standard, Adv).
-        """
-        scopes = {"statistics": False, "standard": False, "promotion": False, "questions": False}
-        headers = {"Authorization": token}
-        
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-            # 1. Statistics
-            try:
-                url = f"{self.BASE_URL}/incomes"
-                params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-                async with session.get(url, headers=headers, params=params, timeout=5) as resp:
-                    if resp.status == 200: scopes["statistics"] = True
-            except: pass
-
-            # 2. Standard (Content/Prices) - Проверяем через склады/тарифы
-            try:
-                url = f"{self.COMMON_URL}/tariffs/box"
-                params = {"date": datetime.now().strftime("%Y-%m-%d")}
-                async with session.get(url, headers=headers, params=params, timeout=5) as resp:
-                    if resp.status == 200: scopes["standard"] = True
-            except: pass
-
-            # 3. Promotion
-            try:
-                url = f"{self.ADV_URL}/count" # Или любой легкий метод рекламы
-                async with session.get(url, headers=headers, timeout=5) as resp:
-                    if resp.status == 200: scopes["promotion"] = True
-            except: pass
-            
-        return scopes
+                logger.error(f"Token check error: {e}")
+                return False
 
     async def get_dashboard_stats(self, token: str):
         """Сводка: Заказы сегодня и остатки"""
         if not token: return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
 
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
             orders_task = self._get_orders(session, token, today_str, use_cache=True)
@@ -199,12 +120,12 @@ class WBApiService:
         
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
             
             if not orders_data or "items" not in orders_data:
                 return []
-        
+            
             new_orders = []
             for order in orders_data["items"]:
                 try:
@@ -223,7 +144,7 @@ class WBApiService:
         params = {"dateFrom": today}
         headers = {"Authorization": token}
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
              data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              return data if isinstance(data, list) else []
 
@@ -236,13 +157,15 @@ class WBApiService:
         today = datetime.now().strftime("%Y-%m-%d")
         params = {"date": today}
 
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
             if data and 'response' in data and 'data' in data['response']:
                 return data['response']['data']
             return []
 
     async def calculate_transit(self, liters: int, destination: str = "Koledino"):
+        # Логика калькулятора остается на бэкенде, но коэффициенты можно брать из get_warehouse_coeffs
+        # Для простоты оставляем расчет, но убираем заглушку рандома
         direct_base = 1500
         direct_rate = 30
         
@@ -266,18 +189,36 @@ class WBApiService:
     # --- ADVERT API METHODS (REAL) ---
 
     async def get_advert_campaigns(self, token: str):
+        """Получение списка рекламных кампаний (Реклама > Список кампаний)"""
+        # Сначала получаем ID кампаний, затем их инфо
+        # WB не дает просто список, нужно запросить ID по статусам
+        url_count = f"{self.ADV_URL}/promotion/count"
         url_ids = f"{self.ADV_URL}/promotion/adverts"
+        url_infos = f"{self.ADV_URL}/promotion/adverts" # POST info
+        
         headers = {"Authorization": token}
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-            # 6=Поиск, 8=Авто, 9=Карточка
-            ids_payload = {"status": [9, 11], "type": [6, 8, 9]}
+        
+        async with aiohttp.ClientSession() as session:
+            # 1. Получаем список ID (активные - 9, пауза - 11)
+            # В реальном API WB V1 может быть другой endpoint, используем стандартный
+            ids_payload = {"status": [9, 11], "type": [6, 8, 9]} # 6=Поиск, 8=Авто, 9=Карточка
             campaigns_list = await self._request_with_retry(session, url_ids, headers, method='POST', json_data=ids_payload)
             
-            if not campaigns_list: return []
+            if not campaigns_list:
+                return []
             
+            # campaigns_list это список объектов. Нам нужны детали.
+            # Если API возвращает сразу детали - отлично. Если нет - запрашиваем.
+            # Обычно /promotion/adverts возвращает массив ID или краткую инфо.
+            # Предположим возврат в формате WB API: [{id, type, status, ...}]
+            
+            # Обогатим информацией о бюджете/ставке
             results = []
             for camp in campaigns_list:
+                # Фильтруем мусор
                 if not isinstance(camp, dict): continue
+                
+                # Запрос статистики или доп инфо, если нужно. Пока возвращаем то что есть.
                 results.append({
                     "id": camp.get("advertId"),
                     "name": camp.get("name", f"Кампания {camp.get('advertId')}"),
@@ -285,69 +226,83 @@ class WBApiService:
                     "type": camp.get("type"),
                     "changeTime": camp.get("changeTime")
                 })
+            
             return results
 
     async def get_advert_stats(self, token: str, campaign_id: int):
-        """Возвращает статистику для расчета CPA Guard (CTR, Spend, Views)."""
+        """Получение полной статистики кампании"""
         url = f"{self.ADV_URL}/fullstat"
         headers = {"Authorization": token}
+        # WB требует список id
         payload = [{"id": campaign_id}]
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             data = await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
+            # data is list of results
             if data and isinstance(data, list) and len(data) > 0:
                 stat = data[0]
-                # Берем данные за 'days' (последние доступные), суммируем для точности
-                days = stat.get("days", [])
-                total_views = sum(d.get("views", 0) for d in days)
-                total_clicks = sum(d.get("clicks", 0) for d in days)
-                total_sum = sum(d.get("sum", 0) for d in days)
-                
-                ctr = (total_clicks / total_views * 100) if total_views > 0 else 0
-                
                 return {
-                    "views": total_views,
-                    "clicks": total_clicks,
-                    "ctr": round(ctr, 2),
-                    "spend": total_sum,
-                    "cr": 0.03 # Placeholder, реальный CR нужен из API статистики
+                    "views": stat.get("views", 0),
+                    "clicks": stat.get("clicks", 0),
+                    "ctr": stat.get("ctr", 0),
+                    "spend": stat.get("sum", 0),
+                    "cr": 0 # WB API не всегда отдает CR прямо
                 }
             return None
 
     async def get_current_bid_info(self, token: str, campaign_id: int):
+        """Получение текущей ставки"""
+        # Используем endpoint /v0/advert (получение инфо о кампании)
+        # Или /v1/promotion/adverts c ID
         url = f"https://advert-api.wb.ru/adv/v0/advert"
         headers = {"Authorization": token}
         params = {"id": campaign_id}
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             data = await self._request_with_retry(session, url, headers, params=params)
+            
             if data and "params" in data:
+                # Структура зависит от типа кампании (Поиск/Авто)
                 params_list = data.get("params", [])
                 if params_list:
+                    # Берем первую сущность
                     p = params_list[0]
                     return {
                         "campaignId": campaign_id,
                         "price": p.get("price", 0),
-                        "subjectId": p.get("subjectId"),
-                        "position": 100 # WB API часто не отдает позицию прямо, нужен парсинг выдачи
+                        "subjectId": p.get("subjectId")
                     }
-            return {"campaignId": campaign_id, "price": 0, "position": 100}
+            return {"campaignId": campaign_id, "price": 0, "position": 0}
 
     async def update_bid(self, token: str, campaign_id: int, new_bid: int):
+        """
+        Реальное обновление ставки.
+        Endpoint: /adv/v0/save (для старых типов) или /adv/v1/save-ad (для авто)
+        Для универсальности используем v0/save который работает для поиска/карточки.
+        """
         url = f"https://advert-api.wb.ru/adv/v0/save"
         headers = {"Authorization": token}
+        # Структура payload сложная и зависит от типа кампании.
+        # Для упрощения предполагаем тип 6 (Поиск).
         
+        # Сначала надо получить текущие параметры, чтобы не затереть их
         current_info = await self.get_current_bid_info(token, campaign_id)
         if not current_info or "subjectId" not in current_info:
+            logger.error(f"Cannot update bid: failed to fetch current info for {campaign_id}")
             return
             
         payload = {
             "advertId": campaign_id,
             "type": 6, 
-            "params": [{"subjectId": current_info["subjectId"], "price": new_bid}]
+            "params": [
+                {
+                    "subjectId": current_info["subjectId"],
+                    "price": new_bid
+                }
+            ]
         }
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+        async with aiohttp.ClientSession() as session:
             await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
             logger.info(f"REAL BID UPDATE: Campaign {campaign_id} -> {new_bid} RUB")
 
