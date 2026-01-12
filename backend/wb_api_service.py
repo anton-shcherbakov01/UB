@@ -4,7 +4,7 @@ import asyncio
 import json
 import socket
 import requests # Fallback library
-from aiohttp import AsyncResolver
+# from aiohttp import AsyncResolver # Removed to fix aiodns error
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -24,13 +24,12 @@ class WBApiService:
 
     def _get_connector(self):
         """
-        Создает TCP коннектор с принудительным IPv4 и Google DNS.
+        Создает TCP коннектор с принудительным IPv4.
+        Убран AsyncResolver, так как нет aiodns.
         """
-        resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
         return aiohttp.TCPConnector(
             family=socket.AF_INET, 
-            ssl=False, 
-            resolver=resolver
+            ssl=False
         )
 
     async def _request_with_retry(self, url, headers, params=None, method='GET', json_data=None, retries=3):
@@ -73,49 +72,66 @@ class WBApiService:
         
         return None
 
-    async def check_token(self, token: str) -> bool:
-        """
-        Проверка токена.
-        Усиленная версия:
-        1. Пробует aiohttp.
-        2. Если ошибка сети - пробует requests (синхронно).
-        3. Логирует точную причину провала.
-        """
-        if not token: return False
-        
-        url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-        headers = {"Authorization": token}
-        
-        logger.info(f"🔍 Checking WB token...")
-
-        # Попытка 1: Async (Aiohttp)
+    async def _check_url_availability(self, url, headers, params, name="API"):
+        """Помощник для проверки конкретного URL с fallback"""
+        # 1. Async Try
         try:
             async with aiohttp.ClientSession(connector=self._get_connector()) as session:
                 async with session.get(url, headers=headers, params=params, timeout=10) as resp:
-                    if resp.status == 401:
-                        logger.warning("❌ Token Rejected: 401 Unauthorized (WB API denied access)")
-                        return False
-                    if resp.status == 200:
-                        logger.info("✅ Token Valid (Aiohttp confirmed)")
-                        return True
-                    logger.info(f"⚠️ WB API responded with status {resp.status} (Assuming token is valid but API issues)")
-                    return True # Если API лежит (500), токен скорее всего верный
+                    if resp.status == 200: return 200
+                    if resp.status == 401: return 401
+                    return resp.status
         except Exception as e:
-            logger.error(f"⚠️ Async check failed (DNS/Network): {e}. Switching to fallback...")
+            logger.warning(f"Async check for {name} failed: {e}")
 
-        # Попытка 2: Sync (Requests) - часто работает стабильнее в Docker
+        # 2. Sync Fallback
         try:
-            # requests использует системный резолвер, который может работать лучше
             resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
-            if resp.status_code == 401:
-                logger.warning("❌ Token Rejected: 401 Unauthorized (Requests fallback)")
-                return False
-            logger.info("✅ Token Valid (Requests fallback confirmed)")
-            return True
+            return resp.status_code
         except Exception as e:
-            logger.error(f"❌ CRITICAL: Both Async and Sync checks failed. Network is down? Error: {e}")
+            logger.error(f"Sync check for {name} failed: {e}")
+            return 0 # Network error
+
+    async def check_token(self, token: str) -> bool:
+        """
+        Умная проверка токена.
+        Проверяет доступ к Statistics API. Если 401, проверяет Common API,
+        чтобы подсказать пользователю, если он перепутал тип токена.
+        """
+        if not token: return False
+        
+        # 1. Проверяем API Статистики (Целевой)
+        stats_url = f"{self.BASE_URL}/incomes"
+        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+        headers = {"Authorization": token}
+        
+        logger.info(f"🔍 Checking Statistics Token...")
+        code = await self._check_url_availability(stats_url, headers, params, "Statistics API")
+        
+        if code == 200:
+            logger.info("✅ Token Valid (Statistics API)")
+            return True
+        
+        if code == 401:
+            # 2. Если Статистика отказала, проверяем "Стандартный" API
+            logger.warning("❌ Statistics API responded 401. Checking if it's a Standard token...")
+            common_url = f"{self.COMMON_URL}/tariffs/box"
+            common_params = {"date": datetime.now().strftime("%Y-%m-%d")}
+            
+            code_common = await self._check_url_availability(common_url, headers, common_params, "Common API")
+            
+            if code_common == 200:
+                logger.error("⚠️ DIAGNOSIS: You provided a 'Standard' token! This app requires a 'Statistics' token.")
+            else:
+                logger.error("❌ Token invalid for both Statistics and Standard APIs.")
+            
             return False
+
+        if code >= 500:
+            logger.info(f"⚠️ WB API Error {code}, but assuming token is valid to not block user.")
+            return True # Пропускаем, если API WB лежит
+
+        return False
 
     def _get_cache_key(self, token, method, params):
         token_part = token[-10:] if token else "none"
