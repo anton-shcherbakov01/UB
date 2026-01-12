@@ -27,3 +27,4 @@ scikit-learn
 plotly
 matplotlib
 httpx
+aiodns
