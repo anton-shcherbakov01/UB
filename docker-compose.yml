@@ -15,13 +15,14 @@ services:
       - POSTGRES_DB=wb_monitor
       - LANG=C.UTF-8
     volumes:
-      # Оставляем postgres_data_clean, так как база уже создана с правильным паролем
+      # Оставляем postgres_data_clean
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
-      # FIX: Используем inline-синтаксис для переменной окружения.
-      # Это самый надежный способ передать пароль в sh-оболочке Alpine.
-      test: ["CMD-SHELL", "PGPASSWORD=wb_secret_password pg_isready -h 127.0.0.1 -U postgres -d wb_monitor"]
+      # FIX: Запускаем проверку от имени пользователя postgres.
+      # Это дает доступ к unix-сокету и использует доверенную (trust) авторизацию без пароля.
+      # Ошибки в логах исчезнут, так как TCP использоваться не будет.
+      test: ["CMD-SHELL", "su-exec postgres pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
