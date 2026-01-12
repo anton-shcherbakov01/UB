@@ -21,14 +21,22 @@ const BidderPage = () => {
                 fetch(`${API_URL}/api/bidder/logs`, { headers: getTgHeaders() })
             ]);
 
-            if (!campRes.ok || !dashRes.ok) throw new Error("Ошибка API");
+            // Если API возвращает пустые массивы (fail-safe), мы не падаем
+            const cData = campRes.ok ? await campRes.json() : [];
+            const dData = dashRes.ok ? await dashRes.json() : {};
+            const lData = logsRes.ok ? await logsRes.json() : [];
 
-            setCampaigns(await campRes.json());
-            setDashboard(await dashRes.json());
-            setLogs(await logsRes.json());
+            setCampaigns(cData);
+            setDashboard(dData);
+            setLogs(lData);
+            
+            // Если все ответы упали, тогда ставим ошибку
+            if (!campRes.ok && !dashRes.ok) {
+                 throw new Error("Сервис временно недоступен");
+            }
         } catch (e) {
             console.error(e);
-            setError("Не удалось загрузить данные. Проверьте WB API токен или подключение.");
+            setError("Не удалось подключиться к WB Advert API. Проверьте соединение.");
         } finally {
             setLoading(false);
         }
@@ -76,11 +84,11 @@ const BidderPage = () => {
 
     if (error) {
         return (
-            <div className="p-6 text-center animate-in fade-in">
+            <div className="p-6 text-center animate-in fade-in h-[80vh] flex flex-col justify-center items-center">
                 <AlertCircle className="mx-auto text-red-500 mb-2" size={32}/>
                 <h3 className="font-bold text-slate-800">Ошибка соединения</h3>
-                <p className="text-sm text-slate-500 mt-2">{error}</p>
-                <button onClick={fetchData} className="mt-4 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 mx-auto">
+                <p className="text-sm text-slate-500 mt-2 mb-4">{error}</p>
+                <button onClick={fetchData} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2">
                     <RefreshCw size={14} /> Повторить
                 </button>
             </div>
@@ -120,7 +128,7 @@ const BidderPage = () => {
             <div className="space-y-3">
                 {campaigns.length === 0 ? (
                     <div className="text-center p-8 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
-                        Нет активных кампаний
+                        {error ? "Ошибка загрузки" : "Нет активных кампаний"}
                     </div>
                 ) : (
                     campaigns.map(camp => <CampaignCard key={camp.id} camp={camp} />)

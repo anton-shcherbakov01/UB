@@ -25,14 +25,14 @@ const SupplyPage = () => {
                  fetch(`${API_URL}/api/internal/products`, { headers: getTgHeaders() })
             ]);
 
-            const cData = await coeffRes.json();
-            const pData = await prodRes.json();
+            const cData = coeffRes.ok ? await coeffRes.json() : [];
+            const pData = prodRes.ok ? await prodRes.json() : [];
             
             setCoeffs(Array.isArray(cData) ? cData : []);
             setProducts(Array.isArray(pData) ? pData : []);
         } catch (e) {
             console.error(e);
-            setError("Ошибка загрузки данных поставки. Проверьте API.");
+            setError("Ошибка загрузки данных поставки. Проверьте сеть.");
         }
     };
 

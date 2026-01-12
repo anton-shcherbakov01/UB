@@ -9,7 +9,7 @@ import {
 import { API_URL, getTgHeaders } from '../config';
 import CostEditModal from '../components/CostEditModal';
 
-const FinancePage = ({ onNavigate }) => {
+const FinancePage = () => {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [editingCost, setEditingCost] = useState(null);
@@ -46,7 +46,6 @@ const FinancePage = ({ onNavigate }) => {
         } catch(e) { alert("Ошибка обновления"); }
     };
 
-    // Агрегация данных на основе реальных остатков и Unit-экономики
     const pnlStats = useMemo(() => {
         let grossSales = 0;
         let cogs = 0;
@@ -54,26 +53,19 @@ const FinancePage = ({ onNavigate }) => {
         let commission = 0; 
         
         products.forEach(p => {
-            // Если нет данных о продажах (скорости), используем 0, а не заглушки
             const velocity = p.supply?.metrics?.avg_daily_demand || 0;
             const monthlySales = velocity * 30;
             
             if (monthlySales > 0) {
                 grossSales += p.price * monthlySales;
                 cogs += p.cost_price * monthlySales;
-                // Рассчитываем затраты исходя из юнит-экономики одного товара
-                // (p.price - profit - cost) = (commission + logistics)
                 const expenses = p.price - p.unit_economy.profit - p.cost_price;
-                
-                // Примерно делим (можно уточнить, если API будет отдавать детали)
-                // Логистика фикс 50р * кол-во
                 const logCost = 50 * monthlySales;
                 logistics += logCost;
                 commission += (expenses * monthlySales) - logCost;
             }
         });
 
-        // Если продаж нет вообще, показываем нули
         if (grossSales === 0 && cogs === 0) return [];
 
         const netSales = grossSales;
@@ -208,7 +200,6 @@ const FinancePage = ({ onNavigate }) => {
                                     </button>
                                 </div>
                                 
-                                {/* Waterfall Unit Econ */}
                                 <div className="space-y-2 mb-4 relative">
                                     <div className="absolute left-[3px] top-2 bottom-2 w-0.5 bg-slate-100 rounded-full"></div>
                                     

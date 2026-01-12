@@ -22,36 +22,42 @@ class TransitCalcRequest(BaseModel):
 
 @router.get("/internal/stats")
 async def get_internal_stats(user: User = Depends(get_current_user)):
-    """Получение статистики (Заказы, Остатки) через официальный API"""
     if not user.wb_api_token:
         return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
-    
-    stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
-    return stats
+    try:
+        return await wb_api_service.get_dashboard_stats(user.wb_api_token)
+    except:
+        return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
 
 @router.get("/internal/stories")
 async def get_stories(user: User = Depends(get_current_user)):
-    """Генерация сторис на основе реальных данных"""
     stories = []
     
-    # 1. Продажи
+    orders_sum = 0
+    stocks_qty = 0
+    
     if user.wb_api_token:
-        stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
-        orders_sum = stats.get('orders_today', {}).get('sum', 0)
-        
-        stories.append({
-            "id": 1, 
-            "title": "Продажи", 
-            "val": f"{orders_sum // 1000}k ₽" if orders_sum > 1000 else f"{orders_sum} ₽",
-            "subtitle": "Сегодня",
-            "color": "bg-emerald-500"
-        })
+        try:
+            stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
+            orders_sum = stats.get('orders_today', {}).get('sum', 0)
+            stocks_qty = stats.get('stocks', {}).get('total_quantity', 0)
+            
+            stories.append({
+                "id": 1, 
+                "title": "Продажи", 
+                "val": f"{orders_sum // 1000}k ₽" if orders_sum > 1000 else f"{orders_sum} ₽",
+                "subtitle": "Сегодня",
+                "color": "bg-emerald-500"
+            })
+        except:
+             stories.append({
+                "id": 1, "title": "API Error", "val": "Fail", "color": "bg-red-500", "subtitle": "Connection"
+            })
     else:
         stories.append({
             "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Нет данных"
         })
 
-    # 2. Биддер
     if user.subscription_plan == "free":
         stories.append({
             "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Upgrade"
@@ -61,12 +67,9 @@ async def get_stories(user: User = Depends(get_current_user)):
             "id": 2, "title": "Биддер", "val": "Active", "color": "bg-purple-500", "subtitle": "Safe Mode"
         })
 
-    # 3. Склад (Реальные данные)
     if user.wb_api_token:
-        stocks = await wb_api_service.get_dashboard_stats(user.wb_api_token)
-        qty = stocks.get('stocks', {}).get('total_quantity', 0)
         stories.append({
-            "id": 3, "title": "Склад", "val": f"{qty}", "color": "bg-blue-500", "subtitle": "Всего шт."
+            "id": 3, "title": "Склад", "val": f"{stocks_qty}", "color": "bg-blue-500", "subtitle": "Всего шт."
         })
 
     return stories
@@ -76,16 +79,15 @@ async def get_my_products_finance(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    """Получение списка СВОИХ товаров для Unit-экономики (Real Data)."""
     if not user.wb_api_token: 
         return []
     
-    # Оборачиваем в try-except для защиты от сбоев API
     try:
         stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
         if not stocks: 
             return []
     except Exception:
+        # Если API лежит, возвращаем пустой список, чтобы не крашить фронт
         return []
     
     sku_map = {}
@@ -101,7 +103,6 @@ async def get_my_products_finance(
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
-    
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
     costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
     
@@ -180,7 +181,6 @@ async def set_product_cost(
 async def get_supply_coefficients(user: User = Depends(get_current_user)):
     if not user.wb_api_token:
         return []
-    # Возвращаем пустой список если API недоступен, чтобы фронт не падал
     try:
         data = await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
         return data if data else []
