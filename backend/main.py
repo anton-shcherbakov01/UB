@@ -23,7 +23,7 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
-from database import get_db
+from database import get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, Payment
 from celery_app import celery_app, REDIS_URL
 from tasks import (
     parse_and_save_sku, 
@@ -118,8 +118,23 @@ async def get_current_user(
     return user
 
 @app.on_event("startup")
-async def on_startup(): 
-    await init_db()
+async def on_startup():
+    """
+    Действия при запуске приложения.
+    ВАЖНО: Инициализация БД (создание таблиц) перенесена в migrate.py
+    и выполняется через docker-entrypoint.sh.
+    Здесь мы инициализируем только кэш.
+    """
+    try:
+        redis = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
+        FastAPICache.init(RedisBackend(redis), prefix="fastapi-cache")
+        logger.info("✅ Redis cache initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Redis cache: {e}")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "version": "2.0.0"}
 
 @app.get("/api/user/me")
 async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

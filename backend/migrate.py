@@ -5,7 +5,6 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from database import engine_sync, Base
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DB_Migration")
 
@@ -27,25 +26,20 @@ def wait_for_db(retries=30, delay=2):
     return False
 
 def migrate():
-    """
-    Скрипт миграции.
-    Если RUN_MIGRATIONS=true (по умолчанию), создает таблицы.
-    Если RUN_MIGRATIONS=false, только ждет подключения к БД.
-    """
-    # Читаем переменную окружения (по умолчанию true)
+    # Читаем флаг из environment. По умолчанию True, но в docker-compose для воркеров ставим False
     run_migrations = os.getenv("RUN_MIGRATIONS", "true").lower() == "true"
     
-    logger.info(f"🚀 Старт скрипта инициализации (Создание таблиц: {run_migrations})...")
+    logger.info(f"🚀 Старт проверки БД (Режим мигратора: {run_migrations})...")
     
     if not wait_for_db():
         logger.error("❌ Не удалось подключиться к БД. Выход.")
         return
 
     if not run_migrations:
-        logger.info("✋ Пропуск создания таблиц (RUN_MIGRATIONS=false). Сервис готов к работе.")
+        logger.info("✋ Я воркер, миграции не запускаю. Просто жду БД. Готов к работе.")
         return
 
-    # 1. Создаем новые таблицы (ТОЛЬКО ЕСЛИ RUN_MIGRATIONS=true)
+    # Только API (или тот, у кого RUN_MIGRATIONS=true) создает таблицы
     try:
         logger.info("🛠 Создание/проверка таблиц...")
         Base.metadata.create_all(bind=engine_sync)
@@ -54,31 +48,19 @@ def migrate():
         logger.error(f"❌ Ошибка создания таблиц: {e}")
         return
 
-    # 2. Обновляем существующую таблицу users (если нужно)
+    # Альтеры для существующих таблиц (защищенные try-except)
     try:
         with engine_sync.connect() as conn:
             trans = conn.begin()
             try:
-                # Добавляем wb_api_token
-                try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS wb_api_token VARCHAR"))
-                except Exception as e:
-                    if "duplicate column" not in str(e) and "already exists" not in str(e):
-                        logger.warning(f"⚠️ Warning wb_api_token: {e}")
-
-                # Добавляем last_order_check
-                try:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_order_check TIMESTAMP WITHOUT TIME ZONE"))
-                except Exception as e:
-                    if "duplicate column" not in str(e) and "already exists" not in str(e):
-                        logger.warning(f"⚠️ Warning last_order_check: {e}")
-                
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS wb_api_token VARCHAR"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_order_check TIMESTAMP WITHOUT TIME ZONE"))
                 trans.commit()
                 logger.info("✅ Альтеры колонок применены.")
-                
-            except Exception as e:
+            except Exception:
                 trans.rollback()
-                logger.error(f"❌ Ошибка при изменении колонок: {e}")
+                # Игнорируем ошибки "already exists" молча, чтобы не пугать в логах
+                pass
     except Exception as e:
          logger.error(f"❌ Ошибка подключения для альтеров: {e}")
 

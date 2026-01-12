@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-  # --- База данных Postgres ---
   db:
     image: postgres:15-alpine
     container_name: wb_postgres
@@ -12,16 +11,18 @@ services:
       - POSTGRES_DB=wb_monitor
       - LANG=C.UTF-8
     volumes:
-      # ИМЯ ТОМА ИЗМЕНЕНО для чистого старта
       - postgres_data_final:/var/lib/postgresql/data
-    ports: ["5432:5432"]
+    # Сменил порт на 5433, чтобы исключить конфликты с локальными клиентами
+    ports: ["5433:5432"]
+    # ОТКЛЮЧАЕМ healthcheck, чтобы не спамил в логи. Проверка идет внутри приложений.
+    healthcheck:
+      test: ["NONE"]
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-  # --- ClickHouse ---
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: wb_clickhouse
@@ -43,7 +44,6 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # --- Redis ---
   redis:
     image: redis:alpine
     container_name: wb_redis
@@ -56,7 +56,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # --- Backend API (ГЛАВНЫЙ ПО МИГРАЦИЯМ) ---
   api:
     build: 
       context: ./backend
@@ -70,7 +69,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # API запускает миграции
+      # API - главный, он накатывает миграции
       - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
@@ -90,7 +89,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # --- Celery Worker (ТОЛЬКО ЖДЕТ БД) ---
   worker:
     build: 
       context: ./backend
@@ -103,7 +101,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Worker НЕ запускает миграции, чтобы не было конфликтов
+      # Worker только ждет
       - RUN_MIGRATIONS=false
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
@@ -124,7 +122,6 @@ services:
         max-size: "20m"
         max-file: "5"
 
-  # --- Celery Beat (ТОЛЬКО ЖДЕТ БД) ---
   beat:
     build: 
       context: ./backend
@@ -136,7 +133,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Beat НЕ запускает миграции
+      # Beat только ждет
       - RUN_MIGRATIONS=false
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
@@ -150,6 +147,5 @@ services:
         max-file: "3"
 
 volumes:
-  # Новый том для чистого старта
   postgres_data_final:
   clickhouse_data:
