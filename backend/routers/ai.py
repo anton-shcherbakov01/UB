@@ -22,8 +22,12 @@ async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
     return {"status": "accepted", "task_id": task.id}
 
 @router.get("/ai/result/{task_id}")
-async def get_ai_result(task_id: str):
-    return await get_status(task_id)
+def get_ai_result(task_id: str):
+    """
+    Получение результата AI анализа.
+    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
+    """
+    return get_status(task_id)
 
 @router.get("/report/ai-pdf/{sku}")
 async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

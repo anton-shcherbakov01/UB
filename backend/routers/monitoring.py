@@ -9,7 +9,7 @@ from fpdf import FPDF
 
 from database import get_db, User, MonitoredItem, PriceHistory
 from dependencies import get_current_user
-from tasks import parse_and_save_sku, get_status # IMPORTED HERE
+from tasks import parse_and_save_sku, get_status
 
 logger = logging.getLogger("Monitoring")
 router = APIRouter(prefix="/api", tags=["Monitoring"])
@@ -73,8 +73,11 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
     }
 
 @router.get("/monitor/status/{task_id}")
-async def get_status_endpoint(task_id: str): 
-    # Reusing logic from tasks.py
+def get_status_endpoint(task_id: str): 
+    """
+    Получение статуса задачи.
+    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
+    """
     return get_status(task_id)
 
 @router.get("/report/pdf/{sku}")
