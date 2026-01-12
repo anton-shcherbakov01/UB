@@ -15,13 +15,13 @@ services:
       - POSTGRES_DB=wb_monitor
       - LANG=C.UTF-8
     volumes:
-      # ВНИМАНИЕ: Имя тома изменено на postgres_data_clean для принудительного сброса базы
+      # Оставляем postgres_data_clean, так как база уже создана с правильным паролем
       - postgres_data_clean:/var/lib/postgresql/data
     ports: ["5432:5432"]
     healthcheck:
-      # FIX: Самый надежный способ. Явно экспортируем пароль и проверяем через TCP (127.0.0.1).
-      # Это устранит ошибки "password authentication failed" в логах.
-      test: ["CMD-SHELL", "export PGPASSWORD=wb_secret_password && pg_isready -U postgres -d wb_monitor -h 127.0.0.1"]
+      # FIX: Используем inline-синтаксис для переменной окружения.
+      # Это самый надежный способ передать пароль в sh-оболочке Alpine.
+      test: ["CMD-SHELL", "PGPASSWORD=wb_secret_password pg_isready -h 127.0.0.1 -U postgres -d wb_monitor"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -160,6 +160,6 @@ services:
         max-file: "3"
 
 volumes:
-  # Новое имя тома для чистого старта
+  # Используем тот же том, что и в прошлый раз, база там уже корректная
   postgres_data_clean:
   clickhouse_data:
