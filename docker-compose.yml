@@ -21,15 +21,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Ограничиваем логи базы данных
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # --- ClickHouse (Для аналитики P&L) ---
+  # --- ClickHouse ---
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: wb_clickhouse
     restart: always
     ports:
-      - "8123:8123" # HTTP порт
-      - "9000:9000" # Нативный клиент
+      - "8123:8123"
+      - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     env_file:
@@ -38,6 +44,11 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   # --- Redis ---
   redis:
@@ -46,6 +57,11 @@ services:
     restart: always
     ports: ["6379:6379"]
     command: redis-server --save 60 1 --loglevel warning
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # --- Backend API ---
   api:
@@ -53,15 +69,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_api
+    # Используем entrypoint, который мы создали ранее, или стандартную команду
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
     ports: ["8000:8000"]
-    # 1. Загружаем переменные из файла внутри папки backend
     env_file:
       - ./backend/.env
-    # 2. Здесь оставляем только системные настройки Docker-сети
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
@@ -75,6 +90,12 @@ services:
         condition: service_started
       clickhouse:
         condition: service_started
+    # ВАЖНО: Ротация логов. Максимум 3 файла по 10Мб.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # --- Celery Worker ---
   worker:
@@ -102,8 +123,14 @@ services:
         condition: service_started
       clickhouse:
         condition: service_started
+    # ВАЖНО: Ротация логов для воркера (он пишет больше всех)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
 
-  # --- Celery Beat (Планировщик) ---
+  # --- Celery Beat ---
   beat:
     build: 
       context: ./backend
@@ -120,6 +147,11 @@ services:
     depends_on: 
       redis:
         condition: service_started
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres_data:
