@@ -1,8 +1,8 @@
 FROM python:3.9-slim
 
-# 1. Установка системных утилит, ШРИФТОВ и Edge
+# 1. Установка системных утилит, ШРИФТОВ, Edge и netcat (для entrypoint)
 RUN apt-get update && apt-get install -y \
-    wget gnupg unzip curl fontconfig fonts-dejavu libpq-dev gcc \
+    wget gnupg unzip curl fontconfig fonts-dejavu libpq-dev gcc netcat-openbsd \
     && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft.gpg \
     && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list \
     && apt-get update && apt-get install -y microsoft-edge-stable \
@@ -17,8 +17,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Копируем код (для продакшена, в dev перекроется volume)
+# 4. Копируем код
 COPY . .
 
+# 5. Копируем и настраиваем Entrypoint
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 8000
+
+# Используем Entrypoint для преднастройки (миграций) перед запуском
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+# Команда по умолчанию (если не переопределена в docker-compose)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
