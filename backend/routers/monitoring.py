@@ -5,12 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
-from celery.result import AsyncResult
 from fpdf import FPDF
 
 from database import get_db, User, MonitoredItem, PriceHistory
 from dependencies import get_current_user
-from tasks import parse_and_save_sku, celery_app
+from tasks import parse_and_save_sku, get_status # IMPORTED HERE
 
 logger = logging.getLogger("Monitoring")
 router = APIRouter(prefix="/api", tags=["Monitoring"])
@@ -74,13 +73,9 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
     }
 
 @router.get("/monitor/status/{task_id}")
-async def get_status(task_id: str): 
-    res = AsyncResult(task_id, app=celery_app)
-    resp = {"task_id": task_id, "status": res.status}
-    if res.status == 'SUCCESS': resp["data"] = res.result
-    elif res.status == 'FAILURE': resp["error"] = str(res.result)
-    elif res.status == 'PROGRESS': resp["info"] = res.info.get('status', 'Processing')
-    return resp
+async def get_status_endpoint(task_id: str): 
+    # Reusing logic from tasks.py
+    return get_status(task_id)
 
 @router.get("/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

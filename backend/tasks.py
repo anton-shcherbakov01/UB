@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.result import AsyncResult
 
 from celery_app import celery_app, REDIS_URL
 from parser_service import parser_service, GEO_ZONES
@@ -124,6 +125,25 @@ def log_bidder_action_sync(user_id, campaign_id, current_pos, target_pos, prev_b
         logger.error(f"Bidder Log DB Error: {e}")
     finally:
         session.close()
+
+# --- HELPER: TASK STATUS ---
+
+def get_status(task_id: str):
+    """
+    Получение статуса задачи Celery.
+    Используется в polling-запросах на фронтенде.
+    """
+    res = AsyncResult(task_id, app=celery_app)
+    resp = {"task_id": task_id, "status": res.status}
+    
+    if res.status == 'SUCCESS':
+        resp["data"] = res.result
+    elif res.status == 'FAILURE':
+        resp["error"] = str(res.result)
+    elif res.status == 'PROGRESS':
+        resp["info"] = res.info.get('status', 'Processing')
+        
+    return resp
 
 # --- FORECASTING TRAIN TASK (NEW) ---
 
@@ -525,7 +545,7 @@ def sync_financial_reports(self, user_id: int):
         if not user or not user.wb_api_token:
             logger.error(f"User {user_id} has no token")
             return {"status": "error", "message": "No token"}
-        
+    
         token = user.wb_api_token
     finally:
         session.close()
