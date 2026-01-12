@@ -1,0 +1,108 @@
+import json
+from datetime import datetime, timedelta
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, delete
+from pydantic import BaseModel
+
+from database import get_db, User, MonitoredItem, SearchHistory
+from dependencies import get_current_user
+from wb_api_service import wb_api_service
+from tasks import sync_financial_reports
+
+router = APIRouter(prefix="/api/user", tags=["User"])
+
+class TokenRequest(BaseModel):
+    token: str
+
+@router.get("/me")
+async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
+    count = (await db.execute(count_stmt)).scalar() or 0
+    
+    masked_token = None
+    if user.wb_api_token:
+        masked_token = user.wb_api_token[:5] + "*" * 10 + user.wb_api_token[-5:]
+    
+    days_left = 0
+    if user.subscription_expires_at:
+        delta = user.subscription_expires_at - datetime.utcnow()
+        days_left = max(0, delta.days)
+
+    return {
+        "id": user.telegram_id,
+        "username": user.username,
+        "name": user.first_name,
+        "plan": user.subscription_plan,
+        "is_admin": user.is_admin,
+        "items_count": count,
+        "has_wb_token": bool(user.wb_api_token),
+        "wb_token_preview": masked_token,
+        "days_left": days_left,
+        "subscription_expires_at": user.subscription_expires_at
+    }
+
+@router.post("/token")
+async def save_wb_token(
+    req: TokenRequest, 
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Сохранение токена API Статистики WB"""
+    is_valid = await wb_api_service.check_token(req.token)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="Неверный токен или ошибка API WB")
+
+    user.wb_api_token = req.token
+    db.add(user)
+    await db.commit()
+    # Trigger initial sync
+    sync_financial_reports.delay(user.id)
+    return {"status": "saved", "message": "Токен успешно сохранен, запущена синхронизация"}
+
+@router.delete("/token")
+async def delete_wb_token(
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    user.wb_api_token = None
+    db.add(user)
+    await db.commit()
+    return {"status": "deleted"}
+
+@router.get("/history")
+async def get_user_history(
+    request_type: Optional[str] = Query(None), 
+    user: User = Depends(get_current_user), 
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(SearchHistory).where(SearchHistory.user_id == user.id)
+    
+    if request_type:
+        stmt = stmt.where(SearchHistory.request_type == request_type)
+    
+    stmt = stmt.order_by(SearchHistory.created_at.desc()).limit(50)
+    
+    res = await db.execute(stmt)
+    history = res.scalars().all()
+    result = []
+    for h in history:
+        try: data = json.loads(h.result_json) if h.result_json else {}
+        except: data = {}
+        result.append({"id": h.id, "sku": h.sku, "type": h.request_type, "title": h.title, "created_at": h.created_at, "data": data})
+    return result
+
+@router.delete("/history")
+async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(SearchHistory).where(SearchHistory.user_id == user.id))
+    await db.commit()
+    return {"status": "cleared"}
+
+@router.get("/tariffs")
+async def get_tariffs(user: User = Depends(get_current_user)):
+    return [
+        {"id": "free", "name": "Start", "price": "0 ₽", "stars": 0, "features": ["3 товара", "История 24ч", "SEO (Авто)", "Ding! (1 раз/день)"], "current": user.subscription_plan == "free", "color": "slate"},
+        {"id": "pro", "name": "Pro", "price": "2990 ₽", "stars": 2500, "features": ["50 товаров", "SEO (Настройка длины)", "Unit-экономика", "Ding! (Безлимит)", "PDF"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
+        {"id": "business", "name": "Business", "price": "6990 ₽", "stars": 6000, "features": ["Автобиддер", "Все настройки SEO", "Прогноз поставок", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
+    ]
