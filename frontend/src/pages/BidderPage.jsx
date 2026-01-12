@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-    Target, ShieldCheck, Zap, Activity, TrendingDown, Loader2, AlertCircle
+    Target, ShieldCheck, Zap, Activity, TrendingDown, Loader2, AlertCircle, RefreshCw
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -15,21 +15,20 @@ const BidderPage = () => {
         setLoading(true);
         setError(null);
         try {
-            // Загружаем данные параллельно
             const [campRes, dashRes, logsRes] = await Promise.all([
                 fetch(`${API_URL}/api/bidder/campaigns`, { headers: getTgHeaders() }),
                 fetch(`${API_URL}/api/bidder/dashboard`, { headers: getTgHeaders() }),
                 fetch(`${API_URL}/api/bidder/logs`, { headers: getTgHeaders() })
             ]);
 
-            if (!campRes.ok || !dashRes.ok) throw new Error("Ошибка загрузки данных");
+            if (!campRes.ok || !dashRes.ok) throw new Error("Ошибка API");
 
             setCampaigns(await campRes.json());
             setDashboard(await dashRes.json());
             setLogs(await logsRes.json());
         } catch (e) {
             console.error(e);
-            setError("Не удалось загрузить данные. Проверьте подключение API токена.");
+            setError("Не удалось загрузить данные. Проверьте WB API токен или подключение.");
         } finally {
             setLoading(false);
         }
@@ -37,7 +36,6 @@ const BidderPage = () => {
 
     useEffect(() => {
         fetchData();
-        // Polling
         const interval = setInterval(fetchData, 10000);
         return () => clearInterval(interval);
     }, []);
@@ -78,11 +76,13 @@ const BidderPage = () => {
 
     if (error) {
         return (
-            <div className="p-6 text-center">
+            <div className="p-6 text-center animate-in fade-in">
                 <AlertCircle className="mx-auto text-red-500 mb-2" size={32}/>
-                <h3 className="font-bold text-slate-800">Ошибка доступа</h3>
+                <h3 className="font-bold text-slate-800">Ошибка соединения</h3>
                 <p className="text-sm text-slate-500 mt-2">{error}</p>
-                <button onClick={fetchData} className="mt-4 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold">Повторить</button>
+                <button onClick={fetchData} className="mt-4 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 mx-auto">
+                    <RefreshCw size={14} /> Повторить
+                </button>
             </div>
         )
     }
@@ -94,7 +94,7 @@ const BidderPage = () => {
                     <h1 className="text-2xl font-black flex items-center gap-2">
                         <Zap className="text-yellow-300" fill="currentColor" /> Биддер
                     </h1>
-                    <p className="text-sm opacity-90 mt-2 font-medium">Реальное управление ставками</p>
+                    <p className="text-sm opacity-90 mt-2 font-medium">Управление ставками</p>
                     
                     <div className="mt-6 flex items-center gap-4">
                         <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 flex-1">

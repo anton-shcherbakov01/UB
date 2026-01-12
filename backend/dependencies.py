@@ -5,7 +5,7 @@ import redis
 from urllib.parse import parse_qsl
 from fastapi import Header, Query, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from database import get_db, User
@@ -37,7 +37,6 @@ async def get_current_user(
     user_data_dict = None
 
     if token:
-        # Пробуем валидацию
         if auth_manager.validate_init_data(token):
             try:
                 parsed = dict(parse_qsl(token))
@@ -46,7 +45,7 @@ async def get_current_user(
             except Exception as e: 
                 logger.error(f"Auth parse error: {e}")
         else:
-             # Попытка парсинга даже если валидация не прошла (для локальных тестов)
+             # Fallback для локальной разработки
              try:
                 parsed = dict(parse_qsl(token))
                 if 'user' in parsed: 
@@ -65,41 +64,53 @@ async def get_current_user(
     if not tg_id:
         raise HTTPException(status_code=401, detail="Invalid user data")
 
+    # 1. Сначала пробуем найти
     stmt = select(User).where(User.telegram_id == tg_id)
     result = await db.execute(stmt)
     user = result.scalars().first()
 
-    # FORCE ADMIN RIGHTS
     is_super = tg_id in SUPER_ADMIN_IDS
 
     if not user:
-        # Защита от Race Condition при создании пользователя
+        # 2. Если нет - пробуем создать через RAW SQL с ON CONFLICT DO NOTHING
+        # Это предотвращает ошибку "duplicate key value violates unique constraint" в логах Postgres
+        # и устраняет состояние гонки.
         try:
-            user = User(
-                telegram_id=tg_id, 
-                username=user_data_dict.get('username'), 
-                first_name=user_data_dict.get('first_name'), 
-                is_admin=is_super,
-                subscription_plan="business" if is_super else "free"
-            )
-            db.add(user)
+            username = user_data_dict.get('username')
+            first_name = user_data_dict.get('first_name')
+            plan = "business" if is_super else "free"
+            is_adm = is_super
+            
+            # Используем text() для raw query (надежнее всего для upsert в данной конфигурации)
+            insert_query = text("""
+                INSERT INTO users (telegram_id, username, first_name, is_admin, subscription_plan, created_at)
+                VALUES (:tg_id, :username, :first_name, :is_admin, :plan, NOW())
+                ON CONFLICT (telegram_id) DO NOTHING
+            """)
+            
+            await db.execute(insert_query, {
+                "tg_id": tg_id,
+                "username": username,
+                "first_name": first_name,
+                "is_admin": is_adm,
+                "plan": plan
+            })
             await db.commit()
-            await db.refresh(user)
-        except IntegrityError:
-            await db.rollback()
-            stmt = select(User).where(User.telegram_id == tg_id)
+            
+            # 3. Достаем юзера заново (он точно есть теперь)
             result = await db.execute(stmt)
             user = result.scalars().first()
             
-            if not user:
-                raise HTTPException(status_code=500, detail="Database error during user creation")
-    else:
-        # Если юзер уже есть, обновляем права (для суперадмина)
-        if is_super and (not user.is_admin or user.subscription_plan != "business"):
-            user.is_admin = True
-            user.subscription_plan = "business"
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"User creation error: {e}")
+            raise HTTPException(status_code=500, detail="Database error")
+            
+    # Если юзер уже был, обновляем админские права если нужно
+    if user and is_super and (not user.is_admin or user.subscription_plan != "business"):
+        user.is_admin = True
+        user.subscription_plan = "business"
+        db.add(user)
+        await db.commit()
     
     return user

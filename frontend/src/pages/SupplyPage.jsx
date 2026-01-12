@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
     Truck, Scale, Loader2, MapPin, ArrowRight, 
-    PackageCheck, AlertTriangle, Box 
+    PackageCheck, AlertTriangle, Box, RefreshCw
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -11,20 +11,30 @@ const SupplyPage = () => {
     const [calculation, setCalculation] = useState(null);
     const [loading, setLoading] = useState(false);
     const [products, setProducts] = useState([]);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
-        // Загружаем реальные коэффициенты
-        fetch(`${API_URL}/api/internal/coefficients`, { headers: getTgHeaders() })
-            .then(r => r.json())
-            .then(data => Array.isArray(data) ? setCoeffs(data) : setCoeffs([]))
-            .catch(console.error);
-
-        // Загружаем товары для отображения метрик ROP/Safety Stock
-        fetch(`${API_URL}/api/internal/products`, { headers: getTgHeaders() })
-            .then(r => r.json())
-            .then(setProducts)
-            .catch(console.error);
+        fetchData();
     }, []);
+
+    const fetchData = async () => {
+        setError(null);
+        try {
+            const [coeffRes, prodRes] = await Promise.all([
+                 fetch(`${API_URL}/api/internal/coefficients`, { headers: getTgHeaders() }),
+                 fetch(`${API_URL}/api/internal/products`, { headers: getTgHeaders() })
+            ]);
+
+            const cData = await coeffRes.json();
+            const pData = await prodRes.json();
+            
+            setCoeffs(Array.isArray(cData) ? cData : []);
+            setProducts(Array.isArray(pData) ? pData : []);
+        } catch (e) {
+            console.error(e);
+            setError("Ошибка загрузки данных поставки. Проверьте API.");
+        }
+    };
 
     const handleCalculate = async () => {
         if (!volume) return;
@@ -92,6 +102,19 @@ const SupplyPage = () => {
             </div>
         );
     };
+
+    if (error) {
+         return (
+            <div className="p-6 text-center animate-in fade-in h-[80vh] flex flex-col items-center justify-center">
+                <AlertTriangle className="mx-auto text-amber-500 mb-2" size={32}/>
+                <h3 className="font-bold text-slate-800">Ошибка данных</h3>
+                <p className="text-sm text-slate-500 mt-2 mb-4">{error}</p>
+                <button onClick={fetchData} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2">
+                    <RefreshCw size={14} /> Повторить
+                </button>
+            </div>
+        )
+    }
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in">

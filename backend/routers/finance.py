@@ -24,7 +24,6 @@ class TransitCalcRequest(BaseModel):
 async def get_internal_stats(user: User = Depends(get_current_user)):
     """Получение статистики (Заказы, Остатки) через официальный API"""
     if not user.wb_api_token:
-        # Без токена возвращаем нули, но не заглушки
         return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
     
     stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
@@ -81,11 +80,14 @@ async def get_my_products_finance(
     if not user.wb_api_token: 
         return []
     
-    stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
-    if not stocks: 
+    # Оборачиваем в try-except для защиты от сбоев API
+    try:
+        stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
+        if not stocks: 
+            return []
+    except Exception:
         return []
     
-    # Агрегация остатков по SKU (nmId)
     sku_map = {}
     for s in stocks:
         sku = s.get('nmId')
@@ -100,7 +102,6 @@ async def get_my_products_finance(
     
     skus = list(sku_map.keys())
     
-    # Получаем себестоимость из БД
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
     costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
     
@@ -111,11 +112,9 @@ async def get_my_products_finance(
         cost = costs_map.get(sku, 0)
         selling_price = data['price'] * (1 - data['discount']/100)
         
-        # Убираем хардкод 0.23, используем приближенные реальные значения или 0.
-        # В идеале нужно тянуть комиссию категории через API, но пока считаем 25% как базовую ставку для P&L
         commission_rate = 0.25 
         commission = selling_price * commission_rate
-        logistics = 50 # Базовая логистика, можно уточнить через калькулятор тарифов
+        logistics = 50 
         
         profit = selling_price - commission - logistics - cost
         roi = round((profit / cost * 100), 1) if cost > 0 else 0
@@ -128,16 +127,14 @@ async def get_my_products_finance(
                 forecast_json = json.loads(cached_forecast)
                 supply_data = analysis_service.calculate_supply_metrics(
                     current_stock=data['quantity'],
-                    sales_history=[], # История берется внутри сервиса прогнозирования если надо, здесь заглушка не нужна
+                    sales_history=[],
                     forecast_data=forecast_json
                 )
         
-        # Если прогноза нет, не добавляем фейковую скорость продаж
         if not supply_data:
-            # Просто возвращаем текущий сток без прогноза
             supply_data = {
                 "status": "unknown",
-                "recommendation": "Нет данных для прогноза (нужны продажи > 14 дней)",
+                "recommendation": "Мало данных",
                 "metrics": {
                     "safety_stock": 0, "rop": 0, "days_left": 0, 
                     "avg_daily_demand": 0, "current_stock": data['quantity']
@@ -181,12 +178,15 @@ async def set_product_cost(
 
 @router.get("/internal/coefficients")
 async def get_supply_coefficients(user: User = Depends(get_current_user)):
-    """Получение реальных коэффициентов приемки"""
     if not user.wb_api_token:
         return []
-    return await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
+    # Возвращаем пустой список если API недоступен, чтобы фронт не падал
+    try:
+        data = await wb_api_service.get_warehouse_coeffs(user.wb_api_token)
+        return data if data else []
+    except:
+        return []
 
 @router.post("/internal/transit_calc")
 async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
-    # Логика расчета использует реальные тарифы (зашиты в сервис или получаются динамически)
     return await wb_api_service.calculate_transit(req.volume, req.destination)
