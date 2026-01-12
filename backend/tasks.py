@@ -16,7 +16,7 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from forecasting import forecast_demand
-from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderLog, ProductCost
+from database import SyncSessionLocal, MonitoredItem, PriceHistory, SearchHistory, User, SeoPosition, BidderLog, BidderSettings    
 from clickhouse_models import ch_service
 from sqlalchemy import select
 from bidder_engine import PIDController
@@ -193,10 +193,6 @@ def train_forecasting_models():
         logger.error(f"Forecasting cycle failed: {e}")
 
 # --- REAL-TIME BIDDER LOGIC (ASYNC WORKER) ---
-
-class BidderSettings:
-    def __init__(self, mode: str):
-        self.mode = mode
 
 class BidderWorker:
     def __init__(self, user_id: int, token: str, settings: BidderSettings):
