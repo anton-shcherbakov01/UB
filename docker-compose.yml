@@ -12,9 +12,7 @@ services:
       - LANG=C.UTF-8
     volumes:
       - postgres_data_final:/var/lib/postgresql/data
-    # Сменил порт на 5433, чтобы исключить конфликты с локальными клиентами
     ports: ["5433:5432"]
-    # ОТКЛЮЧАЕМ healthcheck, чтобы не спамил в логи. Проверка идет внутри приложений.
     healthcheck:
       test: ["NONE"]
     logging:
@@ -69,15 +67,13 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # API - главный, он накатывает миграции
       - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_DB=wb_analytics
       - HEADLESS=True
-      # Enable Debug Mode for local development (bypass Telegram Auth)
-      - DEBUG_MODE="True"
+      # DEBUG_MODE=True  <-- ЗАКОММЕНТИРОВАНО (Нормальный режим)
     depends_on: 
       db:
         condition: service_started
@@ -103,7 +99,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Worker только ждет
       - RUN_MIGRATIONS=false
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
@@ -135,7 +130,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Beat только ждет
       - RUN_MIGRATIONS=false
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
