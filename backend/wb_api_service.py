@@ -15,7 +15,7 @@ class WBApiService:
     Сервис для работы с официальным API Wildberries (Statistics API + Common API + Advert API).
     """
     
-    # Используем ENV если есть, иначе дефолтные (как в вашем коде)
+    # Используем ENV если есть, иначе дефолтные
     BASE_URL = os.getenv("WB_STATS_URL", "https://statistics-api.wildberries.ru/api/v1/supplier")
     COMMON_URL = os.getenv("WB_COMMON_URL", "https://common-api.wildberries.ru/api/v1") 
     ADV_URL = os.getenv("WB_ADV_URL", "https://advert-api.wb.ru/adv/v1") 
@@ -26,14 +26,14 @@ class WBApiService:
 
     def _get_connector(self):
         """
-        FIX: Принудительный резолвер Google DNS для Docker-среды.
-        Без этого вылетит NameResolutionError, который вы прислали в начале.
+        Возвращаем стандартный TCPConnector.
+        Убрали принудительный AsyncResolver(8.8.8.8), так как это ломает сеть
+        в некоторых Docker-конфигурациях и корпоративных сетях.
+        Docker сам предоставит нужный DNS.
         """
-        resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
         return aiohttp.TCPConnector(
             family=socket.AF_INET, 
-            ssl=False, 
-            resolver=resolver
+            ssl=False
         )
 
     async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
@@ -101,23 +101,80 @@ class WBApiService:
         return data
 
     async def check_token(self, token: str) -> bool:
+        """
+        Проверка токена.
+        Пробуем Statistics API, затем Common API (для токенов без статистики).
+        """
         if not token: 
             return False
         
-        url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
         headers = {"Authorization": token}
         
-        # Добавлен connector=self._get_connector()
         async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+            # 1. Попытка через API Статистики (incomes)
             try:
-                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+                url_stats = f"{self.BASE_URL}/incomes"
+                params_stats = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+                
+                async with session.get(url_stats, headers=headers, params=params_stats, timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info("Token valid (Statistics scope)")
+                        return True
                     if resp.status == 401:
-                        return False
-                    return True
+                        logger.warning("Token check: Statistics API returned 401. Trying Common API...")
+                    else:
+                        logger.warning(f"Token check: Statistics API returned {resp.status}")
             except Exception as e:
-                logger.error(f"Token check error: {e}")
-                return False
+                logger.error(f"Token check (Stats) error: {e}")
+
+            # 2. Попытка через Common API (tariffs) - работает для токенов "Стандартный"
+            try:
+                url_common = f"{self.COMMON_URL}/tariffs/box"
+                params_common = {"date": datetime.now().strftime("%Y-%m-%d")}
+
+                async with session.get(url_common, headers=headers, params=params_common, timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info("Token valid (Common scope)")
+                        return True
+                    if resp.status == 401:
+                        logger.warning("Token check: Common API returned 401. Token invalid.")
+            except Exception as e:
+                logger.error(f"Token check (Common) error: {e}")
+
+        return False
+        
+    async def get_token_scopes(self, token: str):
+        """
+        Определяет, к каким разделам есть доступ (Stats, Standard, Adv).
+        """
+        scopes = {"statistics": False, "standard": False, "promotion": False, "questions": False}
+        headers = {"Authorization": token}
+        
+        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
+            # 1. Statistics
+            try:
+                url = f"{self.BASE_URL}/incomes"
+                params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+                async with session.get(url, headers=headers, params=params, timeout=5) as resp:
+                    if resp.status == 200: scopes["statistics"] = True
+            except: pass
+
+            # 2. Standard (Content/Prices) - Проверяем через склады/тарифы
+            try:
+                url = f"{self.COMMON_URL}/tariffs/box"
+                params = {"date": datetime.now().strftime("%Y-%m-%d")}
+                async with session.get(url, headers=headers, params=params, timeout=5) as resp:
+                    if resp.status == 200: scopes["standard"] = True
+            except: pass
+
+            # 3. Promotion
+            try:
+                url = f"{self.ADV_URL}/count" # Или любой легкий метод рекламы
+                async with session.get(url, headers=headers, timeout=5) as resp:
+                    if resp.status == 200: scopes["promotion"] = True
+            except: pass
+            
+        return scopes
 
     async def get_dashboard_stats(self, token: str):
         """Сводка: Заказы сегодня и остатки"""
@@ -147,7 +204,7 @@ class WBApiService:
             
             if not orders_data or "items" not in orders_data:
                 return []
-            
+        
             new_orders = []
             for order in orders_data["items"]:
                 try:
