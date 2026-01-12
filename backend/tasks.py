@@ -194,6 +194,10 @@ def train_forecasting_models():
 
 # --- REAL-TIME BIDDER LOGIC (ASYNC WORKER) ---
 
+class BidderSettings:
+    def __init__(self, mode: str):
+        self.mode = mode
+
 class BidderWorker:
     def __init__(self, user_id: int, token: str, settings: BidderSettings):
         self.user_id = user_id
