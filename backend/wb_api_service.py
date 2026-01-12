@@ -4,22 +4,18 @@ import asyncio
 import json
 import socket
 import os
-import requests # Fallback library
+from aiohttp import AsyncResolver
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
-
-# Suppress insecure request warnings
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 logger = logging.getLogger("WB-API-Service")
 
 class WBApiService:
     """
     Сервис для работы с официальным API Wildberries.
+    Использует принудительный резолвинг DNS через Google (8.8.8.8) для стабильной работы в Docker.
     """
     
-    # URL вынесены в переменные окружения для гибкости (Fix DNS issues by allowing overrides)
     BASE_URL = os.getenv("WB_STATS_URL", "https://statistics-api.wildberries.ru/api/v1/supplier")
     COMMON_URL = os.getenv("WB_COMMON_URL", "https://common-api.wildberries.ru/api/v1") 
     ADV_URL = os.getenv("WB_ADV_URL", "https://advert-api.wb.ru/adv/v1") 
@@ -30,13 +26,16 @@ class WBApiService:
 
     def _get_connector(self):
         """
-        Создает TCP коннектор с принудительным IPv4 и DNS кешированием.
+        Создает TCP коннектор с:
+        1. Принудительным IPv4 (socket.AF_INET)
+        2. Отключенной проверкой SSL (ssl=False)
+        3. Явным резолвером Google DNS (8.8.8.8), чтобы обойти глюки Docker DNS
         """
+        resolver = AsyncResolver(nameservers=["8.8.8.8", "1.1.1.1"])
         return aiohttp.TCPConnector(
             family=socket.AF_INET, 
-            ssl=False,
-            ttl_dns_cache=300, # Кешируем DNS на 5 минут
-            use_dns_cache=True
+            ssl=False, 
+            resolver=resolver
         )
 
     async def _request_with_retry(self, url, headers, params=None, method='GET', json_data=None, retries=3):
@@ -45,10 +44,9 @@ class WBApiService:
         if "User-Agent" not in req_headers:
             req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-        # Используем one-off сессию или persistent?
-        # Для надежности в контейнерах пересоздаем коннектор при ошибках
         for attempt in range(retries):
             try:
+                # Важно: создаем коннектор внутри цикла или на каждый запрос, чтобы резолвер работал корректно
                 async with aiohttp.ClientSession(connector=self._get_connector()) as session:
                     if method == 'GET':
                         coro = session.get(url, headers=req_headers, params=params, timeout=15)
@@ -67,18 +65,18 @@ class WBApiService:
                             return None
                         else:
                             text = await resp.text()
-                            # Логируем только реальные ошибки, игнорируем 401 (токен протух - это норма)
+                            # Логируем только серверные ошибки
                             if resp.status >= 500:
                                 logger.warning(f"WB API Server Error {resp.status} at {url}: {text[:100]}")
                             elif resp.status != 401:
+                                # 401 - это частая ситуация при проверке токена, не засоряем лог уровнем error
                                 logger.debug(f"WB API Client Error {resp.status} at {url}: {text[:100]}")
                             
                             if resp.status < 500 and resp.status != 429:
                                 return None 
                                 
             except aiohttp.ClientConnectorError as e:
-                logger.error(f"Connection Error ({attempt+1}/{retries}) to {url}: {e}")
-                # DNS ошибки часто лечатся небольшой паузой
+                logger.error(f"DNS/Connection Error ({attempt+1}/{retries}) to {url}: {e}")
                 await asyncio.sleep(backoff)
                 backoff *= 2
             except Exception as e:
@@ -87,34 +85,16 @@ class WBApiService:
         
         return None
 
-    def _sync_check(self, url, params, headers, name):
-        """Синхронная проверка через requests (более надежна в Docker для Healthcheck)"""
-        try:
-            # Увеличиваем таймаут для DNS резолва
-            resp = requests.get(url, headers=headers, params=params, timeout=20, verify=False)
-            if resp.status_code == 200:
-                return True
-            # Если 500 или 429 - считаем токен валидным, так как достучались до сервера
-            if resp.status_code >= 500 or resp.status_code == 429:
-                return True
-            return False
-        except requests.exceptions.ConnectionError as e:
-            # Конкретная ошибка DNS или соединения
-            logger.error(f"Check {name} failed (Connection/DNS): {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Check {name} failed: {e}")
-            return False
-
     async def check_token(self, token: str) -> bool:
         """Простая проверка валидности (для сохранения)"""
+        # Проверяем через aiohttp, чтобы работал DNS фикс
         scopes = await self.get_token_scopes(token)
-        # Если хотя бы один сервис доступен - токен рабочий
         return any(scopes.values())
 
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
         """
         Полная диагностика токена по всем API.
+        Переписано на aiohttp для поддержки кастомного DNS резолвера.
         """
         if not token: 
             return {"statistics": False, "standard": False, "promotion": False, "questions": False}
@@ -124,37 +104,37 @@ class WBApiService:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         
-        scopes = {}
-        
+        # Определяем вспомогательную функцию для проверки одного URL
+        async def check_url(url, params=None, method='GET', json_data=None):
+            try:
+                # Используем _request_with_retry, так как он уже содержит DNS фикс
+                res = await self._request_with_retry(url, headers, params, method, json_data, retries=1)
+                # Если вернулся результат (даже пустой список/словарь) - доступ есть. Если None - ошибка/нет доступа.
+                return res is not None
+            except:
+                return False
+
+        # Запускаем проверки параллельно
         # 1. Статистика (Склады)
-        scopes["statistics"] = self._sync_check(
-            f"{self.BASE_URL}/stocks", 
-            {"dateFrom": datetime.now().strftime("%Y-%m-%d")}, 
-            headers, "Statistics"
-        )
-
-        # 2. Стандартный (Тарифы) - нужен для Unit-экономики
-        scopes["standard"] = self._sync_check(
-            f"{self.COMMON_URL}/tariffs/box", 
-            {"date": datetime.now().strftime("%Y-%m-%d")}, 
-            headers, "Standard"
-        )
-
+        task_stats = check_url(f"{self.BASE_URL}/stocks", {"dateFrom": datetime.now().strftime("%Y-%m-%d")})
+        
+        # 2. Стандартный (Тарифы)
+        task_std = check_url(f"{self.COMMON_URL}/tariffs/box", {"date": datetime.now().strftime("%Y-%m-%d")})
+        
         # 3. Реклама (Счетчик кампаний)
-        scopes["promotion"] = self._sync_check(
-            f"{self.ADV_URL}/promotion/count", 
-            None, 
-            headers, "Promotion"
-        )
+        task_promo = check_url(f"{self.ADV_URL}/promotion/count")
+        
+        # 4. Вопросы
+        task_questions = check_url(f"{self.QUESTIONS_URL}/questions", {"isAnswered": "false", "take": 1})
 
-        # 4. Вопросы/Отзывы (Список вопросов)
-        scopes["questions"] = self._sync_check(
-            f"{self.QUESTIONS_URL}/questions", 
-            {"isAnswered": "false", "take": 1}, 
-            headers, "Questions"
-        )
-
-        return scopes
+        results = await asyncio.gather(task_stats, task_std, task_promo, task_questions)
+        
+        return {
+            "statistics": results[0],
+            "standard": results[1],
+            "promotion": results[2],
+            "questions": results[3]
+        }
 
     def _get_cache_key(self, token, method, params):
         token_part = token[-10:] if token else "none"
@@ -266,7 +246,6 @@ class WBApiService:
     async def get_current_bid_info(self, token: str, campaign_id: int):
         # Используем V0 API, он иногда стабильнее для бидов
         url = "https://advert-api.wb.ru/adv/v0/advert" 
-        # Можно также вынести в ENV, но V0/V1 специфичны для методов
         
         headers = {"Authorization": token}
         params = {"id": campaign_id}
