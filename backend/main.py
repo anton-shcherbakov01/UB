@@ -69,46 +69,42 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
     Находит или создает пользователя на основе данных Telegram Init Data.
     Включает защиту от Race Condition при параллельных запросах.
     """
-    # 1. Получение данных (упрощенно читаем заголовок для примера, адаптируйте под свой парсинг initData)
+    # 1. Получение данных
     init_data = request.headers.get("X-Telegram-Init-Data") or request.headers.get("Authorization")
     
-    # Для целей отладки/разработки, если заголовков нет, можно возвращать None или тестового юзера
-    # В продакшене здесь должна быть строгая проверка подписи hash
     if not init_data:
-        # logger.warning("No auth data provided")
-        # raise HTTPException(status_code=401, detail="Authentication required")
-        return None  # Позволяем работать без авторизации для публичных ручек, если нужно
+        # FIX: Выбрасываем 401, чтобы эндпоинты не падали с AttributeError при обращении к user.id
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    telegram_id = None
+    username = None
+    first_name = None
 
     try:
-        # Простейший парсинг initData (адаптируйте под ваш формат)
-        # Если init_data это JSON строка или query string
+        # Простейший парсинг initData
         if init_data.startswith("Bearer "):
             init_data = init_data.split(" ")[1]
             
-        # Пытаемся достать telegram_id. 
-        # В реальном приложении здесь валидация hash от Telegram!
         if "{" in init_data:
-             user_data = json.loads(init_data) # Если передали JSON
+             user_data = json.loads(init_data)
              telegram_id = user_data.get("id")
              username = user_data.get("username")
              first_name = user_data.get("first_name")
         else:
-             # Парсинг query string (user=%7B...%7D)
              parsed = {k: v for k, v in [p.split('=', 1) for p in unquote(init_data).split('&') if '=' in p]}
              user_json = parsed.get("user")
-             if not user_json:
-                 return None
-             user_obj = json.loads(unquote(user_json))
-             telegram_id = user_obj.get("id")
-             username = user_obj.get("username")
-             first_name = user_obj.get("first_name")
+             if user_json:
+                 user_obj = json.loads(unquote(user_json))
+                 telegram_id = user_obj.get("id")
+                 username = user_obj.get("username")
+                 first_name = user_obj.get("first_name")
 
     except Exception as e:
         logger.error(f"Auth parse error: {e}")
-        return None
+        raise HTTPException(status_code=401, detail="Invalid authentication data")
 
     if not telegram_id:
-        return None
+        raise HTTPException(status_code=401, detail="Telegram ID missing in auth data")
 
     telegram_id = int(telegram_id)
 
@@ -134,9 +130,7 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         await db.commit()
         await db.refresh(user)
     except IntegrityError:
-        # ВОТ ЗДЕСЬ ИСПРАВЛЕНИЕ:
         # Если мы попали сюда, значит другой запрос успел создать юзера
-        # за миллисекунду до нас. Мы откатываем свою попытку и читаем того, кто уже есть.
         logger.warning(f"Race condition detected for user {telegram_id}. Recovering...")
         await db.rollback()
         
@@ -158,8 +152,8 @@ async def on_startup():
     Здесь мы инициализируем только кэш.
     """
     try:
-        redis = aioredis.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
-        FastAPICache.init(RedisBackend(redis), prefix="fastapi-cache")
+        r = redis_async.from_url(REDIS_URL, encoding="utf8", decode_responses=True)
+        FastAPICache.init(RedisBackend(r), prefix="fastapi-cache")
         logger.info("✅ Redis cache initialized successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize Redis cache: {e}")
