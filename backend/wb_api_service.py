@@ -3,6 +3,7 @@ import aiohttp
 import asyncio
 import json
 import socket
+import os
 import requests # Fallback library
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -18,21 +19,24 @@ class WBApiService:
     Сервис для работы с официальным API Wildberries.
     """
     
-    BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
-    COMMON_URL = "https://common-api.wildberries.ru/api/v1" 
-    ADV_URL = "https://advert-api.wb.ru/adv/v1" 
-    QUESTIONS_URL = "https://feedbacks-api.wildberries.ru/api/v1"
+    # URL вынесены в переменные окружения для гибкости (Fix DNS issues by allowing overrides)
+    BASE_URL = os.getenv("WB_STATS_URL", "https://statistics-api.wildberries.ru/api/v1/supplier")
+    COMMON_URL = os.getenv("WB_COMMON_URL", "https://common-api.wildberries.ru/api/v1") 
+    ADV_URL = os.getenv("WB_ADV_URL", "https://advert-api.wb.ru/adv/v1") 
+    QUESTIONS_URL = os.getenv("WB_QUESTIONS_URL", "https://feedbacks-api.wildberries.ru/api/v1")
     
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 
 
     def _get_connector(self):
         """
-        Создает TCP коннектор с принудительным IPv4.
+        Создает TCP коннектор с принудительным IPv4 и DNS кешированием.
         """
         return aiohttp.TCPConnector(
             family=socket.AF_INET, 
-            ssl=False
+            ssl=False,
+            ttl_dns_cache=300, # Кешируем DNS на 5 минут
+            use_dns_cache=True
         )
 
     async def _request_with_retry(self, url, headers, params=None, method='GET', json_data=None, retries=3):
@@ -41,13 +45,15 @@ class WBApiService:
         if "User-Agent" not in req_headers:
             req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
-        async with aiohttp.ClientSession(connector=self._get_connector()) as session:
-            for attempt in range(retries):
-                try:
+        # Используем one-off сессию или persistent?
+        # Для надежности в контейнерах пересоздаем коннектор при ошибках
+        for attempt in range(retries):
+            try:
+                async with aiohttp.ClientSession(connector=self._get_connector()) as session:
                     if method == 'GET':
-                        coro = session.get(url, headers=req_headers, params=params, timeout=10)
+                        coro = session.get(url, headers=req_headers, params=params, timeout=15)
                     else:
-                        coro = session.post(url, headers=req_headers, json=json_data, timeout=10)
+                        coro = session.post(url, headers=req_headers, json=json_data, timeout=15)
 
                     async with coro as resp:
                         if resp.status == 200:
@@ -61,29 +67,40 @@ class WBApiService:
                             return None
                         else:
                             text = await resp.text()
+                            # Логируем только реальные ошибки, игнорируем 401 (токен протух - это норма)
                             if resp.status >= 500:
-                                logger.warning(f"WB API Server Error {resp.status}: {text[:100]}")
+                                logger.warning(f"WB API Server Error {resp.status} at {url}: {text[:100]}")
                             elif resp.status != 401:
-                                logger.debug(f"WB API Client Error {resp.status}: {text[:100]}")
+                                logger.debug(f"WB API Client Error {resp.status} at {url}: {text[:100]}")
                             
                             if resp.status < 500 and resp.status != 429:
                                 return None 
                                 
-                except Exception as e:
-                    logger.error(f"Request Error ({attempt+1}/{retries}): {e}")
-                    await asyncio.sleep(backoff)
+            except aiohttp.ClientConnectorError as e:
+                logger.error(f"Connection Error ({attempt+1}/{retries}) to {url}: {e}")
+                # DNS ошибки часто лечатся небольшой паузой
+                await asyncio.sleep(backoff)
+                backoff *= 2
+            except Exception as e:
+                logger.error(f"Request Error ({attempt+1}/{retries}): {e}")
+                await asyncio.sleep(backoff)
         
         return None
 
     def _sync_check(self, url, params, headers, name):
-        """Синхронная проверка через requests (более надежна в Docker)"""
+        """Синхронная проверка через requests (более надежна в Docker для Healthcheck)"""
         try:
-            resp = requests.get(url, headers=headers, params=params, timeout=10, verify=False)
+            # Увеличиваем таймаут для DNS резолва
+            resp = requests.get(url, headers=headers, params=params, timeout=20, verify=False)
             if resp.status_code == 200:
                 return True
-            # Если 500 или 429 - считаем токен валидным, так как достучались
+            # Если 500 или 429 - считаем токен валидным, так как достучались до сервера
             if resp.status_code >= 500 or resp.status_code == 429:
                 return True
+            return False
+        except requests.exceptions.ConnectionError as e:
+            # Конкретная ошибка DNS или соединения
+            logger.error(f"Check {name} failed (Connection/DNS): {e}")
             return False
         except Exception as e:
             logger.error(f"Check {name} failed: {e}")
@@ -247,7 +264,10 @@ class WBApiService:
         return None
 
     async def get_current_bid_info(self, token: str, campaign_id: int):
-        url = f"https://advert-api.wb.ru/adv/v0/advert"
+        # Используем V0 API, он иногда стабильнее для бидов
+        url = "https://advert-api.wb.ru/adv/v0/advert" 
+        # Можно также вынести в ENV, но V0/V1 специфичны для методов
+        
         headers = {"Authorization": token}
         params = {"id": campaign_id}
         data = await self._request_with_retry(url, headers, params=params)
@@ -263,7 +283,7 @@ class WBApiService:
         return {"campaignId": campaign_id, "price": 0, "position": 0}
 
     async def update_bid(self, token: str, campaign_id: int, new_bid: int):
-        url = f"https://advert-api.wb.ru/adv/v0/save"
+        url = "https://advert-api.wb.ru/adv/v0/save"
         headers = {"Authorization": token}
         current_info = await self.get_current_bid_info(token, campaign_id)
         if not current_info or "subjectId" not in current_info: return
