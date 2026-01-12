@@ -33,6 +33,11 @@ class User(Base):
     wb_api_token = Column(String, nullable=True)
     last_order_check = Column(DateTime, nullable=True)
     
+    # --- SaaS / Monetization Fields (RF Compliance) ---
+    # Хранение сроков подписки на сервере (не полагаемся на сторы)
+    subscription_expires_at = Column(DateTime, nullable=True)
+    is_recurring = Column(Boolean, default=False)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     
     items = relationship("MonitoredItem", back_populates="owner", cascade="all, delete-orphan")
@@ -40,6 +45,27 @@ class User(Base):
     costs = relationship("ProductCost", back_populates="user", cascade="all, delete-orphan")
     seo_keywords = relationship("SeoPosition", back_populates="user", cascade="all, delete-orphan")
     bidder_logs = relationship("BidderLog", back_populates="user", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
+
+class Payment(Base):
+    """
+    Таблица транзакций (Financial Audit Trail).
+    Необходима для соответствия требованиям фискализации и истории операций.
+    """
+    __tablename__ = "payments"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    provider_payment_id = Column(String, index=True) # ID платежа в ЮKassa
+    amount = Column(Integer) # В копейках или целых, зависит от логики. Будем хранить в рублях.
+    currency = Column(String, default="RUB")
+    status = Column(String) # pending, succeeded, canceled
+    plan_id = Column(String) # pro, business
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    confirmed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="payments")
 
 class ProductCost(Base):
     """

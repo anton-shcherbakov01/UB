@@ -4,6 +4,9 @@ import io
 import logging
 import random
 import redis
+import uuid
+import base64
+import httpx 
 from urllib.parse import parse_qsl
 from fastapi import FastAPI, HTTPException, Header, Depends, Query, Body, Request
 from fastapi.responses import StreamingResponse
@@ -12,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, update
 from fpdf import FPDF
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 
 from parser_service import parser_service
@@ -20,7 +23,7 @@ from analysis_service import analysis_service
 from wb_api_service import wb_api_service
 from bot_service import bot_service
 from auth_service import AuthService
-from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition
+from database import init_db, get_db, User, MonitoredItem, PriceHistory, SearchHistory, ProductCost, SeoPosition, Payment
 from celery_app import celery_app, REDIS_URL
 from tasks import (
     parse_and_save_sku, 
@@ -35,6 +38,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger("API")
+
+# --- YOOKASSA CONFIG ---
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
 # Init Redis for direct reads
 try:
@@ -123,6 +130,11 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
     masked_token = None
     if user.wb_api_token:
         masked_token = user.wb_api_token[:5] + "*" * 10 + user.wb_api_token[-5:]
+    
+    days_left = 0
+    if user.subscription_expires_at:
+        delta = user.subscription_expires_at - datetime.utcnow()
+        days_left = max(0, delta.days)
 
     return {
         "id": user.telegram_id,
@@ -132,7 +144,9 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "is_admin": user.is_admin,
         "items_count": count,
         "has_wb_token": bool(user.wb_api_token),
-        "wb_token_preview": masked_token
+        "wb_token_preview": masked_token,
+        "days_left": days_left,
+        "subscription_expires_at": user.subscription_expires_at
     }
 
 # --- WB API TOKEN MANAGEMENT ---
@@ -535,13 +549,13 @@ async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSe
     await db.commit()
     return {"status": "cleared"}
 
-# --- PAYMENT & STARS (NEW) ---
+# --- PAYMENT (YOOKASSA & TELEGRAM STARS) ---
 
 class StarsPaymentRequest(BaseModel):
     plan_id: str
     amount: int # Stars
 
-class PaymentRequest(BaseModel):
+class YooPaymentRequest(BaseModel):
     plan_id: str
 
 @app.post("/api/payment/stars_link")
@@ -557,7 +571,7 @@ async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_c
         
     return {"invoice_link": link}
 
-# Webhook для обработки успешных платежей от Telegram
+# Webhook для обработки успешных платежей от Telegram Stars
 @app.post("/api/webhook/telegram")
 async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     data = await request.json()
@@ -577,15 +591,177 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             user = await db.get(User, user_id)
             if user:
                 user.subscription_plan = plan
+                # Продлеваем подписку на 30 дней
+                user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
                 db.add(user)
                 await db.commit()
-                logger.info(f"User {user.telegram_id} upgraded to {plan}")
+                logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars")
                 
     return {"ok": True}
 
-@app.post("/api/payment/create")
-async def create_payment(req: PaymentRequest, user: User = Depends(get_current_user)):
-    return {"status": "created", "message": f"Оплата тарифа {req.plan_id.upper()}.", "manager_link": "https://t.me/AAntonShch"}
+# --- YOOKASSA INTEGRATION ---
+
+@app.post("/api/payment/yookassa/create")
+async def create_yookassa_payment(req: YooPaymentRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """
+    Создание платежа через API ЮKassa.
+    Требуется для РФ карт (Visa/Mastercard/Mir).
+    """
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        raise HTTPException(500, "YooKassa config missing")
+
+    # Map plans to prices (RUB)
+    prices = {"pro": 2990, "business": 6990}
+    amount_val = prices.get(req.plan_id)
+    
+    if not amount_val:
+        raise HTTPException(400, "Invalid plan")
+
+    idempotence_key = str(uuid.uuid4())
+    auth_str = f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}"
+    b64_auth = base64.b64encode(auth_str.encode()).decode()
+
+    headers = {
+        "Idempotence-Key": idempotence_key,
+        "Authorization": f"Basic {b64_auth}",
+        "Content-Type": "application/json"
+    }
+
+    # Формируем тело запроса
+    # return_url должен вести обратно в мини-апп или бот
+    # Для Telegram WebApp часто используют t.me ссылку
+    return_url = "https://t.me/WbAnalyticsBot/app" 
+
+    payload = {
+        "amount": {
+            "value": f"{amount_val}.00",
+            "currency": "RUB"
+        },
+        "capture": True,
+        "confirmation": {
+            "type": "redirect",
+            "return_url": return_url
+        },
+        "description": f"Подписка {req.plan_id.upper()} (30 дней)",
+        "metadata": {
+            "user_id": user.id,
+            "telegram_id": user.telegram_id,
+            "plan_id": req.plan_id
+        },
+        "receipt": {
+            "customer": {
+                "email": "user@example.com" # В идеале брать у юзера, но для теста заглушка
+            },
+            "items": [
+                {
+                    "description": f"Тариф {req.plan_id}",
+                    "quantity": "1.00",
+                    "amount": {
+                        "value": f"{amount_val}.00",
+                        "currency": "RUB"
+                    },
+                    "vat_code": "1" # Без НДС или 20%
+                }
+            ]
+        }
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post("https://api.yookassa.ru/v3/payments", json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # Сохраняем "pending" транзакцию в БД
+            new_payment = Payment(
+                user_id=user.id,
+                amount=amount_val,
+                currency="RUB",
+                provider_payment_id=data['id'],
+                status=data['status'],
+                plan_id=req.plan_id
+            )
+            db.add(new_payment)
+            await db.commit()
+            
+            return {
+                "payment_url": data['confirmation']['confirmation_url'],
+                "payment_id": data['id']
+            }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"YooKassa Error: {e.response.text}")
+            raise HTTPException(500, "Payment provider error")
+        except Exception as e:
+            logger.error(f"YooKassa Connection Error: {e}")
+            raise HTTPException(500, "Internal payment error")
+
+@app.post("/api/payment/yookassa/webhook")
+async def yookassa_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Обработка уведомлений от ЮKassa.
+    """
+    try:
+        data = await request.json()
+    except:
+        raise HTTPException(400, "Invalid JSON")
+
+    event = data.get("event")
+    obj = data.get("object", {})
+
+    if event == "payment.succeeded" and obj.get("status") == "succeeded":
+        payment_id = obj.get("id")
+        metadata = obj.get("metadata", {})
+        user_id = metadata.get("user_id")
+        plan_id = metadata.get("plan_id")
+
+        if not user_id or not plan_id:
+            logger.error(f"Webhook metadata missing: {payment_id}")
+            return {"status": "ignored"}
+
+        # 1. Обновляем статус платежа в БД
+        stmt = select(Payment).where(Payment.provider_payment_id == payment_id)
+        payment_record = (await db.execute(stmt)).scalars().first()
+        
+        if payment_record:
+            payment_record.status = "succeeded"
+            payment_record.confirmed_at = datetime.utcnow()
+            db.add(payment_record)
+        else:
+            # Если вдруг вебхук пришел быстрее, чем мы сохранили (редко, но бывает)
+            # или если запись не создалась
+            logger.warning(f"Payment record not found for {payment_id}, creating new.")
+            payment_record = Payment(
+                user_id=int(user_id),
+                provider_payment_id=payment_id,
+                amount=int(float(obj['amount']['value'])),
+                currency="RUB",
+                status="succeeded",
+                plan_id=plan_id,
+                confirmed_at=datetime.utcnow()
+            )
+            db.add(payment_record)
+
+        # 2. Продлеваем подписку пользователю
+        user = await db.get(User, int(user_id))
+        if user:
+            user.subscription_plan = plan_id
+            
+            # Логика продления: Если подписка активна - добавляем 30 дней, иначе от сейчас
+            now = datetime.utcnow()
+            if user.subscription_expires_at and user.subscription_expires_at > now:
+                user.subscription_expires_at += timedelta(days=30)
+            else:
+                user.subscription_expires_at = now + timedelta(days=30)
+            
+            # Флаг рекуррентности (если бы мы настроили автоплатеж, пока False)
+            user.is_recurring = False 
+            
+            db.add(user)
+            await db.commit()
+            logger.info(f"User {user.telegram_id} subscription extended (YooKassa).")
+        
+    return {"status": "ok"}
+
 
 @app.get("/api/user/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
