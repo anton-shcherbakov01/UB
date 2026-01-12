@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 from celery_app import celery_app, REDIS_URL
 from wb_api_service import wb_api_service
 from database import SyncSessionLocal, User, BidderSettings
-from bidder_engine import PIDController, StrategyManager
+from bidder_engine import PIDController
 from .utils import log_bidder_action_sync
 
 logger = logging.getLogger("Tasks-Bidder")
