@@ -11,6 +11,10 @@ psycopg2-binary
 aiohttp
 requests
 fpdf2
+fastapi-cache2
+beautifulsoup4
+pydantic
+pydantic-settings
 greenlet
 clickhouse-connect
 pandas
@@ -20,4 +24,6 @@ numpy
 scipy
 sentence-transformers
 scikit-learn
+plotly
+matplotlib
 httpx
