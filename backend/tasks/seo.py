@@ -10,8 +10,8 @@ from .utils import save_history_sync, save_seo_position_sync
 logger = logging.getLogger("Tasks-SEO")
 
 @celery_app.task(bind=True, name="analyze_reviews_task")
-def analyze_reviews_task(self, sku: int, limit: int = 100, user_id: int = None):
-    self.update_state(state='PROGRESS', meta={'status': f'Парсинг {limit} отзывов...'})
+def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
+    self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
     
     product_info = parser_service.get_full_product_info(sku, limit)
     if product_info.get("status") == "error":
@@ -21,8 +21,6 @@ def analyze_reviews_task(self, sku: int, limit: int = 100, user_id: int = None):
     
     reviews = product_info.get('reviews', [])
     product_name = product_info.get('name', f"Товар {sku}")
-    
-    # Analyze
     ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
 
     final_result = {

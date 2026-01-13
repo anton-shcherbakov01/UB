@@ -312,29 +312,12 @@ class AnalysisService:
                 "strategy": ["Соберите первые отзывы"]
             }
 
-        # --- UPDATED: Умная склейка отзывов для большого объема данных ---
         reviews_text = ""
-        # Увеличиваем лимит контекста, так как DeepSeek V3 поддерживает большой контекст
-        max_chars = 12000 
-        
-        # Сначала берем самые информативные (длинные) отзывы
-        sorted_reviews = sorted(reviews, key=lambda x: len(x['text']), reverse=True)
-        
-        # Если отзывов ОЧЕНЬ много (>200), берем микс из ТОП длинных (для информативности)
-        # и ТОП новых (чтобы не анализировать только старые "портянки")
-        if len(reviews) > 200:
-            # Например: 50 самых длинных + 50 самых первых в списке (обычно это новые)
-            # Примечание: предполагается, что reviews приходят отсортированные по дате (по умолчанию WB API)
-            top_reviews = sorted_reviews[:50] + reviews[:50]
-        else:
-            top_reviews = sorted_reviews
-
-        for r in top_reviews:
+        for r in reviews[:40]:
             clean_text = r['text'].replace('\n', ' ').strip()
-            # Фильтруем совсем короткие отписки типа "Класс", "Норм"
             if len(clean_text) > 5:
                 text = f"- {clean_text} (Оценка: {r['rating']})\n"
-                if len(reviews_text) + len(text) < max_chars: 
+                if len(reviews_text) + len(text) < 4000: 
                     reviews_text += text
                 else: 
                     break
@@ -343,7 +326,7 @@ class AnalysisService:
         Роль: Ты Lead Data Analyst в E-commerce. Твоя специализация — ABSA и Психография.
         
         Товар: "{product_name}".
-        Массив отзывов ({len(reviews)} всего, ниже выборка для анализа):
+        Отзывы покупателей:
         {reviews_text}
 
         Выполни глубокий анализ по двум направлениям:
@@ -378,9 +361,7 @@ class AnalysisService:
             }},
             "dominant_type": "Emotional",
             "infographic_recommendation": "Текст рекомендации...",
-            "global_summary": "Общее резюме (1 предложение)",
-            "flaws": ["Кратко недостатки"],
-            "strategy": ["Кратко точки роста"]
+            "global_summary": "Общее резюме (1 предложение)"
         }}
         """
         
@@ -399,19 +380,16 @@ class AnalysisService:
         # Post-Processing
         aspects = ai_response.get("aspects", [])
         
-        # Если AI не вернул flaws/strategy в JSON, генерируем их из аспектов
-        if not ai_response.get("flaws"):
-            negative_aspects = sorted(
-                [a for a in aspects if a.get('sentiment_score', 5) < 4.5], 
-                key=lambda x: x['sentiment_score']
-            )
-            ai_response["flaws"] = [f"{a['aspect']}: {a['snippet'][:50]}..." for a in negative_aspects[:5]]
+        negative_aspects = sorted(
+            [a for a in aspects if a.get('sentiment_score', 5) < 4.5], 
+            key=lambda x: x['sentiment_score']
+        )
+        ai_response["flaws"] = [f"{a['aspect']}: {a['snippet'][:50]}..." for a in negative_aspects[:5]]
         
-        if not ai_response.get("strategy"):
-            positive_strategies = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 0) < 7.5 and a.get('actionable_advice')]
-            ai_response["strategy"] = positive_strategies[:7] if positive_strategies else ["Масштабируйте продажи"]
+        positive_strategies = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 0) < 7.5]
+        ai_response["strategy"] = positive_strategies[:7] if positive_strategies else ["Масштабируйте продажи"]
 
-        if not ai_response.get("flaws"):
+        if not ai_response["flaws"]:
             ai_response["flaws"] = ["Критических проблем не выявлено"]
 
         return ai_response
