@@ -22,7 +22,7 @@ class ProductParser:
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         total_qty = 0
 
-        # 1. Получаем статику + ОСТАТКИ из card.json (Async in Sync wrapper)
+        # 1. Получаем статику + ОСТАТКИ из card.json
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -68,7 +68,6 @@ class ProductParser:
                         wallet = int(price.get('clientPriceU', 0)/100) or int(price.get('totalPrice', 0)/100)
                         
                         if wallet > 0:
-                            # Допарсиваем остатки если не нашли через API
                             if total_qty == 0:
                                 try:
                                     sizes = d.get('sizes', [])
@@ -115,9 +114,10 @@ class ProductParser:
         
         return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
-    def get_full_product_info(self, sku: int, limit: int = 50):
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (LIMIT: {limit}) ---")
+    def get_full_product_info(self, sku: int, limit: int = 100):
+        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (TARGET: {limit}) ---")
         try:
+            # 1. Получаем root_id (imt_id)
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             static_data = loop.run_until_complete(self.basket_finder.find_card_json(sku))
@@ -125,51 +125,96 @@ class ProductParser:
 
             if not static_data: 
                 return {"status": "error", "message": "Card not found"}
+            
+            # root_id критически важен для API отзывов
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
-            if not root_id: return {"status": "error", "message": "Root ID not found"}
+            if not root_id: 
+                return {"status": "error", "message": "Root ID not found"}
 
-            endpoints = [
-                f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
-                f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}",
-                f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={limit}&skip=0&nmId={sku}&imtId={root_id}"
-            ]
+            all_reviews = []
+            rating_value = 0.0
             
-            feed_data = None
+            # 2. Пытаемся получить через API с пагинацией (это самый надежный способ получить много)
+            # WB API часто отдает максимум 100 за раз, поэтому идем циклом
             headers = {"User-Agent": get_random_ua()}
+            batch_size = 100 
+            is_api_working = True
             
-            for url in endpoints:
+            # Если запросили много, используем API
+            current_skip = 0
+            
+            while len(all_reviews) < limit and is_api_working:
+                # Ограничиваем batch если осталось добрать меньше 100
+                take = min(batch_size, limit - len(all_reviews))
+                
+                api_url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={take}&skip={current_skip}&nmId={sku}&imtId={root_id}"
+                
                 try:
-                    r = requests.get(url, headers=headers, timeout=10)
+                    r = requests.get(api_url, headers=headers, timeout=10)
                     if r.status_code == 200:
-                        feed_data = r.json()
-                        # Если получили данные и их достаточно (или это feedbacks-api который отдает сколько просили), то ок
-                        # Для feedbacks1 обычно отдается много, проверим длину ниже
-                        break
-                except: continue
-            
-            if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
+                        data = r.json()
+                        feedbacks = data.get('feedbacks') or data.get('data', {}).get('feedbacks') or []
+                        
+                        # Сохраняем рейтинг из первого запроса
+                        if current_skip == 0:
+                            rating_value = data.get('valuation') or data.get('data', {}).get('valuation', 0)
 
-            raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
-            valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
+                        if not feedbacks:
+                            # Отзывы кончились
+                            break
+                            
+                        for f in feedbacks:
+                            txt = f.get('text', '')
+                            if txt:
+                                all_reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                        
+                        current_skip += len(feedbacks)
+                        time.sleep(0.2) # Вежливость к API
+                    else:
+                        logger.warning(f"API Error {r.status_code}")
+                        is_api_working = False
+                except Exception as e:
+                    logger.error(f"API Exception: {e}")
+                    is_api_working = False
             
-            reviews = []
-            for f in raw_feedbacks:
-                txt = f.get('text', '')
-                if txt:
-                    reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
-                # Break only if we strictly reached the limit
-                if len(reviews) >= limit: break
-            
+            # 3. Fallback: Если API не сработал или вернул 0 (а мы знаем что товар существует), пробуем статику
+            # Это спасет, если feedbacks-api лежит, но статические файлы доступны
+            if len(all_reviews) == 0:
+                logger.info("API returned 0 reviews or failed. Trying static fallback.")
+                static_endpoints = [
+                    f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
+                    f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}"
+                ]
+                
+                for url in static_endpoints:
+                    try:
+                        r = requests.get(url, headers=headers, timeout=10)
+                        if r.status_code == 200:
+                            feed_data = r.json()
+                            raw = feed_data.get('feedbacks') or []
+                            if not raw: continue
+                            
+                            rating_value = feed_data.get('valuation') or 0
+                            for f in raw:
+                                txt = f.get('text', '')
+                                if txt:
+                                    all_reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                                if len(all_reviews) >= limit: break
+                            
+                            if len(all_reviews) > 0: break
+                    except: continue
+
             return {
                 "sku": sku,
                 "image": static_data.get('image_url'),
-                "rating": float(valuation),
-                "reviews": reviews,
-                "reviews_count": len(reviews),
+                "rating": float(rating_value),
+                "reviews": all_reviews[:limit], # Обрезаем, если вдруг взяли лишнего
+                "reviews_count": len(all_reviews),
                 "status": "success"
             }
 
         except Exception as e:
+            logger.error(f"Full info parse error: {e}")
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):
