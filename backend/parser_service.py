@@ -39,8 +39,8 @@ GEO_ZONES = {
 
 class SeleniumWBParser:
     """
-    Микросервис парсинга Wildberries v14.5.
-    - [UPD] Переход на API search.wb.ru для трекинга позиций (вместо Selenium).
+    Микросервис парсинга Wildberries v14.6.
+    - [UPD] Улучшено получение метаданных (API Fallback для отзывов).
     - [NEW] Geo Tracking (поддержка параметра dest).
     - [NEW] Разделение Органической и Рекламной выдачи.
     - [UPD] Поддержка пагинации отзывов (Parse All).
@@ -202,12 +202,37 @@ class SeleniumWBParser:
         if not card_data:
             return {"status": "error", "message": "Товар не найден"}
 
+        # Пытаемся получить кол-во отзывов из карточки
+        count = card_data.get('feedbacks', 0)
+        root_id = card_data.get('root') or card_data.get('root_id') or card_data.get('imt_id')
+
+        # Fallback: Если в json корзины 0, но товар существует, пробуем API отзывов
+        # Часто бывает, что в card.json поле feedbacks отстает или равно 0
+        if root_id:
+            try:
+                # Пробуем получить точное число через API отзывов
+                # Используем take=0, нам нужны только метаданные
+                url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take=0&skip=0&nmId={sku}&imtId={root_id}"
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=3) as resp:
+                        if resp.status == 200:
+                            fdata = await resp.json()
+                            # Поля могут называться по-разному в разных версиях API
+                            api_count = fdata.get('feedbackCountWithText') or fdata.get('feedbackCount')
+                            
+                            if api_count is not None and api_count > count:
+                                count = api_count
+                                logger.info(f"Updated feedback count for {sku} from API: {count}")
+            except Exception as e:
+                logger.warning(f"Meta Fallback Error for {sku}: {e}")
+
         return {
             "status": "success",
             "sku": sku,
             "name": card_data.get('imt_name') or card_data.get('subj_name'),
             "image": card_data.get('image_url'),
-            "feedbacks_count": card_data.get('feedbacks', 0),
+            "feedbacks_count": count,
             "rating": card_data.get('valuation', 0)
         }
 
@@ -321,9 +346,6 @@ class SeleniumWBParser:
 
             all_reviews = []
             
-            # Если лимит маленький (<100), используем стандартные эндпоинты статики
-            # Если лимит большой, используем пагинацию через API v1
-            
             headers = {"User-Agent": random.choice(self.user_agents)}
             
             # Стратегия: идем по пагинации пока не соберем limit
@@ -353,11 +375,10 @@ class SeleniumWBParser:
                     
                     fetched += len(feedbacks)
                     
-                    # Если вернулось меньше чем просили, значит это конец
                     if len(feedbacks) < take:
                         break
                         
-                    time.sleep(0.5) # Вежливость
+                    time.sleep(0.5) 
                     
                 except Exception as e:
                     logger.error(f"Review iteration error: {e}")

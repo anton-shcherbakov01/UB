@@ -30,8 +30,13 @@ const AIAnalysisPage = ({ user }) => {
             if (!res.ok) throw new Error("Товар не найден");
             const data = await res.json();
             setProductMeta(data);
-            // Default limit: 100 or total if less
-            setParseLimit(Math.min(100, data.feedbacks_count));
+            
+            // Защита: Если отзывов 0 или очень мало
+            if (data.feedbacks_count > 0) {
+                 setParseLimit(Math.min(100, data.feedbacks_count));
+            } else {
+                 setParseLimit(0);
+            }
         } catch (e) {
             alert(e.message);
         } finally {
@@ -112,6 +117,9 @@ const AIAnalysisPage = ({ user }) => {
         if (t.includes('skeptic')) return <ShieldCheck size={18} className="text-slate-500" />;
         return <Users size={18} />;
     };
+    
+    // Рассчитываем реальный максимум для слайдера (защита от null)
+    const sliderMax = productMeta ? Math.min(5000, productMeta.feedbacks_count) : 100;
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -162,32 +170,39 @@ const AIAnalysisPage = ({ user }) => {
                              </div>
                         </div>
 
-                        <div className="mb-4">
-                            <div className="flex justify-between items-end mb-2">
-                                <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
-                                    <Sliders size={12}/> Глубина анализа
-                                </label>
-                                <span className="text-lg font-black text-violet-600">{parseLimit} шт.</span>
+                        {productMeta.feedbacks_count > 0 ? (
+                            <div className="mb-4">
+                                <div className="flex justify-between items-end mb-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
+                                        <Sliders size={12}/> Глубина анализа
+                                    </label>
+                                    <span className="text-lg font-black text-violet-600">{parseLimit} шт.</span>
+                                </div>
+                                <input 
+                                    type="range" 
+                                    min="10" 
+                                    max={Math.max(10, sliderMax)} // Защита: min=10, значит max должен быть >= 10
+                                    step="10"
+                                    value={parseLimit} 
+                                    onChange={e => setParseLimit(Number(e.target.value))} 
+                                    className="w-full accent-violet-600 h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
+                                    <span>10</span>
+                                    <span>{sliderMax}</span>
+                                </div>
                             </div>
-                            <input 
-                                type="range" 
-                                min="10" 
-                                max={Math.min(5000, productMeta.feedbacks_count)} 
-                                step="10"
-                                value={parseLimit} 
-                                onChange={e => setParseLimit(Number(e.target.value))} 
-                                className="w-full accent-violet-600 h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer"
-                            />
-                            <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-medium">
-                                <span>10</span>
-                                <span>{Math.min(5000, productMeta.feedbacks_count)}</span>
+                        ) : (
+                            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-xl text-sm font-medium border border-red-100 flex items-center gap-2">
+                                <ThumbsDown size={16}/>
+                                Отзывы не найдены. Анализ невозможен.
                             </div>
-                        </div>
+                        )}
 
                         <button 
                             onClick={runAnalysis} 
-                            disabled={loading} 
-                            className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-violet-200 active:scale-95 transition-transform flex justify-center items-center gap-2"
+                            disabled={loading || productMeta.feedbacks_count === 0} 
+                            className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-violet-200 active:scale-95 transition-transform flex justify-center items-center gap-2 disabled:opacity-50 disabled:active:scale-100"
                         >
                             {loading ? <><Loader2 className="animate-spin" /> {status}</> : 'Запустить анализ'}
                         </button>
