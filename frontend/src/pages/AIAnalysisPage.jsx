@@ -36,10 +36,12 @@ const AIAnalysisPage = ({ user }) => {
             
             // Умная установка лимита
             const total = data.total_reviews || 0;
-            // Если отзывов меньше 100, ставим сколько есть. Если больше, ставим 100 как дефолт.
+            
+            // Если кол-во известно: ставим 100 или максимум (если меньше 100)
+            // Если неизвестно (0): ставим безопасные 50 для старта
             let safeLimit = 100;
-            if (total < 100) safeLimit = total;
-            if (safeLimit === 0) safeLimit = 10; // Fallback чтобы не крашилось
+            if (total > 0 && total < 100) safeLimit = total;
+            if (total === 0) safeLimit = 50; 
             
             setReviewLimit(safeLimit);
             setStep('config');
@@ -65,7 +67,6 @@ const AIAnalysisPage = ({ user }) => {
             const taskId = data.task_id;
 
             let attempts = 0;
-            // Увеличиваем таймаут, так как 5000 отзывов парсятся дольше
             while(attempts < 120) {
                 setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
                 await new Promise(r => setTimeout(r, 2000));
@@ -125,13 +126,26 @@ const AIAnalysisPage = ({ user }) => {
     // Хелпер для расчета параметров слайдера
     const getSliderParams = () => {
         if (!productMeta) return { max: 100, min: 10, step: 10 };
+        
         const total = productMeta.total_reviews || 0;
-        const max = total > 5000 ? 5000 : total;
-        // Если отзывов очень мало (например 5), min должен быть 1, шаг 1
-        const min = total < 10 ? 1 : 10;
-        const step = total < 50 ? 1 : 10;
+        
+        // ЛОГИКА МАКСИМУМА:
+        // Если отзывов 0 (неизвестно) -> ставим 200 (как вы просили).
+        // Если известно -> ставим реальное количество.
+        const max = total > 0 ? total : 200;
+
+        // Min и Step
+        let min = 10;
+        if (max < 10) min = 1; // Для совсем новых товаров
+        
+        let step = 10;
+        if (max > 1000) step = 50;
+        if (max < 50) step = 1;
+
         return { max, min, step };
     };
+
+    const sParams = getSliderParams();
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -177,35 +191,37 @@ const AIAnalysisPage = ({ user }) => {
                             {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
                             <div>
                                 <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
-                                <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
-                                    Всего отзывов: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span>
-                                </div>
+                                {/* Если отзывов 0 (неизвестно), мы просто не показываем бейдж с количеством, чтобы не пугать "нулями" */}
+                                {productMeta.total_reviews > 0 && (
+                                    <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
+                                        Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
+                                    </div>
+                                )}
                             </div>
                         </div>
 
                         <div className="mb-6 px-2">
                             <div className="flex justify-between items-center mb-4">
                                 <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
-                                    <Settings2 size={12}/> Выборка (последние)
+                                    <Settings2 size={12}/> Глубина анализа
                                 </label>
                                 <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
                                     {reviewLimit} шт.
                                 </span>
                             </div>
                             
-                            {/* SLIDER FIX: Removed appearance-none, added dynamic min/max/step */}
                             <input 
                                 type="range" 
-                                min={getSliderParams().min}
-                                max={getSliderParams().max}
-                                step={getSliderParams().step}
+                                min={sParams.min}
+                                max={sParams.max}
+                                step={sParams.step}
                                 value={reviewLimit} 
                                 onChange={(e) => setReviewLimit(Number(e.target.value))}
                                 className="w-full h-2 bg-slate-200 rounded-lg cursor-pointer accent-violet-600"
                             />
                             <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-bold px-1">
-                                <span>{getSliderParams().min}</span>
-                                <span>{getSliderParams().max} (Max)</span>
+                                <span>{sParams.min}</span>
+                                <span>{sParams.max} (Max)</span>
                             </div>
                         </div>
 
