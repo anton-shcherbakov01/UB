@@ -19,7 +19,7 @@ const AIAnalysisPage = ({ user }) => {
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
 
-    // СБРОС СОСТОЯНИЯ (НОВЫЙ АНАЛИЗ)
+    // СБРОС СОСТОЯНИЯ
     const handleReset = () => {
         setSku('');
         setStep('input');
@@ -27,7 +27,6 @@ const AIAnalysisPage = ({ user }) => {
         setResult(null);
         setReviewLimit(100);
         setStatus('');
-        // Скролл наверх для мобилок
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
@@ -45,7 +44,6 @@ const AIAnalysisPage = ({ user }) => {
             
             setProductMeta(data);
             
-            // Умная установка лимита
             const total = data.total_reviews || 0;
             
             let safeLimit = 100;
@@ -164,7 +162,6 @@ const AIAnalysisPage = ({ user }) => {
                         <Clock size={20}/>
                     </button>
                     
-                    {/* Кнопка сброса появляется только если мы не на старте */}
                     {step !== 'input' && (
                         <button 
                             onClick={handleReset}
@@ -179,95 +176,97 @@ const AIAnalysisPage = ({ user }) => {
 
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-            {/* MAIN CARD */}
-            <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
-                
-                {/* Step 1: Input */}
-                {step === 'input' && (
-                    <>
-                        <input 
-                            type="number" 
-                            value={sku} 
-                            onChange={e => setSku(e.target.value)} 
-                            placeholder="Введите Артикул WB" 
-                            className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all text-lg"
-                            onKeyDown={(e) => e.key === 'Enter' && handleCheckProduct()}
-                        />
-                        <button 
-                            onClick={handleCheckProduct} 
-                            disabled={metaLoading}
-                            className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2 text-lg"
-                        >
-                            {metaLoading ? <Loader2 className="animate-spin" /> : <><Search size={20}/> Найти товар</>}
-                        </button>
-                    </>
-                )}
-
-                {/* Step 2: Configuration */}
-                {step === 'config' && productMeta && (
-                    <div className="animate-in fade-in zoom-in-95 duration-300">
-                        <div className="flex gap-4 mb-6 bg-slate-50 p-3 rounded-2xl">
-                            {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
-                            <div>
-                                <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
-                                {productMeta.total_reviews > 0 && (
-                                    <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
-                                        Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="mb-6 px-2">
-                            <div className="flex justify-between items-center mb-4">
-                                <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
-                                    <Settings2 size={12}/> Глубина анализа
-                                </label>
-                                <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
-                                    {reviewLimit} шт.
-                                </span>
-                            </div>
-                            
+            {/* MAIN INPUT CARD - Скрываем полностью, если есть результат */}
+            {step !== 'result' && (
+                <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
+                    
+                    {/* Step 1: Input */}
+                    {step === 'input' && (
+                        <>
                             <input 
-                                type="range" 
-                                min={sParams.min}
-                                max={sParams.max}
-                                step={sParams.step}
-                                value={reviewLimit} 
-                                onChange={(e) => setReviewLimit(Number(e.target.value))}
-                                className="w-full h-2 bg-slate-200 rounded-lg cursor-pointer accent-violet-600"
+                                type="number" 
+                                value={sku} 
+                                onChange={e => setSku(e.target.value)} 
+                                placeholder="Введите Артикул WB" 
+                                className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all text-lg"
+                                onKeyDown={(e) => e.key === 'Enter' && handleCheckProduct()}
                             />
-                            <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-bold px-1">
-                                <span>{sParams.min}</span>
-                                <span>{sParams.max} (Max)</span>
+                            <button 
+                                onClick={handleCheckProduct} 
+                                disabled={metaLoading}
+                                className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2 text-lg"
+                            >
+                                {metaLoading ? <Loader2 className="animate-spin" /> : <><Search size={20}/> Найти товар</>}
+                            </button>
+                        </>
+                    )}
+
+                    {/* Step 2: Configuration */}
+                    {step === 'config' && productMeta && (
+                        <div className="animate-in fade-in zoom-in-95 duration-300">
+                            <div className="flex gap-4 mb-6 bg-slate-50 p-3 rounded-2xl">
+                                {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
+                                <div>
+                                    <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
+                                    {productMeta.total_reviews > 0 && (
+                                        <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
+                                            Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="mb-6 px-2">
+                                <div className="flex justify-between items-center mb-4">
+                                    <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
+                                        <Settings2 size={12}/> Глубина анализа
+                                    </label>
+                                    <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
+                                        {reviewLimit} шт.
+                                    </span>
+                                </div>
+                                
+                                <input 
+                                    type="range" 
+                                    min={sParams.min}
+                                    max={sParams.max}
+                                    step={sParams.step}
+                                    value={reviewLimit} 
+                                    onChange={(e) => setReviewLimit(Number(e.target.value))}
+                                    className="w-full h-2 bg-slate-200 rounded-lg cursor-pointer accent-violet-600"
+                                />
+                                <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-bold px-1">
+                                    <span>{sParams.min}</span>
+                                    <span>{sParams.max} (Max)</span>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={() => setStep('input')}
+                                    className="flex-1 bg-slate-100 text-slate-500 p-4 rounded-xl font-bold active:scale-95 transition-transform"
+                                >
+                                    Назад
+                                </button>
+                                <button 
+                                    onClick={runAnalysis} 
+                                    className="flex-[2] bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-violet-200 active:scale-95 transition-transform flex justify-center items-center gap-2"
+                                >
+                                    <Sparkles size={18}/> Анализ
+                                </button>
                             </div>
                         </div>
+                    )}
 
-                        <div className="flex gap-2">
-                            <button 
-                                onClick={() => setStep('input')}
-                                className="flex-1 bg-slate-100 text-slate-500 p-4 rounded-xl font-bold active:scale-95 transition-transform"
-                            >
-                                Назад
-                            </button>
-                            <button 
-                                onClick={runAnalysis} 
-                                className="flex-[2] bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-violet-200 active:scale-95 transition-transform flex justify-center items-center gap-2"
-                            >
-                                <Sparkles size={18}/> Анализ
-                            </button>
+                    {/* Loading State */}
+                    {step === 'analyzing' && (
+                        <div className="py-8 text-center animate-pulse">
+                            <Loader2 size={48} className="animate-spin text-violet-600 mx-auto mb-4" />
+                            <p className="text-slate-500 font-medium text-sm">{status}</p>
                         </div>
-                    </div>
-                )}
-
-                {/* Loading State */}
-                {step === 'analyzing' && (
-                     <div className="py-8 text-center animate-pulse">
-                        <Loader2 size={48} className="animate-spin text-violet-600 mx-auto mb-4" />
-                        <p className="text-slate-500 font-medium text-sm">{status}</p>
-                     </div>
-                )}
-            </div>
+                    )}
+                </div>
+            )}
 
             {/* Step 3: Result */}
             {step === 'result' && result && (
@@ -407,7 +406,6 @@ const AIAnalysisPage = ({ user }) => {
                         </div>
                     </div>
 
-                    {/* Большая кнопка нового анализа в конце */}
                     <button 
                         onClick={handleReset}
                         className="w-full bg-slate-100 text-slate-500 p-4 rounded-2xl font-bold active:scale-95 transition-all hover:bg-slate-200 hover:text-slate-700 flex items-center justify-center gap-2"
