@@ -33,9 +33,15 @@ const AIAnalysisPage = ({ user }) => {
             if (res.status !== 200) throw new Error(data.detail || "Ошибка проверки");
             
             setProductMeta(data);
-            // Если отзывов мало, ставим лимит на все, иначе на 100 по дефолту
-            const max = data.total_reviews || 100;
-            setReviewLimit(max > 100 ? 100 : max);
+            
+            // Умная установка лимита
+            const total = data.total_reviews || 0;
+            // Если отзывов меньше 100, ставим сколько есть. Если больше, ставим 100 как дефолт.
+            let safeLimit = 100;
+            if (total < 100) safeLimit = total;
+            if (safeLimit === 0) safeLimit = 10; // Fallback чтобы не крашилось
+            
+            setReviewLimit(safeLimit);
             setStep('config');
         } catch (e) {
             alert(e.message);
@@ -59,7 +65,7 @@ const AIAnalysisPage = ({ user }) => {
             const taskId = data.task_id;
 
             let attempts = 0;
-            // Увеличим время ожидания, так как парсинг 5000 отзывов займет время
+            // Увеличиваем таймаут, так как 5000 отзывов парсятся дольше
             while(attempts < 120) {
                 setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
                 await new Promise(r => setTimeout(r, 2000));
@@ -116,6 +122,17 @@ const AIAnalysisPage = ({ user }) => {
         return <Users size={18} />;
     };
 
+    // Хелпер для расчета параметров слайдера
+    const getSliderParams = () => {
+        if (!productMeta) return { max: 100, min: 10, step: 10 };
+        const total = productMeta.total_reviews || 0;
+        const max = total > 5000 ? 5000 : total;
+        // Если отзывов очень мало (например 5), min должен быть 1, шаг 1
+        const min = total < 10 ? 1 : 10;
+        const step = total < 50 ? 1 : 10;
+        return { max, min, step };
+    };
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-between items-center">
@@ -130,7 +147,6 @@ const AIAnalysisPage = ({ user }) => {
 
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-            {/* Input & Configuration Block */}
             <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
                 
                 {/* Step 1: Input */}
@@ -177,18 +193,19 @@ const AIAnalysisPage = ({ user }) => {
                                 </span>
                             </div>
                             
+                            {/* SLIDER FIX: Removed appearance-none, added dynamic min/max/step */}
                             <input 
                                 type="range" 
-                                min="10" 
-                                max={productMeta.total_reviews > 5000 ? 5000 : productMeta.total_reviews} 
-                                step="10" 
+                                min={getSliderParams().min}
+                                max={getSliderParams().max}
+                                step={getSliderParams().step}
                                 value={reviewLimit} 
                                 onChange={(e) => setReviewLimit(Number(e.target.value))}
-                                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
+                                className="w-full h-2 bg-slate-200 rounded-lg cursor-pointer accent-violet-600"
                             />
                             <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-bold px-1">
-                                <span>10</span>
-                                <span>{productMeta.total_reviews > 5000 ? 5000 : productMeta.total_reviews} (Max)</span>
+                                <span>{getSliderParams().min}</span>
+                                <span>{getSliderParams().max} (Max)</span>
                             </div>
                         </div>
 
@@ -218,7 +235,7 @@ const AIAnalysisPage = ({ user }) => {
                 )}
             </div>
 
-            {/* Step 3: Result (Same as before, just ensuring it renders when step === result) */}
+            {/* Step 3: Result */}
             {step === 'result' && result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
                     <div className="flex justify-between items-center">
