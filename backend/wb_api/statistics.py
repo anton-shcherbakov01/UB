@@ -6,9 +6,54 @@ from .base import WBApiBase
 
 class WBStatisticsMixin(WBApiBase):
     
+    async def get_token_scopes(self, token: str) -> dict:
+        """
+        Диагностика доступных разделов API для данного токена.
+        Возвращает словарь с флагами доступа.
+        """
+        headers = {"Authorization": token}
+        results = {
+            "statistics": False,
+            "standard": False,
+            "promotion": False,
+            "questions": False
+        }
+
+        async with aiohttp.ClientSession() as session:
+            # 1. Проверка Статистики (Используем /orders как маркер)
+            try:
+                # Тайм-аут короткий, нам нужен только статус код
+                async with session.get(f"{self.BASE_URL}/orders", 
+                                       params={"dateFrom": datetime.now().strftime("%Y-%m-%d")}, 
+                                       headers=headers, timeout=5) as r:
+                    # 401 = Unauthorized, 200/429 = OK (доступ есть)
+                    results["statistics"] = r.status != 401
+            except: 
+                pass
+
+            # 2. Проверка Контента/Общих (Standard) - тарифы
+            try:
+                async with session.get(f"{self.COMMON_URL}/tariffs/box", 
+                                       params={"date": datetime.now().strftime("%Y-%m-%d")}, 
+                                       headers=headers, timeout=5) as r:
+                    results["standard"] = r.status != 401
+            except: 
+                pass
+
+            # 3. Проверка Рекламы (Promotion)
+            try:
+                async with session.get(f"{self.ADV_URL}/promotion/count", 
+                                       headers=headers, timeout=5) as r:
+                    results["promotion"] = r.status != 401
+            except: 
+                pass
+
+        return results
+
     async def get_dashboard_stats(self, token: str):
         """Сводка: Заказы сегодня и остатки"""
-        if not token: return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
+        if not token: 
+            return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
 
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")

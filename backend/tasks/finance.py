@@ -25,6 +25,22 @@ class FinancialSyncProcessor:
     WB_ORDERS_URL = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
     BATCH_SIZE = 5000
     
+    # Define valid columns strictly matching ClickHouse schema
+    VALID_COLUMNS = {
+        'rrd_id', 'realizationreport_id', 'supplier_id', 'gi_id', 'subject_name', 
+        'nm_id', 'brand_name', 'sa_name', 'ts_name', 'barcode', 'doc_type_name', 
+        'office_name', 'supplier_oper_name', 'site_country', 'create_dt', 
+        'order_dt', 'sale_dt', 'rr_dt', 'quantity', 'retail_price', 
+        'retail_amount', 'sale_percent', 'commission_percent', 
+        'retail_price_withdisc_rub', 'delivery_amount', 'return_amount', 
+        'delivery_rub', 'gi_box_type_name', 'product_discount_for_report', 
+        'supplier_promo', 'rid', 'ppvz_spp_prc', 'ppvz_kvw_prc_base', 
+        'ppvz_kvw_prc', 'sup_rating_prc_up', 'is_kgvp_v2', 'ppvz_sales_commission', 
+        'ppvz_for_pay', 'ppvz_reward', 'acquiring_fee', 'acquiring_bank', 
+        'ppvz_vw', 'ppvz_vw_nds', 'ppvz_office_id', 'penalty', 
+        'additional_payment', 'rebill_logistic_cost'
+    }
+
     def __init__(self, token: str, user_id: int):
         self.token = token
         self.user_id = user_id
@@ -50,9 +66,15 @@ class FinancialSyncProcessor:
         return None
 
     def _flush_buffer(self):
-        if not self.buffer: return
+        if not self.buffer: 
+            return
         try:
             df = pd.DataFrame(self.buffer)
+            
+            # Filter only valid columns to avoid "Unrecognized column" errors
+            valid_cols = [c for c in df.columns if c in self.VALID_COLUMNS]
+            df = df[valid_cols]
+
             numeric_cols = ['retail_price', 'retail_amount', 'retail_price_withdisc_rub', 'delivery_rub', 'ppvz_for_pay', 'penalty', 'additional_payment', 'ppvz_sales_commission', 'ppvz_reward']
             for col in numeric_cols:
                 if col in df.columns:
@@ -64,8 +86,9 @@ class FinancialSyncProcessor:
                     df[col] = pd.to_datetime(df[col], errors='coerce').fillna(datetime.now())
 
             records = df.to_dict('records')
-            ch_service.insert_reports(records)
-            logger.info(f" flushed {len(records)} records to ClickHouse for user {self.user_id}")
+            if records:
+                ch_service.insert_reports(records)
+                logger.info(f" flushed {len(records)} records to ClickHouse for user {self.user_id}")
             self.buffer = []
         except Exception as e:
             logger.error(f"Failed to flush buffer: {e}")
