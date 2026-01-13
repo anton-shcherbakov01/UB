@@ -33,7 +33,7 @@ class ProductParser:
                 static_info["name"] = data.get('imt_name') or data.get('subj_name')
                 static_info["brand"] = data.get('selling', {}).get('brand_name')
                 static_info["image"] = data.get('image_url')
-                
+                 
                 sizes = data.get('sizes', [])
                 for size in sizes:
                     stocks = size.get('stocks', [])
@@ -116,14 +116,15 @@ class ProductParser:
         return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
+        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (LIMIT: {limit}) ---")
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             static_data = loop.run_until_complete(self.basket_finder.find_card_json(sku))
             loop.close()
 
-            if not static_data: return {"status": "error", "message": "Card not found"}
+            if not static_data: 
+                return {"status": "error", "message": "Card not found"}
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID not found"}
 
@@ -141,6 +142,8 @@ class ProductParser:
                     r = requests.get(url, headers=headers, timeout=10)
                     if r.status_code == 200:
                         feed_data = r.json()
+                        # Если получили данные и их достаточно (или это feedbacks-api который отдает сколько просили), то ок
+                        # Для feedbacks1 обычно отдается много, проверим длину ниже
                         break
                 except: continue
             
@@ -154,6 +157,7 @@ class ProductParser:
                 txt = f.get('text', '')
                 if txt:
                     reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                # Break only if we strictly reached the limit
                 if len(reviews) >= limit: break
             
             return {

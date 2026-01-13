@@ -2,7 +2,7 @@ import os
 import io
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -16,8 +16,17 @@ logger = logging.getLogger("AI-Router")
 router = APIRouter(prefix="/api", tags=["AI"])
 
 @router.post("/ai/analyze/{sku}")
-async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
-    limit = 30 if user.subscription_plan == "free" else 100
+async def start_ai_analysis(
+    sku: int, 
+    limit: int = Query(100, ge=10, le=10000, description="Max reviews to parse"),
+    user: User = Depends(get_current_user)
+):
+    # Allow user to choose limit, but set safe defaults if not provided
+    # If subscription logic is needed strictly:
+    # max_limit = 50 if user.subscription_plan == "free" else 5000
+    # effective_limit = min(limit, max_limit)
+    
+    # For this refactor, we trust the input limit but keep it within reasonable bounds (le=10000)
     task = analyze_reviews_task.delay(sku, limit, user.id)
     return {"status": "accepted", "task_id": task.id}
 
@@ -103,9 +112,9 @@ async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: 
         pdf.ln(5)
         
         if ai_data.get('infographic_recommendation'):
-             epw = pdf.w - 2 * pdf.l_margin
-             pdf.multi_cell(epw, 8, txt=f"Совет для инфографики: {ai_data['infographic_recommendation']}")
-             pdf.ln(5)
+            epw = pdf.w - 2 * pdf.l_margin
+            pdf.multi_cell(epw, 8, txt=f"Совет для инфографики: {ai_data['infographic_recommendation']}")
+            pdf.ln(5)
 
     if ai_data.get('aspects'):
         pdf.set_font(font_family, '', 12)

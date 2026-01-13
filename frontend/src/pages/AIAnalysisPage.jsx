@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, Crown, BarChart3, Quote, Lightbulb, TrendingUp, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, Crown, BarChart3, Quote, Lightbulb, TrendingUp, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
 const AIAnalysisPage = ({ user }) => {
     const [sku, setSku] = useState('');
+    const [reviewLimit, setReviewLimit] = useState(100);
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
     const [status, setStatus] = useState('');
@@ -15,19 +16,22 @@ const AIAnalysisPage = ({ user }) => {
         if(!sku) return;
         setLoading(true);
         setResult(null);
+        
         try {
-            const res = await fetch(`${API_URL}/api/ai/analyze/${sku}`, { 
-                method: 'POST',
-                headers: getTgHeaders()
+            // Pass the limit query param
+            const res = await fetch(`${API_URL}/api/ai/analyze/${sku}?limit=${reviewLimit}`, { 
+                method: 'POST', 
+                headers: getTgHeaders() 
             });
             const data = await res.json();
             const taskId = data.task_id;
-            
+
             let attempts = 0;
             while(attempts < 60) {
-                setStatus('Декомпозиция аспектов...');
-                await new Promise(r => setTimeout(r, 4000));
-                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
+                setStatus(`Парсинг ${reviewLimit} отзывов... (${attempts*2}s)`);
+                await new Promise(r => setTimeout(r, 2000));
+                
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
                 const sData = await sRes.json();
                 
                 if (sData.status === 'SUCCESS') {
@@ -36,6 +40,7 @@ const AIAnalysisPage = ({ user }) => {
                 }
                 if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
                 if (sData.info) setStatus(sData.info);
+                
                 attempts++;
             }
         } catch(e) {
@@ -48,7 +53,7 @@ const AIAnalysisPage = ({ user }) => {
     const handleDownloadPDF = async () => {
         if (!sku && !result?.sku) return;
         const targetSku = sku || result.sku;
-
+        
         if (user?.plan === 'free') {
             alert("Скачивание PDF доступно только на тарифе PRO или Business");
             return;
@@ -59,7 +64,6 @@ const AIAnalysisPage = ({ user }) => {
             const token = window.Telegram?.WebApp?.initData || "";
             // Формируем URL с токеном в query параметрах
             const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
-            
             // Открываем в новом окне - это инициирует нативную загрузку
             window.open(downloadUrl, '_blank');
         } catch (e) {
@@ -99,18 +103,56 @@ const AIAnalysisPage = ({ user }) => {
                 </div>
                 <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
             </div>
-            
+
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
             <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
-                <input type="number" value={sku} onChange={e => setSku(e.target.value)} placeholder="Артикул WB" className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-3 outline-none focus:ring-2 ring-violet-200 transition-all" />
-                <button onClick={runAnalysis} disabled={loading} className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2">
+                <input 
+                    type="number" 
+                    value={sku} 
+                    onChange={e => setSku(e.target.value)} 
+                    placeholder="Артикул WB" 
+                    className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all"
+                />
+                
+                {/* Review Limit Slider */}
+                <div className="mb-4 px-2">
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
+                            <Settings2 size={12}/> Глубина парсинга
+                        </label>
+                        <span className="text-xs font-black text-violet-600 bg-violet-50 px-2 py-1 rounded-lg">
+                            {reviewLimit === 5000 ? "ВСЕ (Max)" : `${reviewLimit} отзывов`}
+                        </span>
+                    </div>
+                    <input 
+                        type="range" 
+                        min="50" 
+                        max="5000" 
+                        step="50" 
+                        value={reviewLimit} 
+                        onChange={(e) => setReviewLimit(Number(e.target.value))}
+                        className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-violet-600"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-300 mt-1 font-bold px-1">
+                        <span>50</span>
+                        <span>2500</span>
+                        <span>MAX</span>
+                    </div>
+                </div>
+
+                <button 
+                    onClick={runAnalysis} 
+                    disabled={loading}
+                    className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2"
+                >
                     {loading ? <><Loader2 className="animate-spin" /> {status}</> : 'Запустить анализ'}
                 </button>
             </div>
 
             {result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
+                    
                     {/* Actions Header */}
                     <div className="flex justify-end">
                         <button 
@@ -149,10 +191,8 @@ const AIAnalysisPage = ({ user }) => {
                     {result.ai_analysis.audience_stats && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
-                                <Users className="text-violet-600" size={20}/> 
-                                Портрет аудитории
+                                <Users className="text-violet-600" size={20}/> Портрет аудитории
                             </h3>
-                            
                             <div className="grid grid-cols-3 gap-2 mb-6">
                                 <div className="bg-blue-50 p-3 rounded-2xl text-center border border-blue-100">
                                     <BrainCircuit className="mx-auto text-blue-500 mb-1" size={20}/>
@@ -170,7 +210,7 @@ const AIAnalysisPage = ({ user }) => {
                                     <div className="text-[10px] uppercase font-bold text-slate-400">Скептик</div>
                                 </div>
                             </div>
-
+                            
                             {result.ai_analysis.infographic_recommendation && (
                                 <div className="bg-violet-50 border border-violet-100 p-4 rounded-2xl flex gap-3 items-start">
                                     <div className="bg-white p-2 rounded-xl shadow-sm shrink-0">
@@ -191,8 +231,7 @@ const AIAnalysisPage = ({ user }) => {
                     {result.ai_analysis.aspects && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
-                                <BarChart3 className="text-violet-600" size={20}/> 
-                                Аспектный анализ
+                                <BarChart3 className="text-violet-600" size={20}/> Аспектный анализ
                             </h3>
                             <div className="space-y-6">
                                 {result.ai_analysis.aspects.map((aspect, idx) => (
@@ -203,22 +242,15 @@ const AIAnalysisPage = ({ user }) => {
                                                 {aspect.sentiment_score}/9.0
                                             </span>
                                         </div>
-                                        
                                         <div className="h-2 w-full bg-slate-100 rounded-full mb-2 overflow-hidden">
                                             <div 
-                                                className={`h-full rounded-full transition-all duration-1000 ${getScoreBarColor(aspect.sentiment_score)}`}
+                                                className={`h-full rounded-full transition-all duration-1000 ${getScoreBarColor(aspect.sentiment_score)}`} 
                                                 style={{width: `${(aspect.sentiment_score / 9) * 100}%`}}
                                             ></div>
                                         </div>
-                                        
-                                        <div className="text-xs text-slate-400 italic mb-2 flex gap-1.5 items-start">
-                                            <Quote size={10} className="mt-0.5 shrink-0 opacity-50"/> 
-                                            <span>{aspect.snippet}</span>
-                                        </div>
-
-                                        {aspect.actionable_advice && aspect.sentiment_score < 7.5 && (
-                                            <div className="text-xs text-violet-700 bg-violet-50 p-2.5 rounded-xl flex gap-2 items-start border border-violet-100">
-                                                <Lightbulb size={14} className="mt-0.5 shrink-0 text-violet-500"/> 
+                                        {aspect.actionable_advice && (
+                                            <div className="flex gap-2 items-start text-xs text-slate-500 bg-slate-50 p-2 rounded-lg">
+                                                <Lightbulb size={14} className="shrink-0 text-amber-400 mt-0.5"/>
                                                 <span className="font-medium">{aspect.actionable_advice}</span>
                                             </div>
                                         )}
@@ -256,6 +288,7 @@ const AIAnalysisPage = ({ user }) => {
                             </ul>
                         </div>
                     </div>
+
                 </div>
             )}
         </div>
