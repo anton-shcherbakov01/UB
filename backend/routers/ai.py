@@ -11,31 +11,43 @@ from fpdf import FPDF
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
 from tasks import analyze_reviews_task, get_status
+# Импортируем парсер напрямую для синхронного чек-запроса (или через task, если нужно асинхронно, но тут быстро)
+from parser_parts.product import ProductParser
 
 logger = logging.getLogger("AI-Router")
 router = APIRouter(prefix="/api", tags=["AI"])
 
+# Инициализируем парсер один раз (или можно внутри функции)
+product_parser = ProductParser()
+
+@router.get("/ai/check/{sku}")
+async def check_product_reviews(sku: int, user: User = Depends(get_current_user)):
+    """
+    Быстрый чек товара: возвращает название, фото и доступное кол-во отзывов.
+    Нужен для настройки ползунка на фронте перед запуском анализа.
+    """
+    try:
+        # Используем быстрый метод получения стат данных
+        info = await product_parser.get_review_stats(sku)
+        if info.get("status") == "error":
+            raise HTTPException(404, info.get("message"))
+        return info
+    except Exception as e:
+        logger.error(f"Check error: {e}")
+        raise HTTPException(500, f"Ошибка проверки товара: {str(e)}")
+
 @router.post("/ai/analyze/{sku}")
 async def start_ai_analysis(
     sku: int, 
-    limit: int = Query(100, ge=10, le=10000, description="Max reviews to parse"),
+    limit: int = Query(100, ge=10, description="Max reviews to parse"),
     user: User = Depends(get_current_user)
 ):
-    # Allow user to choose limit, but set safe defaults if not provided
-    # If subscription logic is needed strictly:
-    # max_limit = 50 if user.subscription_plan == "free" else 5000
-    # effective_limit = min(limit, max_limit)
-    
-    # For this refactor, we trust the input limit but keep it within reasonable bounds (le=10000)
+    # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
     task = analyze_reviews_task.delay(sku, limit, user.id)
     return {"status": "accepted", "task_id": task.id}
 
 @router.get("/ai/result/{task_id}")
 def get_ai_result(task_id: str):
-    """
-    Получение результата AI анализа.
-    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
-    """
     return get_status(task_id)
 
 @router.get("/report/ai-pdf/{sku}")
@@ -66,6 +78,7 @@ async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: 
     pdf = FPDF()
     pdf.add_page()
 
+    # Шрифт (заглушка для примера, в проде нужны реальные пути)
     font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
     font_bold_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
     font_family = 'Arial' 

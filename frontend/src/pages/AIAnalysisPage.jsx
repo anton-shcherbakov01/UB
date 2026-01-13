@@ -1,10 +1,17 @@
 import React, { useState } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, Crown, BarChart3, Quote, Lightbulb, TrendingUp, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2 } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
 const AIAnalysisPage = ({ user }) => {
     const [sku, setSku] = useState('');
+    const [step, setStep] = useState('input'); // input | config | analyzing | result
+    
+    // Product Stats (Step 1)
+    const [productMeta, setProductMeta] = useState(null);
+    const [metaLoading, setMetaLoading] = useState(false);
+    
+    // Analysis Config (Step 2)
     const [reviewLimit, setReviewLimit] = useState(100);
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
@@ -12,13 +19,38 @@ const AIAnalysisPage = ({ user }) => {
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
 
+    // Этап 1: Проверка товара и получение кол-ва отзывов
+    const handleCheckProduct = async () => {
+        if (!sku) return;
+        setMetaLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/ai/check/${sku}`, { 
+                method: 'GET', 
+                headers: getTgHeaders() 
+            });
+            const data = await res.json();
+            
+            if (res.status !== 200) throw new Error(data.detail || "Ошибка проверки");
+            
+            setProductMeta(data);
+            // Если отзывов мало, ставим лимит на все, иначе на 100 по дефолту
+            const max = data.total_reviews || 100;
+            setReviewLimit(max > 100 ? 100 : max);
+            setStep('config');
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            setMetaLoading(false);
+        }
+    };
+
+    // Этап 2: Запуск анализа
     const runAnalysis = async () => {
-        if(!sku) return;
         setLoading(true);
+        setStep('analyzing');
         setResult(null);
         
         try {
-            // Pass the limit query param
             const res = await fetch(`${API_URL}/api/ai/analyze/${sku}?limit=${reviewLimit}`, { 
                 method: 'POST', 
                 headers: getTgHeaders() 
@@ -27,8 +59,9 @@ const AIAnalysisPage = ({ user }) => {
             const taskId = data.task_id;
 
             let attempts = 0;
-            while(attempts < 60) {
-                setStatus(`Парсинг ${reviewLimit} отзывов... (${attempts*2}s)`);
+            // Увеличим время ожидания, так как парсинг 5000 отзывов займет время
+            while(attempts < 120) {
+                setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
                 await new Promise(r => setTimeout(r, 2000));
                 
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
@@ -36,6 +69,7 @@ const AIAnalysisPage = ({ user }) => {
                 
                 if (sData.status === 'SUCCESS') {
                     setResult(sData.data);
+                    setStep('result');
                     break;
                 }
                 if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
@@ -45,6 +79,7 @@ const AIAnalysisPage = ({ user }) => {
             }
         } catch(e) {
             alert(e.message);
+            setStep('config'); // Вернуться назад при ошибке
         } finally {
             setLoading(false);
         }
@@ -53,21 +88,16 @@ const AIAnalysisPage = ({ user }) => {
     const handleDownloadPDF = async () => {
         if (!sku && !result?.sku) return;
         const targetSku = sku || result.sku;
-        
         if (user?.plan === 'free') {
-            alert("Скачивание PDF доступно только на тарифе PRO или Business");
+            alert("Скачивание PDF доступно только на тарифе PRO");
             return;
         }
-
-        // Прямое скачивание через URL для поддержки мобильных устройств
         try {
             const token = window.Telegram?.WebApp?.initData || "";
-            // Формируем URL с токеном в query параметрах
             const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
-            // Открываем в новом окне - это инициирует нативную загрузку
             window.open(downloadUrl, '_blank');
         } catch (e) {
-            alert("Не удалось скачать отчет: " + e.message);
+            alert("Ошибка скачивания: " + e.message);
         }
     };
 
@@ -75,12 +105,6 @@ const AIAnalysisPage = ({ user }) => {
         if (score >= 7) return 'bg-emerald-500 text-white';
         if (score >= 4.5) return 'bg-amber-400 text-amber-950';
         return 'bg-red-500 text-white';
-    };
-
-    const getScoreBarColor = (score) => {
-        if (score >= 7) return 'bg-emerald-500';
-        if (score >= 4.5) return 'bg-amber-400';
-        return 'bg-red-500';
     };
 
     const getTypeIcon = (type) => {
@@ -106,55 +130,101 @@ const AIAnalysisPage = ({ user }) => {
 
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-            <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100">
-                <input 
-                    type="number" 
-                    value={sku} 
-                    onChange={e => setSku(e.target.value)} 
-                    placeholder="Артикул WB" 
-                    className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all"
-                />
+            {/* Input & Configuration Block */}
+            <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
                 
-                {/* Review Limit Slider */}
-                <div className="mb-4 px-2">
-                    <div className="flex justify-between items-center mb-2">
-                        <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
-                            <Settings2 size={12}/> Глубина парсинга
-                        </label>
-                        <span className="text-xs font-black text-violet-600 bg-violet-50 px-2 py-1 rounded-lg">
-                            {reviewLimit === 5000 ? "ВСЕ (Max)" : `${reviewLimit} отзывов`}
-                        </span>
-                    </div>
-                    <input 
-                        type="range" 
-                        min="50" 
-                        max="5000" 
-                        step="50" 
-                        value={reviewLimit} 
-                        onChange={(e) => setReviewLimit(Number(e.target.value))}
-                        className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-violet-600"
-                    />
-                    <div className="flex justify-between text-[10px] text-slate-300 mt-1 font-bold px-1">
-                        <span>50</span>
-                        <span>2500</span>
-                        <span>MAX</span>
-                    </div>
-                </div>
+                {/* Step 1: Input */}
+                {step === 'input' && (
+                    <>
+                        <input 
+                            type="number" 
+                            value={sku} 
+                            onChange={e => setSku(e.target.value)} 
+                            placeholder="Введите Артикул WB" 
+                            className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all"
+                            onKeyDown={(e) => e.key === 'Enter' && handleCheckProduct()}
+                        />
+                        <button 
+                            onClick={handleCheckProduct} 
+                            disabled={metaLoading}
+                            className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2"
+                        >
+                            {metaLoading ? <Loader2 className="animate-spin" /> : <><Search size={18}/> Найти товар</>}
+                        </button>
+                    </>
+                )}
 
-                <button 
-                    onClick={runAnalysis} 
-                    disabled={loading}
-                    className="w-full bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2"
-                >
-                    {loading ? <><Loader2 className="animate-spin" /> {status}</> : 'Запустить анализ'}
-                </button>
+                {/* Step 2: Configuration */}
+                {step === 'config' && productMeta && (
+                    <div className="animate-in fade-in zoom-in-95 duration-300">
+                        <div className="flex gap-4 mb-6 bg-slate-50 p-3 rounded-2xl">
+                            {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
+                            <div>
+                                <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
+                                <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
+                                    Всего отзывов: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mb-6 px-2">
+                            <div className="flex justify-between items-center mb-4">
+                                <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
+                                    <Settings2 size={12}/> Выборка (последние)
+                                </label>
+                                <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
+                                    {reviewLimit} шт.
+                                </span>
+                            </div>
+                            
+                            <input 
+                                type="range" 
+                                min="10" 
+                                max={productMeta.total_reviews > 5000 ? 5000 : productMeta.total_reviews} 
+                                step="10" 
+                                value={reviewLimit} 
+                                onChange={(e) => setReviewLimit(Number(e.target.value))}
+                                className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-violet-600"
+                            />
+                            <div className="flex justify-between text-[10px] text-slate-400 mt-2 font-bold px-1">
+                                <span>10</span>
+                                <span>{productMeta.total_reviews > 5000 ? 5000 : productMeta.total_reviews} (Max)</span>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <button 
+                                onClick={() => setStep('input')}
+                                className="flex-1 bg-slate-100 text-slate-500 p-4 rounded-xl font-bold active:scale-95 transition-transform"
+                            >
+                                Назад
+                            </button>
+                            <button 
+                                onClick={runAnalysis} 
+                                className="flex-[2] bg-violet-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-violet-200 active:scale-95 transition-transform flex justify-center items-center gap-2"
+                            >
+                                <Sparkles size={18}/> Анализ
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Loading State */}
+                {step === 'analyzing' && (
+                     <div className="py-8 text-center animate-pulse">
+                        <Loader2 size={48} className="animate-spin text-violet-600 mx-auto mb-4" />
+                        <p className="text-slate-500 font-medium text-sm">{status}</p>
+                     </div>
+                )}
             </div>
 
-            {result && (
+            {/* Step 3: Result (Same as before, just ensuring it renders when step === result) */}
+            {step === 'result' && result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
-                    
-                    {/* Actions Header */}
-                    <div className="flex justify-end">
+                    <div className="flex justify-between items-center">
+                         <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600">
+                            ← К настройкам
+                         </button>
                         <button 
                             onClick={handleDownloadPDF} 
                             disabled={downloading}
@@ -164,11 +234,10 @@ const AIAnalysisPage = ({ user }) => {
                             `}
                         >
                             {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'free' ? <Lock size={14}/> : <FileDown size={14}/>)}
-                            {user?.plan === 'free' ? 'PDF (доступно в PRO)' : 'Скачать PDF'}
+                            {user?.plan === 'free' ? 'PDF (PRO)' : 'Скачать PDF'}
                         </button>
                     </div>
 
-                    {/* Product Header */}
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
                         <div>
@@ -180,14 +249,12 @@ const AIAnalysisPage = ({ user }) => {
                         </div>
                     </div>
 
-                    {/* Global Summary */}
                     {result.ai_analysis.global_summary && (
                         <div className="bg-slate-800 text-slate-200 p-5 rounded-2xl text-sm italic border-l-4 border-violet-500 shadow-md">
                             "{result.ai_analysis.global_summary}"
                         </div>
                     )}
 
-                    {/* Psychographics Block (NEW) */}
                     {result.ai_analysis.audience_stats && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
@@ -227,7 +294,6 @@ const AIAnalysisPage = ({ user }) => {
                         </div>
                     )}
 
-                    {/* ABSA Heatmap */}
                     {result.ai_analysis.aspects && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
@@ -244,13 +310,13 @@ const AIAnalysisPage = ({ user }) => {
                                         </div>
                                         <div className="h-2 w-full bg-slate-100 rounded-full mb-2 overflow-hidden">
                                             <div 
-                                                className={`h-full rounded-full transition-all duration-1000 ${getScoreBarColor(aspect.sentiment_score)}`} 
+                                                className={`h-full rounded-full transition-all duration-1000 ${getScoreColor(aspect.sentiment_score).split(' ')[0]}`} 
                                                 style={{width: `${(aspect.sentiment_score / 9) * 100}%`}}
                                             ></div>
                                         </div>
                                         {aspect.actionable_advice && (
                                             <div className="flex gap-2 items-start text-xs text-slate-500 bg-slate-50 p-2 rounded-lg">
-                                                <Lightbulb size={14} className="shrink-0 text-amber-400 mt-0.5"/>
+                                                <div className="min-w-[4px] h-4 bg-amber-400 rounded-full mt-0.5"></div>
                                                 <span className="font-medium">{aspect.actionable_advice}</span>
                                             </div>
                                         )}
@@ -260,8 +326,7 @@ const AIAnalysisPage = ({ user }) => {
                         </div>
                     )}
 
-                    {/* Legacy/Summary Blocks */}
-                    <div className="grid grid-cols-1 gap-4">
+                     <div className="grid grid-cols-1 gap-4">
                         <div className="bg-red-50 p-5 rounded-3xl border border-red-100">
                             <h3 className="text-red-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <ThumbsDown size={16} /> Критические зоны
@@ -277,7 +342,7 @@ const AIAnalysisPage = ({ user }) => {
 
                         <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
                             <h3 className="text-emerald-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
-                                <TrendingUp size={16} /> Точки роста
+                                <Sparkles size={16} /> Точки роста
                             </h3>
                             <ul className="space-y-2">
                                 {result.ai_analysis.strategy?.map((s, i) => (
