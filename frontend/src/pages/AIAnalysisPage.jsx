@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
@@ -7,11 +7,11 @@ const AIAnalysisPage = ({ user }) => {
     const [sku, setSku] = useState('');
     const [step, setStep] = useState('input'); // input | config | analyzing | result
     
-    // Product Stats (Step 1)
+    // Product Stats
     const [productMeta, setProductMeta] = useState(null);
     const [metaLoading, setMetaLoading] = useState(false);
     
-    // Analysis Config (Step 2)
+    // Analysis Config
     const [reviewLimit, setReviewLimit] = useState(100);
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
@@ -19,7 +19,18 @@ const AIAnalysisPage = ({ user }) => {
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
 
-    // Этап 1: Проверка товара и получение кол-ва отзывов
+    // СБРОС СОСТОЯНИЯ (НОВЫЙ АНАЛИЗ)
+    const handleReset = () => {
+        setSku('');
+        setStep('input');
+        setProductMeta(null);
+        setResult(null);
+        setReviewLimit(100);
+        setStatus('');
+        // Скролл наверх для мобилок
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
     const handleCheckProduct = async () => {
         if (!sku) return;
         setMetaLoading(true);
@@ -37,8 +48,6 @@ const AIAnalysisPage = ({ user }) => {
             // Умная установка лимита
             const total = data.total_reviews || 0;
             
-            // Если кол-во известно: ставим 100 или максимум (если меньше 100)
-            // Если неизвестно (0): ставим безопасные 50 для старта
             let safeLimit = 100;
             if (total > 0 && total < 100) safeLimit = total;
             if (total === 0) safeLimit = 50; 
@@ -52,7 +61,6 @@ const AIAnalysisPage = ({ user }) => {
         }
     };
 
-    // Этап 2: Запуск анализа
     const runAnalysis = async () => {
         setLoading(true);
         setStep('analyzing');
@@ -86,7 +94,7 @@ const AIAnalysisPage = ({ user }) => {
             }
         } catch(e) {
             alert(e.message);
-            setStep('config'); // Вернуться назад при ошибке
+            setStep('config');
         } finally {
             setLoading(false);
         }
@@ -123,25 +131,15 @@ const AIAnalysisPage = ({ user }) => {
         return <Users size={18} />;
     };
 
-    // Хелпер для расчета параметров слайдера
     const getSliderParams = () => {
         if (!productMeta) return { max: 100, min: 10, step: 10 };
-        
         const total = productMeta.total_reviews || 0;
-        
-        // ЛОГИКА МАКСИМУМА:
-        // Если отзывов 0 (неизвестно) -> ставим 200 (как вы просили).
-        // Если известно -> ставим реальное количество.
         const max = total > 0 ? total : 200;
-
-        // Min и Step
         let min = 10;
-        if (max < 10) min = 1; // Для совсем новых товаров
-        
+        if (max < 10) min = 1;
         let step = 10;
         if (max > 1000) step = 50;
         if (max < 50) step = 1;
-
         return { max, min, step };
     };
 
@@ -149,18 +147,39 @@ const AIAnalysisPage = ({ user }) => {
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-            <div className="flex justify-between items-center">
-                <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 p-6 rounded-3xl text-white shadow-xl shadow-fuchsia-200 flex-1 mr-4">
-                    <h1 className="text-2xl font-black flex items-center gap-2">
-                        <Sparkles className="text-yellow-300" /> AI Стратег
+            {/* HEADER */}
+            <div className="flex justify-between items-stretch h-20">
+                <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 p-4 rounded-3xl text-white shadow-xl shadow-fuchsia-200 flex-1 mr-3 flex flex-col justify-center">
+                    <h1 className="text-xl font-black flex items-center gap-2">
+                        <Sparkles className="text-yellow-300" size={20} /> AI Стратег
                     </h1>
-                    <p className="text-xs opacity-80 mt-1">DeepSeek ABSA + Psychographics</p>
+                    <p className="text-[10px] opacity-80 mt-1">DeepSeek ABSA + Psychographics</p>
                 </div>
-                <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
+                
+                <div className="flex flex-col gap-2 h-full">
+                    <button 
+                        onClick={() => setHistoryOpen(true)} 
+                        className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                    >
+                        <Clock size={20}/>
+                    </button>
+                    
+                    {/* Кнопка сброса появляется только если мы не на старте */}
+                    {step !== 'input' && (
+                        <button 
+                            onClick={handleReset}
+                            className="bg-slate-100 p-3 rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                            title="Новый поиск"
+                        >
+                            <RotateCcw size={20}/>
+                        </button>
+                    )}
+                </div>
             </div>
 
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
+            {/* MAIN CARD */}
             <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
                 
                 {/* Step 1: Input */}
@@ -171,15 +190,15 @@ const AIAnalysisPage = ({ user }) => {
                             value={sku} 
                             onChange={e => setSku(e.target.value)} 
                             placeholder="Введите Артикул WB" 
-                            className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all"
+                            className="w-full p-4 bg-slate-50 rounded-xl font-bold mb-4 outline-none focus:ring-2 ring-violet-200 transition-all text-lg"
                             onKeyDown={(e) => e.key === 'Enter' && handleCheckProduct()}
                         />
                         <button 
                             onClick={handleCheckProduct} 
                             disabled={metaLoading}
-                            className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2"
+                            className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold shadow-lg active:scale-95 transition-transform flex justify-center items-center gap-2 text-lg"
                         >
-                            {metaLoading ? <Loader2 className="animate-spin" /> : <><Search size={18}/> Найти товар</>}
+                            {metaLoading ? <Loader2 className="animate-spin" /> : <><Search size={20}/> Найти товар</>}
                         </button>
                     </>
                 )}
@@ -191,7 +210,6 @@ const AIAnalysisPage = ({ user }) => {
                             {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
                             <div>
                                 <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
-                                {/* Если отзывов 0 (неизвестно), мы просто не показываем бейдж с количеством, чтобы не пугать "нулями" */}
                                 {productMeta.total_reviews > 0 && (
                                     <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
                                         Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
@@ -254,16 +272,18 @@ const AIAnalysisPage = ({ user }) => {
             {/* Step 3: Result */}
             {step === 'result' && result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
-                    <div className="flex justify-between items-center">
-                         <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600">
-                            ← К настройкам
+                    
+                    {/* Кнопки действий над результатом */}
+                    <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl">
+                         <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600 px-3 py-2">
+                            ← Настройки
                          </button>
                         <button 
                             onClick={handleDownloadPDF} 
                             disabled={downloading}
                             className={`
                                 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95
-                                ${user?.plan === 'free' ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white shadow-lg'}
+                                ${user?.plan === 'free' ? 'bg-white text-slate-400 border border-slate-200' : 'bg-slate-900 text-white shadow-lg'}
                             `}
                         >
                             {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'free' ? <Lock size={14}/> : <FileDown size={14}/>)}
@@ -386,6 +406,14 @@ const AIAnalysisPage = ({ user }) => {
                             </ul>
                         </div>
                     </div>
+
+                    {/* Большая кнопка нового анализа в конце */}
+                    <button 
+                        onClick={handleReset}
+                        className="w-full bg-slate-100 text-slate-500 p-4 rounded-2xl font-bold active:scale-95 transition-all hover:bg-slate-200 hover:text-slate-700 flex items-center justify-center gap-2"
+                    >
+                        <RotateCcw size={18}/> Проверить другой товар
+                    </button>
 
                 </div>
             )}
