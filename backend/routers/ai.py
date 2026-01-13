@@ -2,21 +2,56 @@ import os
 import io
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fpdf import FPDF
+from pydantic import BaseModel
 
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
 from tasks import analyze_reviews_task, get_status
+from parser_service import parser_service
 
 logger = logging.getLogger("AI-Router")
 router = APIRouter(prefix="/api", tags=["AI"])
 
+class AnalyzeRequest(BaseModel):
+    sku: int
+    limit: int = 100
+
+@router.get("/ai/check/{sku}")
+async def check_product_info(sku: int, user: User = Depends(get_current_user)):
+    """
+    Получает метаданные товара (имя, фото, кол-во отзывов)
+    для настройки параметров анализа (слайдер).
+    """
+    res = await parser_service.get_product_meta(sku)
+    if res.get("status") == "error":
+        raise HTTPException(400, res.get("message", "Товар не найден"))
+    return res
+
+@router.post("/ai/analyze")
+async def start_ai_analysis(req: AnalyzeRequest, user: User = Depends(get_current_user)):
+    """
+    Запуск анализа отзывов с динамическим лимитом.
+    """
+    # Валидация лимитов (опционально, можно убрать для "безлимита")
+    max_limit = 5000 # Техническое ограничение, чтобы не убить сервер
+    if req.limit > max_limit:
+         req.limit = max_limit
+    
+    # Для Free тарифа можно оставить жесткий лимит, если нужно
+    # if user.subscription_plan == "free" and req.limit > 30:
+    #     req.limit = 30
+
+    task = analyze_reviews_task.delay(req.sku, req.limit, user.id)
+    return {"status": "accepted", "task_id": task.id}
+
+# Сохраняем старый endpoint для совместимости (если фронт вдруг дернет)
 @router.post("/ai/analyze/{sku}")
-async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
+async def start_ai_analysis_legacy(sku: int, user: User = Depends(get_current_user)):
     limit = 30 if user.subscription_plan == "free" else 100
     task = analyze_reviews_task.delay(sku, limit, user.id)
     return {"status": "accepted", "task_id": task.id}
@@ -25,7 +60,6 @@ async def start_ai_analysis(sku: int, user: User = Depends(get_current_user)):
 def get_ai_result(task_id: str):
     """
     Получение результата AI анализа.
-    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
     """
     return get_status(task_id)
 

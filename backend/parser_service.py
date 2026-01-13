@@ -43,6 +43,7 @@ class SeleniumWBParser:
     - [UPD] Переход на API search.wb.ru для трекинга позиций (вместо Selenium).
     - [NEW] Geo Tracking (поддержка параметра dest).
     - [NEW] Разделение Органической и Рекламной выдачи.
+    - [UPD] Поддержка пагинации отзывов (Parse All).
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -70,8 +71,6 @@ class SeleniumWBParser:
                 if rotate:
                     # Генерируем случайную сессию для ротации IP
                     session_id = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8))
-                    # Формат user-session-ID часто используется провайдерами (BrightData, IPRoyal и т.д.)
-                    # Если ваш провайдер не поддерживает это, он просто проигнорирует или вернет ошибку (тогда fallback сработает)
                     user = f"{user}-session-{session_id}"
                 return f"http://{user}:{self.proxy_pass}@{self.proxy_host}:{self.proxy_port}"
             return f"http://{self.proxy_host}:{self.proxy_port}"
@@ -136,7 +135,7 @@ class SeleniumWBParser:
         except: pass
         return None
 
-    # --- SELENIUM SETUP (Legacy support for full page parsing) ---
+    # --- SELENIUM SETUP ---
     def _create_proxy_auth_extension(self, user, pw, host, port):
         folder_path = "proxy_ext"
         if not os.path.exists(folder_path): os.makedirs(folder_path)
@@ -193,6 +192,24 @@ class SeleniumWBParser:
         return 0
 
     # --- MAIN METHODS ---
+
+    async def get_product_meta(self, sku: int) -> Dict[str, Any]:
+        """
+        Быстрое получение метаданных товара (кол-во отзывов, имя, фото).
+        Используется для превью перед анализом.
+        """
+        card_data = await self._find_card_json(sku)
+        if not card_data:
+            return {"status": "error", "message": "Товар не найден"}
+
+        return {
+            "status": "success",
+            "sku": sku,
+            "name": card_data.get('imt_name') or card_data.get('subj_name'),
+            "image": card_data.get('image_url'),
+            "feedbacks_count": card_data.get('feedbacks', 0),
+            "rating": card_data.get('valuation', 0)
+        }
 
     def get_product_data(self, sku: int):
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
@@ -290,8 +307,8 @@ class SeleniumWBParser:
         
         return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
-    def get_full_product_info(self, sku: int, limit: int = 50):
-        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} ---")
+    def get_full_product_info(self, sku: int, limit: int = 100):
+        logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -302,41 +319,59 @@ class SeleniumWBParser:
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID not found"}
 
-            endpoints = [
-                f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
-                f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}",
-                f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={limit}&skip=0&nmId={sku}&imtId={root_id}"
-            ]
+            all_reviews = []
             
-            feed_data = None
+            # Если лимит маленький (<100), используем стандартные эндпоинты статики
+            # Если лимит большой, используем пагинацию через API v1
+            
             headers = {"User-Agent": random.choice(self.user_agents)}
             
-            for url in endpoints:
+            # Стратегия: идем по пагинации пока не соберем limit
+            fetched = 0
+            batch_size = 100 # WB отдает по 100
+            
+            while fetched < limit:
+                take = min(batch_size, limit - fetched)
+                url = f"https://feedbacks-api.wildberries.ru/api/v1/feedbacks?isAnswered=false&take={take}&skip={fetched}&nmId={sku}&imtId={root_id}"
+                
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
-                    if r.status_code == 200:
-                        feed_data = r.json()
+                    if r.status_code != 200:
+                        logger.warning(f"Review fetch error {r.status_code} at skip {fetched}")
                         break
-                except: continue
+                        
+                    data = r.json()
+                    feedbacks = data.get('feedbacks') or data.get('data', {}).get('feedbacks') or []
+                    
+                    if not feedbacks:
+                        break # Больше нет отзывов
+                    
+                    for f in feedbacks:
+                        txt = f.get('text', '')
+                        if txt:
+                            all_reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                    
+                    fetched += len(feedbacks)
+                    
+                    # Если вернулось меньше чем просили, значит это конец
+                    if len(feedbacks) < take:
+                        break
+                        
+                    time.sleep(0.5) # Вежливость
+                    
+                except Exception as e:
+                    logger.error(f"Review iteration error: {e}")
+                    break
             
-            if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
-
-            raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
-            valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
-            
-            reviews = []
-            for f in raw_feedbacks:
-                txt = f.get('text', '')
-                if txt:
-                    reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
-                if len(reviews) >= limit: break
+            valuation = static_data.get('valuation') or 0
             
             return {
                 "sku": sku,
+                "name": static_data.get('imt_name') or static_data.get('subj_name'),
                 "image": static_data.get('image_url'),
                 "rating": float(valuation),
-                "reviews": reviews,
-                "reviews_count": len(reviews),
+                "reviews": all_reviews,
+                "reviews_count": len(all_reviews),
                 "status": "success"
             }
 
@@ -505,11 +540,6 @@ class SeleniumWBParser:
                         if resp.status == 429:
                             logger.warning(f"API 429 (Att {attempt+1}).")
                             await asyncio.sleep(random.uniform(2, 4))
-                            # Важно: если это последняя попытка, цикл завершится, 
-                            # и флаг api_failed останется False по умолчанию, если не задать здесь.
-                            # Но мы инициализировали api_failed = False.
-                            # Если 429, мы просто идем на следующий круг.
-                            # Если круги кончились, мы выйдем из цикла.
                             continue
                             
                         if resp.status != 200:
@@ -526,9 +556,7 @@ class SeleniumWBParser:
                             api_failed = True
                             break
 
-                        # Если мы получили список товаров, значит API работает корректно
                         organic_counter = 0
-                        found = False
                         
                         for index, item in enumerate(products):
                             item_id = int(item.get("id", 0))
@@ -544,25 +572,12 @@ class SeleniumWBParser:
                                     "total_pos": index + 1
                                 }
                         
-                        # Если прошли весь список API и не нашли, значит товара реально нет в топе
-                        # Это УСПЕШНЫЙ результат (позиция 0), фоллбек не нужен
                         return {"organic_pos": 0, "ad_pos": 0, "is_boosted": False}
 
             except Exception as e:
                 logger.error(f"API Connection Error: {e}")
-                # Если ошибка соединения, пробуем еще раз (continue)
-                # Если это последняя попытка, цикл закончится
                 await asyncio.sleep(1)
                 continue
-        
-        # 2. Fallback to Selenium
-        # Сюда мы попадаем, если:
-        # - Случился break (api_failed=True)
-        # - Закончились попытки (все были 429 или Exception)
-        
-        # Если попытки кончились, но api_failed явно не выставлен (например, были только 429),
-        # мы все равно должны запустить фоллбек.
-        # То есть, если мы не вернули return выше, значит API не дал ответа.
         
         logger.info("API attempts exhausted or failed. Executing Selenium Fallback.")
         return await self.get_search_position_selenium_fallback(query, target_sku)
