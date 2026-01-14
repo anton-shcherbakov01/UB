@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, Percent, ArrowDown 
+    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle 
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -90,11 +90,11 @@ const FinancePage = () => {
         const ebitda = cm2 - marketing;
 
         return [
-            { name: 'Выручка', value: Math.round(grossSales), type: 'income' },
+            { name: 'Выручка (Seller)', value: Math.round(grossSales), type: 'income' },
             { name: 'Себестоимость', value: -Math.round(cogs), type: 'expense' },
-            { name: 'Комиссия', value: -Math.round(commissionTotal), type: 'expense' },
+            { name: 'Комиссия WB', value: -Math.round(commissionTotal), type: 'expense' },
             { name: 'Логистика', value: -Math.round(logisticsTotal), type: 'expense' },
-            { name: 'Маркетинг', value: -Math.round(marketing), type: 'expense' },
+            { name: 'Маркетинг (10%)', value: -Math.round(marketing), type: 'expense' },
             { name: 'EBITDA', value: Math.round(ebitda), type: 'total' }
         ];
     }, [products]);
@@ -186,7 +186,7 @@ const FinancePage = () => {
                     <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex gap-3 items-start">
                         <Info className="text-blue-600 min-w-[20px]" size={20}/>
                         <p className="text-xs text-blue-800 leading-relaxed">
-                            <strong>Важно:</strong> Расчет строится на "Цене реализации" (с учетом вашей скидки). Скидка WB Кошелек (СПП) обычно компенсируется маркетплейсом и не влияет на вашу выплату, но влияет на привлекательность для клиента.
+                            <strong>Обратите внимание:</strong> Выручка рассчитывается от Вашей цены реализации (до СПП). Скидка Постоянного Покупателя (СПП) предоставляется за счет Wildberries и не уменьшает вашу базу для выплат (обычно).
                         </p>
                     </div>
                 </div>
@@ -218,13 +218,21 @@ const FinancePage = () => {
                                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
                                             
                                             {/* Блок Цены - ВОДОПАД */}
-                                            <div className="flex flex-col">
+                                            <div className="flex flex-col relative">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-sm text-slate-400 line-through decoration-slate-300">{basicPrice} ₽</span>
-                                                    <span className="text-[10px] font-bold bg-red-50 text-red-500 px-1.5 py-0.5 rounded-md">-{discount}%</span>
+                                                    <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">-{discount}%</span>
                                                 </div>
-                                                <div className="font-bold text-xl leading-tight text-slate-800">{price} ₽</div>
-                                                <div className="text-[9px] text-slate-400 mt-0.5">Реализация</div>
+                                                <div className="flex items-baseline gap-2">
+                                                    <div className="font-bold text-xl leading-tight text-slate-800">{price} ₽</div>
+                                                    <div className="group/tooltip relative">
+                                                        <HelpCircle size={12} className="text-slate-300 cursor-help" />
+                                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded-lg opacity-0 group-hover/tooltip:opacity-100 pointer-events-none transition-opacity z-10">
+                                                            Это ваша цена (до СПП). Комиссия считается от неё. На сайте цена может быть ниже (напр. {Math.round(price * 0.7)}₽) за счет скидки WB.
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-[9px] text-emerald-600 font-medium mt-0.5">База для выплат</div>
                                             </div>
                                         </div>
                                         <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
@@ -239,7 +247,7 @@ const FinancePage = () => {
                                         <div className="flex justify-between items-center text-sm pl-4 relative">
                                             <div className="w-2 h-2 bg-purple-300 rounded-full absolute -left-[4px]"></div>
                                             <span className="text-slate-400 flex items-center gap-1">
-                                                Комиссия <span className="text-[10px] bg-purple-50 text-purple-600 px-1 rounded">{commPct}%</span>
+                                                Комиссия WB <span className="text-[10px] bg-purple-50 text-purple-600 px-1 rounded">{commPct}%</span>
                                             </span>
                                             <span className="text-purple-400">-{commVal} ₽</span>
                                         </div>
