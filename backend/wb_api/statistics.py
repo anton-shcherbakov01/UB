@@ -1,10 +1,32 @@
+# ================
+# File: backend/wb_api/statistics.py
+# ================
+import logging
 import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
-from .base import WBApiBase
+from fastapi import HTTPException
+
+# Попытка импорта базы. Если запускаем изолированно - создаем заглушку, 
+# чтобы код не падал при проверке синтаксиса.
+try:
+    from .base import WBApiBase
+except ImportError:
+    class WBApiBase:
+        BASE_URL = "https://statistics-api.wildberries.ru/api/v1"
+        COMMON_URL = "https://common-api.wildberries.ru/api/v1"
+        ADV_URL = "https://advert-api.wildberries.ru/adv/v1"
+        async def _get_cached_or_request(self, *args, **kwargs): pass 
+        async def _request_with_retry(self, *args, **kwargs): pass
+
+logger = logging.getLogger("WB-API-Stats")
 
 class WBStatisticsMixin(WBApiBase):
+    """
+    Mixin containing business logic for Statistics API.
+    Used by the main WBApiService (Legacy & General features).
+    """
     
     async def get_token_scopes(self, token: str) -> dict:
         """
@@ -22,11 +44,9 @@ class WBStatisticsMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             # 1. Проверка Статистики (Используем /orders как маркер)
             try:
-                # Тайм-аут короткий, нам нужен только статус код
-                async with session.get(f"{self.BASE_URL}/orders", 
-                                       params={"dateFrom": datetime.now().strftime("%Y-%m-%d")}, 
-                                       headers=headers, timeout=5) as r:
-                    # 401 = Unauthorized, 200/429 = OK (доступ есть)
+                async with session.get(f"{self.BASE_URL}/supplier/orders", 
+                                     params={"dateFrom": datetime.now().strftime("%Y-%m-%d")}, 
+                                     headers=headers, timeout=5) as r:
                     results["statistics"] = r.status != 401
             except: 
                 pass
@@ -34,8 +54,8 @@ class WBStatisticsMixin(WBApiBase):
             # 2. Проверка Контента/Общих (Standard) - тарифы
             try:
                 async with session.get(f"{self.COMMON_URL}/tariffs/box", 
-                                       params={"date": datetime.now().strftime("%Y-%m-%d")}, 
-                                       headers=headers, timeout=5) as r:
+                                     params={"date": datetime.now().strftime("%Y-%m-%d")}, 
+                                     headers=headers, timeout=5) as r:
                     results["standard"] = r.status != 401
             except: 
                 pass
@@ -43,7 +63,7 @@ class WBStatisticsMixin(WBApiBase):
             # 3. Проверка Рекламы (Promotion)
             try:
                 async with session.get(f"{self.ADV_URL}/promotion/count", 
-                                       headers=headers, timeout=5) as r:
+                                     headers=headers, timeout=5) as r:
                     results["promotion"] = r.status != 401
             except: 
                 pass
@@ -58,8 +78,9 @@ class WBStatisticsMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            orders_task = self._get_orders(session, token, today_str, use_cache=True)
-            stocks_task = self._get_stocks(session, token, today_str, use_cache=True)
+            # Используем внутренние методы с кэшированием
+            orders_task = self._get_orders_mixin(session, token, today_str, use_cache=True)
+            stocks_task = self._get_stocks_mixin(session, token, today_str, use_cache=True)
             
             orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
             
@@ -75,7 +96,7 @@ class WBStatisticsMixin(WBApiBase):
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         
         async with aiohttp.ClientSession() as session:
-            orders_data = await self._get_orders(session, token, date_from_str, use_cache=False)
+            orders_data = await self._get_orders_mixin(session, token, date_from_str, use_cache=False)
             
             if not orders_data or "items" not in orders_data:
                 return []
@@ -94,35 +115,40 @@ class WBStatisticsMixin(WBApiBase):
         if not token: return []
         
         today = datetime.now().strftime("%Y-%m-%dT00:00:00")
-        url = f"{self.BASE_URL}/stocks"
+        url = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
         params = {"dateFrom": today}
         headers = {"Authorization": token}
         
         async with aiohttp.ClientSession() as session:
-             data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+             if hasattr(self, '_get_cached_or_request'):
+                 data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+             else:
+                 async with session.get(url, headers=headers, params=params) as resp:
+                     data = await resp.json() if resp.status == 200 else []
+
              return data if isinstance(data, list) else []
 
     async def get_warehouse_coeffs(self, token: str):
-        """
-        Получение реальных коэффициентов приемки.
-        """
-        url = f"{self.COMMON_URL}/tariffs/box"
+        """Получение реальных коэффициентов приемки."""
+        url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
         headers = {"Authorization": token} if token else {}
         today = datetime.now().strftime("%Y-%m-%d")
         params = {"date": today}
 
         async with aiohttp.ClientSession() as session:
-            data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+            if hasattr(self, '_get_cached_or_request'):
+                data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
+            else:
+                async with session.get(url, headers=headers, params=params) as resp:
+                    data = await resp.json() if resp.status == 200 else {}
+
             if data and 'response' in data and 'data' in data['response']:
                 return data['response']['data']
             return []
 
     async def calculate_transit(self, liters: int, destination: str = "Koledino"):
-        # Логика калькулятора остается на бэкенде, но коэффициенты можно брать из get_warehouse_coeffs
-        # Для простоты оставляем расчет, но убираем заглушку рандома
         direct_base = 1500
         direct_rate = 30
-        
         transit_base = 500 
         transit_rate = 10 
         transit_logistics = 1000 
@@ -139,54 +165,16 @@ class WBStatisticsMixin(WBApiBase):
                 "total": transit_base + (liters * transit_rate) + transit_logistics
             }
         }
-
-    async def _get_orders(self, session, token: str, date_from: str, use_cache=True):
-        url = f"{self.BASE_URL}/orders"
-        params = {"dateFrom": date_from}
-        headers = {"Authorization": token}
-        
-        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
-        
-        if not data:
-            return {"count": 0, "sum": 0, "items": []}
-        
-        if isinstance(data, list):
-            valid_orders = [x for x in data if not x.get("isCancel")]
-            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
-            return {
-                "count": len(valid_orders),
-                "sum": int(total_sum),
-                "items": valid_orders
-            }
-        return {"count": 0, "sum": 0, "items": []}
-
-    async def _get_stocks(self, session, token: str, date_from: str, use_cache=True):
-        url = f"{self.BASE_URL}/stocks"
-        params = {"dateFrom": date_from}
-        headers = {"Authorization": token}
-        
-        data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
-        
-        if not data:
-            return {"total_quantity": 0}
-            
-        if isinstance(data, list):
-            total_qty = sum(item.get("quantity", 0) for item in data)
-            return {"total_quantity": total_qty}
-            
-            
-        return {"total_quantity": 0}
     
     async def get_all_commissions(self, token: str) -> Dict[str, float]:
-        """
-        Получает тарифы комиссий по всем категориям.
-        API: https://common-api.wildberries.ru/api/v1/tariffs/commission
-        Возвращает: {subject_id_str: commission_percent}
-        """
+        """Получает тарифы комиссий по всем категориям."""
         url = "https://common-api.wildberries.ru/api/v1/tariffs/commission"
         headers = {"Authorization": token}
         
-        data = await self._request_with_retry(None, url, headers, method='GET')
+        if hasattr(self, '_request_with_retry'):
+            data = await self._request_with_retry(None, url, headers, method='GET')
+        else:
+             return {}
         
         if not data or 'report' not in data:
             return {}
@@ -194,28 +182,25 @@ class WBStatisticsMixin(WBApiBase):
         commissions = {}
         for item in data['report']:
             sub_id = str(item.get('subjectID'))
-            # Берем комиссию для Маркетплейса (kgvpMarketplace) или FBO (kgvp)
-            # Обычно они близки, берем kgvpMarketplace как базу для большинства селлеров
             pct = item.get('kgvpMarketplace', 25.0) 
             commissions[sub_id] = float(pct)
             
         return commissions
 
     async def get_box_tariffs(self, token: str, date_str: str) -> Dict[str, Dict]:
-        """
-        Получает коэффициенты и базовые ставки логистики коробов.
-        API: https://common-api.wildberries.ru/api/v1/tariffs/box
-        """
+        """Получает коэффициенты и базовые ставки логистики коробов."""
         url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
         params = {"date": date_str}
         headers = {"Authorization": token}
         
-        data = await self._request_with_retry(None, url, headers, params=params)
+        if hasattr(self, '_request_with_retry'):
+            data = await self._request_with_retry(None, url, headers, params=params)
+        else:
+            return {}
         
         if not data or 'response' not in data:
             return {}
 
-        # Формируем словарь: {'Koledino': {'base': 30, 'liter': 7}, ...}
         tariffs = {}
         warehouse_list = data['response'].get('data', {}).get('warehouseList', [])
         
@@ -223,19 +208,67 @@ class WBStatisticsMixin(WBApiBase):
             name = w.get('warehouseName')
             if not name: continue
             
-            # Данные приходят в формате строк с запятыми: "30,5" -> 30.5
             try:
                 base_s = w.get('boxDeliveryBase', '0').replace(',', '.')
                 liter_s = w.get('boxDeliveryLiter', '0').replace(',', '.')
-                
-                tariffs[name] = {
-                    "base": float(base_s),
-                    "liter": float(liter_s)
-                }
+                tariffs[name] = {"base": float(base_s), "liter": float(liter_s)}
             except ValueError:
                 continue
-                
         return tariffs
+
+    # --- Internal Helpers for Mixin ---
+    async def _get_orders_mixin(self, session, token: str, date_from: str, use_cache=True):
+        url = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
+        params = {"dateFrom": date_from}
+        headers = {"Authorization": token}
+        
+        if hasattr(self, '_get_cached_or_request'):
+            data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        else:
+             async with session.get(url, headers=headers, params=params) as resp:
+                data = await resp.json() if resp.status == 200 else []
+        
+        if not data:
+            return {"count": 0, "sum": 0, "items": []}
+        
+        if isinstance(data, list):
+            valid_orders = [x for x in data if not x.get("isCancel")]
+            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            return {"count": len(valid_orders), "sum": int(total_sum), "items": valid_orders}
+        return {"count": 0, "sum": 0, "items": []}
+
+    async def _get_stocks_mixin(self, session, token: str, date_from: str, use_cache=True):
+        url = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
+        params = {"dateFrom": date_from}
+        headers = {"Authorization": token}
+        
+        if hasattr(self, '_get_cached_or_request'):
+            data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        else:
+            async with session.get(url, headers=headers, params=params) as resp:
+                data = await resp.json() if resp.status == 200 else []
+        
+        if not data: return {"total_quantity": 0}
+        if isinstance(data, list):
+            total_qty = sum(item.get("quantity", 0) for item in data)
+            return {"total_quantity": total_qty}
+        return {"total_quantity": 0}
+
+
+class WBStatisticsAPI:
+    """
+    Standalone Client for Wildberries Statistics API.
+    Used by Supply Service (New Logic).
+    """
+    BASE_URL = "https://statistics-api.wildberries.ru"
+
+    def __init__(self, token: str):
+        self.token = token
+        self.headers = {
+            "Authorization": self.token,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
 
     async def _request(self, endpoint: str, params: Dict[str, Any] = None, retries: int = 3) -> List[Dict[str, Any]]:
         url = f"{self.BASE_URL}{endpoint}"

@@ -52,6 +52,7 @@ class User(Base):
     bidder_logs = relationship("BidderLog", back_populates="user", cascade="all, delete-orphan")
     bidder_settings = relationship("BidderSettings", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
+    supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 class SupplySettings(Base):
     """
@@ -190,6 +191,11 @@ class BidderLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="bidder_logs")
+
+try:
+    configure_mappers()
+except Exception as e:
+    logger.error(f"Mapper configuration failed: {e}")
 
 async def init_db():
     async with engine_async.begin() as conn:
