@@ -1,14 +1,14 @@
 import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
 from pydantic import BaseModel
 
 from database import get_db, User, SupplySettings
 from dependencies import get_current_user, get_redis_client
-from wb_api.statistics import WBStatisticsMixin
+from wb_api.statistics import WBStatisticsAPI
 from services.supply import supply_service
 from tasks.supply import sync_supply_data_task
 
@@ -22,12 +22,12 @@ class SupplySettingsSchema(BaseModel):
     abc_a_share: float
 
 # --- Helpers ---
-async def get_or_create_settings(session: Session, user_id: int) -> SupplySettings:
+async def get_or_create_settings(session: AsyncSession, user_id: int) -> SupplySettings:
     """Helper to fetch settings or create default"""
     stmt = select(SupplySettings).where(SupplySettings.user_id == user_id)
-    result = session.execute(stmt) # Synchronous execute wrapper if needed, or await if async
-    # Since we are using Depends(get_db) which might yield async session in previous full context,
-    # but based on standard FastAPI + SQLAlchemy usage often shown, I will assume async session usage:
+    
+    # FIX: Added await here
+    result = await session.execute(stmt) 
     settings = result.scalar_one_or_none()
     
     if not settings:
@@ -48,7 +48,7 @@ async def get_or_create_settings(session: Session, user_id: int) -> SupplySettin
 @router.get("/settings", response_model=SupplySettingsSchema)
 async def get_settings(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Get current user supply settings"""
     settings = await get_or_create_settings(db, user.id)
@@ -62,7 +62,7 @@ async def get_settings(
 async def update_supply_settings(
     update_data: SupplySettingsSchema,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db)
 ):
     """Update settings and invalidate cache"""
     settings = await get_or_create_settings(db, user.id)
@@ -85,7 +85,7 @@ async def get_supply_analysis(
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     refresh: bool = False,
-    db: Session = Depends(get_db) 
+    db: AsyncSession = Depends(get_db) 
 ):
     """
     Get full supply analysis: Stocks, Velocity, ABC, ROP.
@@ -116,7 +116,7 @@ async def get_supply_analysis(
         }
 
         # 3. Fetch Real Data from WB
-        wb_api = WBStatisticsMixin(user.wb_api_token)
+        wb_api = WBStatisticsAPI(user.wb_api_token)
         stocks, orders = await wb_api.get_turnover_data()
 
         # 4. Analyze using Config
