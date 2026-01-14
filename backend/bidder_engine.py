@@ -3,7 +3,7 @@ import logging
 import asyncio
 import json
 from datetime import datetime
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Any
 
 from database import AsyncSessionLocal, BidderSettings, BidderLog
 from wb_api_service import wb_api_service  # Ваш сервис API (должен иметь get_auction_cpm)
