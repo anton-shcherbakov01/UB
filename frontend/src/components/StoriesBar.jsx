@@ -1,10 +1,66 @@
-import React, { useState } from 'react';
-import { TrendingUp, TrendingDown, Percent, Star, Wallet, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { TrendingUp, TrendingDown, Percent, Star, Wallet, X, ChevronRight, ChevronLeft } from 'lucide-react';
 
 const StoriesBar = ({ stories }) => {
-    const [activeStory, setActiveStory] = useState(null);
+    const [activeIndex, setActiveIndex] = useState(null);
+    const [progress, setProgress] = useState(0);
+
+    // Блокировка прокрутки фона при открытых сторис
+    useEffect(() => {
+        if (activeIndex !== null) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = 'auto';
+        }
+        return () => { document.body.style.overflow = 'auto'; };
+    }, [activeIndex]);
+
+    // Таймер для авто-переключения
+    useEffect(() => {
+        let timer;
+        if (activeIndex !== null) {
+            setProgress(0);
+            const duration = 5000; // 5 секунд на сторис
+            const interval = 50;
+            const step = 100 / (duration / interval);
+
+            timer = setInterval(() => {
+                setProgress(prev => {
+                    if (prev >= 100) {
+                        handleNext();
+                        return 0;
+                    }
+                    return prev + step;
+                });
+            }, interval);
+        }
+        return () => clearInterval(timer);
+    }, [activeIndex]);
 
     if (!stories || stories.length === 0) return null;
+
+    const handleNext = () => {
+        if (activeIndex < stories.length - 1) {
+            setActiveIndex(activeIndex + 1);
+            setProgress(0);
+        } else {
+            closeStories();
+        }
+    };
+
+    const handlePrev = () => {
+        if (activeIndex > 0) {
+            setActiveIndex(activeIndex - 1);
+            setProgress(0);
+        } else {
+            setActiveIndex(0); // Или закрывать, если нужно
+        }
+    };
+
+    const closeStories = () => {
+        setActiveIndex(null);
+        setProgress(0);
+    };
 
     const getIcon = (iconName, size=16) => {
         switch(iconName) {
@@ -17,13 +73,15 @@ const StoriesBar = ({ stories }) => {
         }
     };
 
+    const activeStory = activeIndex !== null ? stories[activeIndex] : null;
+
     return (
         <>
-            {/* Лента сторис */}
-            <div className="flex gap-4 overflow-x-auto pb-4 px-2 scrollbar-hide select-none">
-                {stories.map(s => (
-                    <div key={s.id} onClick={() => setActiveStory(s)} className="flex flex-col items-center gap-2 min-w-[72px] cursor-pointer group">
-                        <div className={`w-[72px] h-[72px] rounded-full p-[3px] ${s.color} transition-transform group-active:scale-95 shadow-sm`}>
+            {/* Лента кружочков */}
+            <div className="flex gap-4 overflow-x-auto pb-4 px-2 scrollbar-hide select-none z-10 relative">
+                {stories.map((s, idx) => (
+                    <div key={s.id} onClick={() => setActiveIndex(idx)} className="flex flex-col items-center gap-2 min-w-[72px] cursor-pointer group transition-transform active:scale-95">
+                        <div className={`w-[72px] h-[72px] rounded-full p-[3px] ${s.color} shadow-sm`}>
                             <div className="w-full h-full rounded-full bg-white border-[3px] border-white flex flex-col items-center justify-center relative overflow-hidden">
                                 <div className="mb-0.5">{getIcon(s.icon)}</div>
                                 <span className="text-[11px] font-black text-slate-800 leading-none text-center px-1 truncate w-full">
@@ -36,38 +94,62 @@ const StoriesBar = ({ stories }) => {
                 ))}
             </div>
 
-            {/* Просмотр сторис (Модалка) */}
+            {/* Полноэкранный просмотр */}
             {activeStory && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setActiveStory(null)}>
-                    <div className="w-[85%] max-w-sm aspect-[9/16] max-h-[80vh] bg-white rounded-3xl relative overflow-hidden flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
-                        {/* Фон сторис */}
-                        <div className={`absolute inset-0 opacity-20 ${activeStory.color.replace('bg-gradient-to-tr', 'bg-gradient-to-b')}`}></div>
-                        
-                        {/* Прогресс бар (имитация) */}
-                        <div className="absolute top-2 left-2 right-2 h-1 bg-black/10 rounded-full overflow-hidden">
-                            <div className="h-full bg-slate-800 w-full animate-[progress_5s_linear]"></div>
-                        </div>
+                <div className="fixed inset-0 z-[100] bg-black text-white flex flex-col animate-in fade-in duration-200 safe-area-pb">
+                    
+                    {/* Фон с блюром */}
+                    <div className={`absolute inset-0 opacity-30 blur-3xl ${activeStory.color.replace('bg-gradient-to-tr', 'bg-gradient-to-b')}`}></div>
 
-                        <button onClick={() => setActiveStory(null)} className="absolute top-4 right-4 text-slate-500 p-2 bg-white/50 rounded-full backdrop-blur-md z-10">
-                            <X size={20} />
-                        </button>
-
-                        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center relative z-0">
-                            <div className="w-24 h-24 rounded-full bg-white shadow-xl flex items-center justify-center mb-6 text-4xl">
-                                {getIcon(activeStory.icon, 48)}
+                    {/* Верхняя панель прогресса */}
+                    <div className="absolute top-4 left-2 right-2 flex gap-1 z-20">
+                        {stories.map((_, idx) => (
+                            <div key={idx} className="h-1 bg-white/20 flex-1 rounded-full overflow-hidden">
+                                <div 
+                                    className={`h-full bg-white transition-all duration-100 ease-linear ${idx === activeIndex ? '' : (idx < activeIndex ? 'w-full' : 'w-0')}`}
+                                    style={{ width: idx === activeIndex ? `${progress}%` : undefined }}
+                                ></div>
                             </div>
-                            <h2 className="text-3xl font-black text-slate-800 mb-2">{activeStory.val}</h2>
-                            <h3 className="text-xl font-bold text-slate-500 mb-6">{activeStory.title}</h3>
-                            <p className="text-slate-600 font-medium leading-relaxed bg-white/60 p-4 rounded-2xl backdrop-blur-sm">
-                                {activeStory.details || "Нет дополнительных данных"}
+                        ))}
+                    </div>
+
+                    {/* Кнопка закрытия */}
+                    <button 
+                        onClick={closeStories} 
+                        className="absolute top-8 right-4 z-30 p-2 bg-black/20 rounded-full backdrop-blur-md active:bg-white/20 transition"
+                    >
+                        <X size={24} color="white" />
+                    </button>
+
+                    {/* Зоны клика (навигация тапами) */}
+                    <div className="absolute inset-0 z-10 flex">
+                        <div className="w-1/3 h-full" onClick={handlePrev}></div>
+                        <div className="w-2/3 h-full" onClick={handleNext}></div>
+                    </div>
+
+                    {/* Контент сторис */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center relative z-0 pointer-events-none mt-10">
+                        <div className="w-32 h-32 rounded-full bg-white shadow-[0_0_50px_rgba(255,255,255,0.3)] flex items-center justify-center mb-10 text-6xl animate-in zoom-in duration-300">
+                            {getIcon(activeStory.icon, 64)}
+                        </div>
+                        
+                        <h2 className="text-5xl font-black mb-4 tracking-tight drop-shadow-lg">
+                            {activeStory.val}
+                        </h2>
+                        
+                        <h3 className="text-2xl font-bold text-white/80 mb-8 uppercase tracking-widest border-b border-white/20 pb-2">
+                            {activeStory.title}
+                        </h3>
+                        
+                        <div className="bg-white/10 backdrop-blur-md p-6 rounded-3xl border border-white/10 shadow-xl max-w-xs">
+                            <p className="text-lg font-medium leading-relaxed text-slate-100">
+                                {activeStory.details || "Информация обновляется в реальном времени."}
                             </p>
                         </div>
-                        
-                        <div className="p-6 pb-8">
-                            <button onClick={() => setActiveStory(null)} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold">
-                                Закрыть
-                            </button>
-                        </div>
+                    </div>
+
+                    <div className="pb-12 text-center text-white/40 text-sm animate-pulse">
+                        Нажми справа, чтобы продолжить
                     </div>
                 </div>
             )}
