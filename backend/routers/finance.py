@@ -6,12 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from database import get_db, get_redis_client
-from dependencies import get_current_user
-from models import User, ProductCost
+from database import get_db, User, ProductCost
+from dependencies import get_current_user, get_redis_client
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
-from tasks.finance import sync_product_metadata 
+from tasks.finance import sync_product_metadata
 
 router = APIRouter(prefix="/api", tags=["Finance"])
 
