@@ -1,52 +1,46 @@
 import React, { useState, useEffect } from 'react';
-import { User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { 
+    User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, 
+    AlertTriangle, Check, Lock, BarChart3, Package, Megaphone, MessageCircle 
+} from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
 const ProfilePage = ({ onNavigate }) => {
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
+    
+    // API Key states
     const [wbToken, setWbToken] = useState('');
     const [tokenLoading, setTokenLoading] = useState(false);
-    const [payLoading, setPayLoading] = useState(false);
-    const [error, setError] = useState(null);
     const [scopes, setScopes] = useState(null);
     const [scopesLoading, setScopesLoading] = useState(false);
+    
+    const [payLoading, setPayLoading] = useState(false);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
-        // Загрузка тарифов
+        loadProfile();
+        loadTariffs();
+    }, []);
+
+    const loadTariffs = () => {
         fetch(`${API_URL}/api/user/tariffs`, { headers: getTgHeaders() })
             .then(r => r.json())
-            .then(data => {
-                if (Array.isArray(data)) setTariffs(data);
-            })
-            .catch(e => console.error("Tariffs error:", e));
+            .then(data => { if (Array.isArray(data)) setTariffs(data); });
+    };
 
-        // Загрузка профиля
+    const loadProfile = () => {
         fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() })
-            .then(async r => {
-                if (!r.ok) {
-                    const text = await r.text();
-                    try {
-                        const json = JSON.parse(text);
-                        throw new Error(json.detail || `Статус ${r.status}`);
-                    } catch {
-                        throw new Error(`Ошибка сервера: ${r.status}`);
-                    }
-                }
-                return r.json();
-            })
+            .then(r => r.ok ? r.json() : Promise.reject(r))
             .then(data => {
                 setUser(data);
-                if (data && data.has_wb_token) {
+                if (data.has_wb_token) {
                     setWbToken(data.wb_token_preview || '');
                     fetchScopes();
                 }
             })
-            .catch(e => {
-                console.error("Profile fetch failed:", e);
-                setError(`${e.message}`);
-            });
-    }, []);
+            .catch(e => setError("Не удалось загрузить профиль"));
+    };
 
     const fetchScopes = () => {
         setScopesLoading(true);
@@ -57,60 +51,8 @@ const ProfilePage = ({ onNavigate }) => {
             .finally(() => setScopesLoading(false));
     };
 
-    const payStars = async (plan) => {
-        if (!plan.stars) return;
-        try {
-            const res = await fetch(`${API_URL}/api/payment/stars_link`, {
-                method: 'POST',
-                headers: getTgHeaders(),
-                body: JSON.stringify({ plan_id: plan.id, amount: plan.stars })
-            });
-            const d = await res.json();
-            if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
-                window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
-                    if (status === 'paid') {
-                        alert("Оплата прошла успешно!");
-                        window.location.reload();
-                    }
-                });
-            } else {
-                alert("Ошибка создания ссылки или нет Telegram WebApp");
-            }
-        } catch (e) {
-            alert(e.message);
-        }
-    };
-
-    const payRubles = async (plan) => {
-        if (!plan.price || plan.price === "0 ₽") return;
-        setPayLoading(true);
-        try {
-            const res = await fetch(`${API_URL}/api/payment/yookassa/create`, {
-                method: 'POST',
-                headers: getTgHeaders(),
-                body: JSON.stringify({ plan_id: plan.id })
-            });
-            const data = await res.json();
-            if (res.ok && data.payment_url) {
-                if (window.Telegram?.WebApp?.openLink) {
-                    window.Telegram.WebApp.openLink(data.payment_url);
-                } else {
-                    window.open(data.payment_url, '_blank');
-                }
-            } else {
-                throw new Error(data.detail || "Ошибка платежного провайдера");
-            }
-        } catch (e) {
-            alert(`Ошибка: ${e.message}`);
-        } finally {
-            setPayLoading(false);
-        }
-    };
-
     const saveToken = async () => {
-        // Блокируем сохранение маскированного токена
-        if (!wbToken || wbToken.includes("*****")) return;
-        
+        if (!wbToken || wbToken.includes("••••")) return;
         setTokenLoading(true);
         try {
             const res = await fetch(`${API_URL}/api/user/token`, {
@@ -118,18 +60,18 @@ const ProfilePage = ({ onNavigate }) => {
                 headers: getTgHeaders(),
                 body: JSON.stringify({ token: wbToken })
             });
+            const d = await res.json();
             
             if (res.ok) {
-                alert("Токен успешно сохранен!");
-                const uRes = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
-                if (uRes.ok) {
-                    const uData = await uRes.json();
-                    setUser(uData);
-                    fetchScopes(); // Обновляем права
-                }
+                // Обновляем локально без перезагрузки всей страницы
+                setUser(prev => ({ ...prev, has_wb_token: true }));
+                if (d.scopes) setScopes(d.scopes);
+                else fetchScopes();
+                
+                // Маскируем токен визуально
+                setWbToken(wbToken.substring(0, 5) + "••••••••••" + wbToken.substring(wbToken.length - 4));
             } else {
-                const d = await res.json();
-                throw new Error(d.detail || "Ошибка сохранения");
+                throw new Error(d.detail || "Ошибка");
             }
         } catch (e) {
             alert(e.message);
@@ -139,183 +81,198 @@ const ProfilePage = ({ onNavigate }) => {
     };
 
     const deleteToken = async () => {
-        if (!confirm("Удалить токен?")) return;
+        if (!confirm("Удалить токен и остановить сбор данных?")) return;
         setTokenLoading(true);
         try {
             await fetch(`${API_URL}/api/user/token`, { method: 'DELETE', headers: getTgHeaders() });
             setWbToken('');
             setScopes(null);
             setUser(prev => ({ ...prev, has_wb_token: false }));
-        } catch (e) {
-            console.error(e);
         } finally {
             setTokenLoading(false);
         }
     };
 
-    const ScopeBadge = ({ label, active, loading }) => (
-        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${active ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-400 opacity-60'}`}>
-            {loading ? <Loader2 size={12} className="animate-spin" /> : active ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-            {label}
-        </div>
-    );
+    // Оплата (заглушки функций)
+    const payStars = (plan) => alert(`Оплата Stars: ${plan.stars}`);
+    const payRubles = (plan) => alert(`Оплата картой: ${plan.price}`);
 
-    const RenderTariffCard = ({ plan }) => (
-        <div className={`p-5 rounded-2xl border-2 transition-all ${plan.current ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-100 bg-white'}`}>
-            <div className="flex justify-between items-start mb-3">
-                <div>
-                    <h3 className="font-bold text-lg flex items-center gap-2">
-                        {plan.name}
-                        {plan.current && <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full">CURRENT</span>}
-                    </h3>
-                    <div className="text-2xl font-black mt-1">{plan.price} <span className="text-sm font-normal text-slate-400">/ мес</span></div>
-                </div>
-                {plan.stars > 0 && (
-                    <div className="text-right">
-                        <div className="text-amber-500 font-bold text-sm flex items-center justify-end gap-1">
-                            ★ {plan.stars}
-                        </div>
-                    </div>
-                )}
+    // --- КОМПОНЕНТЫ UI ---
+
+    const ScopeCard = ({ label, active, icon: Icon, colorClass }) => (
+        <div className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all duration-300 ${
+            active 
+            ? `bg-${colorClass}-50 border-${colorClass}-200` 
+            : 'bg-slate-50 border-slate-100 opacity-60 grayscale'
+        }`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 ${
+                active ? `bg-${colorClass}-100 text-${colorClass}-600` : 'bg-slate-200 text-slate-400'
+            }`}>
+                {active ? <Icon size={16} /> : <Lock size={14} />}
             </div>
-
-            <ul className="space-y-2 mb-4">
-                {plan.features.map((f, i) => (
-                    <li key={i} className="text-sm text-slate-600 flex items-center gap-2">
-                        <div className={`w-1.5 h-1.5 rounded-full ${plan.current ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                        {f}
-                    </li>
-                ))}
-            </ul>
-
-            {!plan.current && plan.price !== "0 ₽" && (
-                <div className="grid grid-cols-2 gap-2 mt-4">
-                    <button onClick={() => payStars(plan)} className="flex items-center justify-center gap-2 py-2.5 bg-amber-400 text-white rounded-xl font-bold text-sm hover:bg-amber-500 transition-colors">
-                        <span>Stars</span>
-                    </button>
-                    <button onClick={() => payRubles(plan)} disabled={payLoading} className="flex items-center justify-center gap-2 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors">
-                        {payLoading ? <Loader2 className="animate-spin" size={16} /> : <CreditCard size={16} />}
-                        <span>РФ Карта</span>
-                    </button>
-                </div>
-            )}
+            <span className={`text-[10px] font-bold text-center leading-tight ${active ? 'text-slate-700' : 'text-slate-400'}`}>
+                {label}
+            </span>
         </div>
     );
-
-    // Логика состояния кнопки: 
-    // Дизейблим если идет загрузка ИЛИ (если токен уже есть и поле содержит маску '*****')
-    // Это предотвращает отправку маскированного токена, но разрешает отправку, если пользователь начал вводить новый
-    const isSaveDisabled = tokenLoading || (user?.has_wb_token && wbToken.includes('*****')) || !wbToken;
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-            {error && (
-                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex flex-col gap-2">
-                    <div className="flex items-start gap-3">
-                        <AlertTriangle className="text-red-500 shrink-0" size={20} />
-                        <div>
-                            <h3 className="font-bold text-red-800 text-sm">Ошибка загрузки</h3>
-                            <p className="text-xs text-red-600 mt-1">{error}</p>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
-                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+            
+            {/* Header */}
+            <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 relative overflow-hidden">
                     <User size={32} />
+                    {/* Статус онлайн/план */}
+                    <div className="absolute bottom-1 right-1 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full"></div>
                 </div>
                 <div>
-                    <h2 className="text-xl font-bold">{user?.name || 'Загрузка...'}</h2>
-                    <p className="text-sm text-slate-400">@{user?.username || '...'}</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                        <div className="inline-flex items-center gap-1 bg-black text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider">
-                            {user?.plan || 'Free'} Plan
-                        </div>
+                    <h2 className="text-xl font-black text-slate-800">{user?.name || 'Loading...'}</h2>
+                    <div className="flex items-center gap-2 mt-1">
+                        <span className="bg-slate-900 text-white px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                            {user?.plan || 'Free'}
+                        </span>
                         {user?.days_left > 0 && (
-                            <div className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] font-bold">
+                            <span className="text-xs font-medium text-emerald-600">
                                 {user.days_left} дн.
-                            </div>
+                            </span>
                         )}
                     </div>
                 </div>
             </div>
 
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex items-center gap-2 mb-4">
-                    <Key className="text-indigo-600" size={20} />
-                    <h2 className="font-bold text-lg">API Ключ WB</h2>
+            {/* API Settings Section */}
+            <div className="bg-white p-5 rounded-[24px] shadow-sm border border-slate-100">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                        <Key size={18} className="text-indigo-600" />
+                        Подключение WB
+                    </h3>
+                    {user?.has_wb_token && (
+                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg">
+                            Подключено
+                        </span>
+                    )}
                 </div>
 
-                <div className="relative">
+                <div className="relative mb-4">
                     <input
                         type="text"
                         value={wbToken}
                         onChange={(e) => setWbToken(e.target.value)}
-                        onFocus={(e) => { if (user?.has_wb_token) e.target.select() }} // Удобство для выделения старого токена
-                        placeholder="Введите токен..."
-                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 pr-10 text-sm font-medium outline-none focus:ring-2 ring-indigo-100 transition-all"
+                        placeholder="Вставьте API токен (Статистика)"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all placeholder:text-slate-400"
                     />
-                    {user?.has_wb_token && (
-                        <button onClick={deleteToken} className="absolute right-2 top-2 p-1 text-slate-300 hover:text-red-500 transition-colors">
+                    {user?.has_wb_token && wbToken && (
+                        <button onClick={deleteToken} className="absolute right-3 top-3 p-1 text-slate-400 hover:text-rose-500 transition-colors">
                             <X size={16} />
                         </button>
                     )}
                 </div>
 
-                {/* SCOPES DISPLAY */}
+                {/* Scope Grid Visualization */}
                 {(user?.has_wb_token || scopes) && (
-                    <div className="mt-4">
-                        <div className="text-[10px] uppercase font-bold text-slate-400 mb-2">Доступные разделы API</div>
-                        <div className="flex flex-wrap gap-2">
-                            <ScopeBadge label="Статистика" active={scopes?.statistics} loading={scopesLoading} />
-                            <ScopeBadge label="Контент/Цены" active={scopes?.standard} loading={scopesLoading} />
-                            <ScopeBadge label="Реклама" active={scopes?.promotion} loading={scopesLoading} />
-                            <ScopeBadge label="Вопросы" active={scopes?.questions} loading={scopesLoading} />
-                        </div>
+                    <div className="grid grid-cols-4 gap-2 mb-4">
+                        {scopesLoading ? (
+                            <div className="col-span-4 text-center py-4 text-slate-400 text-xs flex justify-center gap-2">
+                                <Loader2 className="animate-spin" size={14} /> Проверка прав...
+                            </div>
+                        ) : (
+                            <>
+                                <ScopeCard 
+                                    label="Аналитика" 
+                                    active={scopes?.statistics} 
+                                    icon={BarChart3} 
+                                    colorClass="indigo" 
+                                />
+                                <ScopeCard 
+                                    label="Контент" 
+                                    active={scopes?.standard} 
+                                    icon={Package} 
+                                    colorClass="emerald" 
+                                />
+                                <ScopeCard 
+                                    label="Реклама" 
+                                    active={scopes?.promotion} 
+                                    icon={Megaphone} 
+                                    colorClass="violet" 
+                                />
+                                <ScopeCard 
+                                    label="Вопросы" 
+                                    active={scopes?.questions} 
+                                    icon={MessageCircle} 
+                                    colorClass="amber" 
+                                />
+                            </>
+                        )}
                     </div>
                 )}
 
-                {/* Кнопка сохранения теперь видна всегда, но блокируется если токен не изменен */}
-                <button
-                    onClick={saveToken}
-                    disabled={isSaveDisabled}
-                    className={`w-full mt-4 py-3 rounded-xl font-bold text-sm transition-all flex justify-center items-center gap-2
-                        ${isSaveDisabled
-                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 active:scale-95 hover:bg-indigo-700'
-                        }`}
-                >
-                    {tokenLoading ? <Loader2 className="animate-spin" size={18} /> : (user?.has_wb_token ? 'Обновить токен' : 'Сохранить токен')}
-                </button>
+                {/* Save Button - Only shows if needed */}
+                {(!user?.has_wb_token || (wbToken && !wbToken.includes('••••'))) && (
+                    <button
+                        onClick={saveToken}
+                        disabled={tokenLoading || !wbToken}
+                        className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 active:scale-95 transition-all disabled:opacity-50 disabled:active:scale-100 flex justify-center items-center gap-2"
+                    >
+                        {tokenLoading ? <Loader2 className="animate-spin" size={18}/> : 'Сохранить и проверить'}
+                    </button>
+                )}
             </div>
 
-            <h2 className="font-bold text-lg px-2 mt-4">Тарифы</h2>
-            <div className="space-y-4">
+            {/* Tariffs Section */}
+            <h3 className="font-bold text-lg px-2">Тарифы</h3>
+            <div className="grid gap-4">
                 {tariffs.map(plan => (
-                    <RenderTariffCard key={plan.id} plan={plan} />
+                    <div key={plan.id} className={`p-5 rounded-[24px] border-2 transition-all relative overflow-hidden ${plan.current ? 'border-emerald-500 bg-white' : 'border-slate-100 bg-white'}`}>
+                        {plan.is_best && (
+                            <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl">
+                                POPULAR
+                            </div>
+                        )}
+                        
+                        <div className="flex justify-between items-start mb-2">
+                            <div>
+                                <h4 className="font-bold text-lg">{plan.name}</h4>
+                                <div className="text-slate-900 font-black text-2xl">{plan.price}</div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2 mb-4">
+                            {plan.features.slice(0, 3).map((f, i) => (
+                                <div key={i} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                                    <div className={`w-1.5 h-1.5 rounded-full ${plan.current ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                    {f}
+                                </div>
+                            ))}
+                        </div>
+
+                        {!plan.current && plan.price !== "0 ₽" && (
+                            <button 
+                                onClick={() => payRubles(plan)} 
+                                className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-900 hover:text-white text-slate-900 font-bold text-sm transition-all flex items-center justify-center gap-2"
+                            >
+                                {payLoading ? <Loader2 size={16} className="animate-spin" /> : 'Выбрать'}
+                            </button>
+                        )}
+                        {plan.current && (
+                            <div className="w-full py-2.5 text-center text-xs font-bold text-emerald-600 bg-emerald-50 rounded-xl">
+                                Ваш текущий план
+                            </div>
+                        )}
+                    </div>
                 ))}
             </div>
 
-            {user?.is_admin && (
-                <button onClick={() => onNavigate('admin')} className="w-full bg-slate-900 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between active:scale-95 transition-transform mt-4">
-                    <div className="flex items-center gap-3">
-                        <Shield size={20} className="text-emerald-400" />
-                        <span className="font-bold text-sm">Админ-панель</span>
-                    </div>
-                    <ArrowUpRight size={18} />
-                </button>
-            )}
-
-            <div className="mt-8 pt-8 border-t border-slate-100 text-center space-y-2">
-                <div className="flex justify-center gap-4 text-xs text-slate-400">
-                    <a href="#" className="hover:text-slate-600 transition-colors">Публичная оферта</a>
-                    <span>•</span>
-                    <a href="#" className="hover:text-slate-600 transition-colors">Политика конфиденциальности</a>
-                </div>
+            {/* Footer Links */}
+            <div className="pt-6 text-center">
+                 {user?.is_admin && (
+                    <button onClick={() => onNavigate('admin')} className="mb-6 inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-full text-xs font-bold shadow-lg">
+                        <Shield size={12} /> Админ-панель
+                    </button>
+                )}
                 <p className="text-[10px] text-slate-300">
-                    Сервис не является аффилированным лицом Wildberries.<br />
-                    Обработка персональных данных в соответствии с 152-ФЗ.
+                    ID: {user?.id} • Ver: 1.2.0 (Beta)
                 </p>
             </div>
         </div>

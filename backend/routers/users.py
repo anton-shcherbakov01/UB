@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
@@ -18,13 +18,20 @@ class TokenRequest(BaseModel):
 
 @router.get("/me")
 async def get_profile(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Считаем товары
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
     count = (await db.execute(count_stmt)).scalar() or 0
     
+    # Маскируем токен для безопасности
     masked_token = None
     if user.wb_api_token:
-        masked_token = user.wb_api_token[:5] + "*" * 10 + user.wb_api_token[-5:]
+        # Показываем первые 5 и последние 4 символа
+        if len(user.wb_api_token) > 10:
+            masked_token = user.wb_api_token[:5] + "••••••••••" + user.wb_api_token[-4:]
+        else:
+            masked_token = "••••••••"
     
+    # Считаем дни подписки
     days_left = 0
     if user.subscription_expires_at:
         delta = user.subscription_expires_at - datetime.utcnow()
@@ -49,23 +56,34 @@ async def save_wb_token(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    """Сохранение токена API WB"""
-    # Проверяем токен (хотя бы один сервис должен ответить)
+    """Сохранение токена API WB и сразу проверка прав"""
+    # 1. Проверяем валидность
     is_valid = await wb_api_service.check_token(req.token)
     if not is_valid:
-        raise HTTPException(status_code=400, detail="Неверный токен или ошибка API WB")
+        raise HTTPException(status_code=400, detail="Токен невалиден или API Wildberries недоступно")
 
+    # 2. Сохраняем
     user.wb_api_token = req.token
     db.add(user)
     await db.commit()
-    # Trigger initial sync
+    
+    # 3. Запускаем первичную синхронизацию в фоне
     sync_financial_reports.delay(user.id)
-    return {"status": "saved", "message": "Токен успешно сохранен, запущена синхронизация"}
+
+    # 4. Сразу получаем права, чтобы обновить UI
+    scopes = await wb_api_service.get_token_scopes(req.token)
+
+    return {
+        "status": "saved", 
+        "message": "Токен сохранен", 
+        "scopes": scopes
+    }
 
 @router.get("/token/scopes")
 async def get_token_scopes(user: User = Depends(get_current_user)):
     """Диагностика прав токена"""
     if not user.wb_api_token:
+        # Возвращаем структуру с False
         return {"statistics": False, "standard": False, "promotion": False, "questions": False}
     
     return await wb_api_service.get_token_scopes(user.wb_api_token)
@@ -80,6 +98,43 @@ async def delete_wb_token(
     await db.commit()
     return {"status": "deleted"}
 
+@router.get("/tariffs")
+async def get_tariffs(user: User = Depends(get_current_user)):
+    # Динамически определяем текущий тариф
+    plan = user.subscription_plan
+    
+    return [
+        {
+            "id": "free", 
+            "name": "Start", 
+            "price": "0 ₽", 
+            "stars": 0, 
+            "features": ["3 товара", "История 24ч", "SEO (Лайт)", "Ding! (1 раз/день)"], 
+            "current": plan == "free", 
+            "color": "slate"
+        },
+        {
+            "id": "pro", 
+            "name": "Pro", 
+            "price": "2990 ₽", 
+            "stars": 2500, 
+            "features": ["50 товаров", "SEO (Pro)", "Unit-экономика", "Ding! (Безлимит)", "Excel отчеты"], 
+            "current": plan == "pro", 
+            "color": "indigo", 
+            "is_best": True
+        },
+        {
+            "id": "business", 
+            "name": "Business", 
+            "price": "6990 ₽", 
+            "stars": 6000, 
+            "features": ["Автобиддер", "API доступ", "Прогноз поставок", "Команда (3 чел)"], 
+            "current": plan == "business", 
+            "color": "emerald"
+        }
+    ]
+
+# --- History Routes (без изменений, кратко) ---
 @router.get("/history")
 async def get_user_history(
     request_type: Optional[str] = Query(None), 
@@ -87,12 +142,8 @@ async def get_user_history(
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(SearchHistory).where(SearchHistory.user_id == user.id)
-    
-    if request_type:
-        stmt = stmt.where(SearchHistory.request_type == request_type)
-    
+    if request_type: stmt = stmt.where(SearchHistory.request_type == request_type)
     stmt = stmt.order_by(SearchHistory.created_at.desc()).limit(50)
-    
     res = await db.execute(stmt)
     history = res.scalars().all()
     result = []
@@ -107,11 +158,3 @@ async def clear_user_history(user: User = Depends(get_current_user), db: AsyncSe
     await db.execute(delete(SearchHistory).where(SearchHistory.user_id == user.id))
     await db.commit()
     return {"status": "cleared"}
-
-@router.get("/tariffs")
-async def get_tariffs(user: User = Depends(get_current_user)):
-    return [
-        {"id": "free", "name": "Start", "price": "0 ₽", "stars": 0, "features": ["3 товара", "История 24ч", "SEO (Авто)", "Ding! (1 раз/день)"], "current": user.subscription_plan == "free", "color": "slate"},
-        {"id": "pro", "name": "Pro", "price": "2990 ₽", "stars": 2500, "features": ["50 товаров", "SEO (Настройка длины)", "Unit-экономика", "Ding! (Безлимит)", "PDF"], "current": user.subscription_plan == "pro", "color": "indigo", "is_best": True},
-        {"id": "business", "name": "Business", "price": "6990 ₽", "stars": 6000, "features": ["Автобиддер", "Все настройки SEO", "Прогноз поставок", "API"], "current": user.subscription_plan == "business", "color": "emerald"}
-    ]
