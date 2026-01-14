@@ -147,22 +147,46 @@ class WBStatisticsMixin(WBApiBase):
             return []
 
     async def calculate_transit(self, liters: int, destination: str = "Koledino"):
-        direct_base = 1500
-        direct_rate = 30
-        transit_base = 500 
-        transit_rate = 10 
-        transit_logistics = 1000 
+        """
+        Calculates transit costs vs direct delivery.
+        Now uses more realistic approximation logic if API is limited.
+        """
+        # Тарифы на прямую поставку (Москва/Коледино) - примерные рыночные или из тарифов WB
+        # Если бы мы могли дергать /tariffs/transit, мы бы брали оттуда.
+        # Пока используем эвристику: Транзит стоит ~2000-3000р за паллету/куб.
         
+        # 1. Прямая поставка (Газель/ТК до Москвы)
+        # Грубая оценка: ~15 руб за литр объема если везти ТК
+        direct_rate_per_liter = 12.0
+        direct_base_cost = 2000.0 # Минималка за забор груза
+        
+        # 2. Транзит (Сдать в ПВЗ/СЦ рядом)
+        # Приемка: обычно бесплатно или дешево (15-50 руб за короб)
+        # Логистика WB: берем средний тариф транзита ~5000р за паллет (1000л) -> 5р за литр
+        transit_rate_per_liter = 5.0
+        transit_acceptance_cost = 0.0 # Часто бесплатно на региональных складах
+        
+        direct_total = int(direct_base_cost + (liters * direct_rate_per_liter))
+        transit_total = int(transit_acceptance_cost + (liters * transit_rate_per_liter))
+        
+        is_profitable = transit_total < direct_total
+        benefit = direct_total - transit_total
+
         return {
             "destination": destination,
-            "direct": {
-                "rate": direct_rate,
-                "total": direct_base + (liters * direct_rate)
-            },
-            "transit_kazan": {
-                "rate": transit_rate,
-                "logistics": transit_logistics,
-                "total": transit_base + (liters * transit_rate) + transit_logistics
+            "is_profitable": is_profitable,
+            "benefit": benefit,
+            "direct_cost": direct_total,
+            "transit_cost": transit_total,
+            "details": {
+                "direct": {
+                    "rate": direct_rate_per_liter,
+                    "base": direct_base_cost
+                },
+                "transit": {
+                    "rate": transit_rate_per_liter,
+                    "base": transit_acceptance_cost
+                }
             }
         }
     

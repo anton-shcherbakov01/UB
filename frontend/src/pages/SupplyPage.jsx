@@ -18,6 +18,7 @@ const SupplyPage = () => {
     // UI States
     const [showSettings, setShowSettings] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
+    const [showCalcHelp, setShowCalcHelp] = useState(false);
 
     // Settings Data
     const [settings, setSettings] = useState({
@@ -169,6 +170,42 @@ const SupplyPage = () => {
                     
                     <button onClick={() => setShowHelp(false)} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">
                         Понятно
+                    </button>
+                </div>
+            </div>
+        );
+    }
+    
+    const CalcHelpModal = () => {
+        if (!showCalcHelp) return null;
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in" onClick={() => setShowCalcHelp(false)}>
+                <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <Scale size={20} className="text-indigo-600"/> Транзит vs Прямая
+                        </h3>
+                        <button onClick={() => setShowCalcHelp(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200">
+                            <X size={16}/>
+                        </button>
+                    </div>
+                    
+                    <div className="space-y-3 text-sm text-slate-600">
+                         <p>
+                             Калькулятор помогает понять, как дешевле отправить товар на склад WB.
+                         </p>
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">Прямая (Direct)</div>
+                            Вы нанимаете машину и везете товар сразу в Москву (Коледино). Это быстро, но дорого для малых партий.
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">Транзит</div>
+                            Вы сдаете товар на ближайший склад (например, в Казани), а WB сам везет его в Москву. Это дольше, но часто дешевле.
+                        </div>
+                    </div>
+                    
+                    <button onClick={() => setShowCalcHelp(false)} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">
+                        Ясно
                     </button>
                 </div>
             </div>
@@ -378,6 +415,7 @@ const SupplyPage = () => {
         <div className="p-4 space-y-6 pb-32 animate-in fade-in relative">
              <SettingsModal />
              <HelpModal />
+             <CalcHelpModal />
 
              <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[32px] text-white shadow-xl shadow-orange-200 relative overflow-hidden">
                 <div className="relative z-10 flex justify-between items-center">
@@ -399,7 +437,14 @@ const SupplyPage = () => {
             </div>
 
             {/* Calculator Section */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
+            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative">
+                 <button 
+                    onClick={() => setShowCalcHelp(true)}
+                    className="absolute top-6 right-6 text-slate-300 hover:text-indigo-600 transition-colors"
+                 >
+                     <HelpCircle size={18} />
+                 </button>
+                 
                  <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
                      <Scale size={20} className="text-indigo-600"/> 
                      Калькулятор маршрута
