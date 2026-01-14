@@ -6,12 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from backend.database import get_db, get_redis_client
-from backend.auth import get_current_user
-from backend.models import User, ProductCost
-from backend.wb_api_service import wb_api_service
-from backend.analysis_service import analysis_service
-from backend.tasks.finance import sync_product_metadata
+from database import get_db, get_redis_client
+from auth import get_current_user
+from models import User, ProductCost
+from wb_api_service import wb_api_service
+from analysis_service import analysis_service
+from tasks.finance import sync_product_metadata
 from dependencies import get_current_user, get_redis_client
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
