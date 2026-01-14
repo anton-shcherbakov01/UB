@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from database import get_db, User, SupplySettings
 from dependencies import get_current_user, get_redis_client
-from wb_api.statistics import WBStatisticsAPI
+from wb_api.statistics import WBStatisticsMixin
 from services.supply import supply_service
 from tasks.supply import sync_supply_data_task
 
@@ -116,7 +116,7 @@ async def get_supply_analysis(
         }
 
         # 3. Fetch Real Data from WB
-        wb_api = WBStatisticsAPI(user.wb_api_token)
+        wb_api = WBStatisticsMixin(user.wb_api_token)
         stocks, orders = await wb_api.get_turnover_data()
 
         # 4. Analyze using Config

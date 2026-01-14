@@ -4,7 +4,7 @@ from celery import shared_task
 from datetime import datetime
 from clickhouse_models import ch_service
 from database import SyncSessionLocal, User
-from wb_api.statistics import WBStatisticsAPI
+from wb_api.statistics import WBStatisticsMixin
 
 logger = logging.getLogger("Tasks-Supply")
 
@@ -25,7 +25,7 @@ def sync_supply_data_task(user_id: int, stocks: list = None, orders: list = None
             
             # Using asyncio in synchronous Celery task
             import asyncio
-            wb_api = WBStatisticsAPI(user.wb_api_token)
+            wb_api = WBStatisticsMixin(user.wb_api_token)
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             data = loop.run_until_complete(wb_api.get_turnover_data())
