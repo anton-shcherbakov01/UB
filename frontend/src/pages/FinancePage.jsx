@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info 
+    Loader2, Calculator, DollarSign, Info, Truck, Percent 
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -34,35 +34,54 @@ const FinancePage = () => {
 
     useEffect(() => { fetchProducts(); }, []);
 
-    const handleUpdateCost = async (sku, cost) => {
+    // Обновленная функция сохранения.
+    // Теперь она ожидает объект formData: { cost_price, logistics, commission_percent }
+    const handleUpdateCost = async (sku, formData) => {
         try {
             await fetch(`${API_URL}/api/internal/cost/${sku}`, {
                 method: 'POST',
-                headers: getTgHeaders(),
-                body: JSON.stringify({ cost_price: Number(cost) })
+                headers: {
+                    ...getTgHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ 
+                    cost_price: Number(formData.cost_price),
+                    logistics: formData.logistics ? Number(formData.logistics) : null,
+                    commission_percent: formData.commission_percent ? Number(formData.commission_percent) : null
+                })
             });
             setEditingCost(null);
             fetchProducts();
-        } catch(e) { alert("Ошибка обновления"); }
+        } catch(e) { 
+            alert("Ошибка обновления"); 
+        }
     };
 
     const pnlStats = useMemo(() => {
         let grossSales = 0;
         let cogs = 0;
-        let logistics = 0; 
-        let commission = 0; 
+        let logisticsTotal = 0; 
+        let commissionTotal = 0; 
         
         products.forEach(p => {
             const velocity = p.supply?.metrics?.avg_daily_demand || 0;
-            const monthlySales = velocity * 30;
+            const monthlySales = velocity * 30; // Прогноз продаж на месяц
             
             if (monthlySales > 0) {
+                // Выручка
                 grossSales += p.price * monthlySales;
+                
+                // Себестоимость товара
                 cogs += p.cost_price * monthlySales;
-                const expenses = p.price - p.unit_economy.profit - p.cost_price;
-                const logCost = 50 * monthlySales;
-                logistics += logCost;
-                commission += (expenses * monthlySales) - logCost;
+                
+                // Логистика (берем реальную из API)
+                const itemLogistics = p.logistics || 50; 
+                logisticsTotal += itemLogistics * monthlySales;
+                
+                // Комиссия (берем реальный % из API)
+                const commPct = p.commission_percent || 25;
+                const itemCommission = p.price * (commPct / 100);
+                commissionTotal += itemCommission * monthlySales;
             }
         });
 
@@ -70,15 +89,15 @@ const FinancePage = () => {
 
         const netSales = grossSales;
         const cm1 = netSales - cogs;
-        const cm2 = cm1 - logistics - commission;
-        const marketing = cm2 * 0.1; 
+        const cm2 = cm1 - logisticsTotal - commissionTotal;
+        const marketing = cm2 * 0.1; // Условные 10% на маркетинг (можно вынести в настройки)
         const ebitda = cm2 - marketing;
 
         return [
             { name: 'Выручка', value: Math.round(grossSales), type: 'income' },
             { name: 'Себестоимость', value: -Math.round(cogs), type: 'expense' },
-            { name: 'Комиссия', value: -Math.round(commission), type: 'expense' },
-            { name: 'Логистика', value: -Math.round(logistics), type: 'expense' },
+            { name: 'Комиссия', value: -Math.round(commissionTotal), type: 'expense' },
+            { name: 'Логистика', value: -Math.round(logisticsTotal), type: 'expense' },
             { name: 'Маркетинг', value: -Math.round(marketing), type: 'expense' },
             { name: 'EBITDA', value: Math.round(ebitda), type: 'total' }
         ];
@@ -171,7 +190,7 @@ const FinancePage = () => {
                     <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex gap-3 items-start">
                         <Info className="text-blue-600 min-w-[20px]" size={20}/>
                         <p className="text-xs text-blue-800 leading-relaxed">
-                            <strong>Отказ от ответственности:</strong> Расчеты строятся на основе текущих остатков и загруженных данных. Для точного отчета используйте раздел "Отчеты".
+                            <strong>Отказ от ответственности:</strong> Расчеты строятся на основе текущих остатков и загруженных данных API.
                         </p>
                     </div>
                 </div>
@@ -188,55 +207,80 @@ const FinancePage = () => {
                     </div>
 
                     <div className="space-y-3">
-                        {products.map((item) => (
-                            <div key={item.sku} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative group">
-                                <div className="flex justify-between items-start mb-4">
-                                    <div className="min-w-0">
-                                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
-                                        <div className="font-bold text-lg leading-tight">{item.price} ₽</div>
+                        {products.map((item) => {
+                            // Расчеты для отображения
+                            const commPct = item.commission_percent || 25;
+                            const commVal = Math.round(item.price * (commPct / 100));
+                            const logVal = Math.round(item.logistics || 50);
+                            
+                            return (
+                                <div key={item.sku} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative group">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
+                                            <div className="font-bold text-lg leading-tight">{item.price} ₽</div>
+                                        </div>
+                                        <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
+                                            <Calculator size={20} />
+                                        </button>
                                     </div>
-                                    <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
-                                        <Calculator size={20} />
-                                    </button>
-                                </div>
-                                
-                                <div className="space-y-2 mb-4 relative">
-                                    <div className="absolute left-[3px] top-2 bottom-2 w-0.5 bg-slate-100 rounded-full"></div>
                                     
-                                    <div className="flex justify-between items-center text-sm pl-4 relative">
-                                        <div className="w-2 h-2 bg-slate-300 rounded-full absolute -left-[4px]"></div>
-                                        <span className="text-slate-500">Цена продажи</span>
-                                        <span className="font-bold">{item.price} ₽</span>
+                                    <div className="space-y-2 mb-4 relative">
+                                        <div className="absolute left-[3px] top-2 bottom-2 w-0.5 bg-slate-100 rounded-full"></div>
+                                        
+                                        {/* Цена */}
+                                        <div className="flex justify-between items-center text-sm pl-4 relative">
+                                            <div className="w-2 h-2 bg-slate-300 rounded-full absolute -left-[4px]"></div>
+                                            <span className="text-slate-500">Цена продажи</span>
+                                            <span className="font-bold">{item.price} ₽</span>
+                                        </div>
+
+                                        {/* Комиссия */}
+                                        <div className="flex justify-between items-center text-sm pl-4 relative">
+                                            <div className="w-2 h-2 bg-purple-300 rounded-full absolute -left-[4px]"></div>
+                                            <span className="text-slate-400 flex items-center gap-1">
+                                                Комиссия <span className="text-[10px] bg-purple-50 text-purple-600 px-1 rounded">{commPct}%</span>
+                                            </span>
+                                            <span className="text-purple-400">-{commVal} ₽</span>
+                                        </div>
+
+                                        {/* Логистика */}
+                                        <div className="flex justify-between items-center text-sm pl-4 relative">
+                                            <div className="w-2 h-2 bg-blue-300 rounded-full absolute -left-[4px]"></div>
+                                            <span className="text-slate-400 flex items-center gap-1">
+                                                Логистика <Truck size={10} />
+                                            </span>
+                                            <span className="text-blue-400">-{logVal} ₽</span>
+                                        </div>
+
+                                        {/* Себестоимость */}
+                                        <div className="flex justify-between items-center text-sm pl-4 relative">
+                                            <div className="w-2 h-2 bg-orange-300 rounded-full absolute -left-[4px]"></div>
+                                            <span className="text-slate-400">Себестоимость</span>
+                                            <span className="text-orange-400">-{item.cost_price} ₽</span>
+                                        </div>
+
+                                        {/* ИТОГ */}
+                                        <div className="flex justify-between items-center text-base pl-4 relative pt-1 border-t border-slate-50 mt-1">
+                                            <div className={`w-2 h-2 rounded-full absolute -left-[4px] ${item.unit_economy.profit > 0 ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
+                                            <span className="font-bold text-slate-800">Чистая прибыль</span>
+                                            <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                {item.unit_economy.profit} ₽
+                                            </span>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between items-center text-sm pl-4 relative">
-                                        <div className="w-2 h-2 bg-red-300 rounded-full absolute -left-[4px]"></div>
-                                        <span className="text-slate-400">Комиссия и Логистика</span>
-                                        <span className="text-red-400">-{Math.round(item.price - item.unit_economy.profit - item.cost_price)} ₽</span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-sm pl-4 relative">
-                                        <div className="w-2 h-2 bg-orange-300 rounded-full absolute -left-[4px]"></div>
-                                        <span className="text-slate-400">Себестоимость</span>
-                                        <span className="text-orange-400">-{item.cost_price} ₽</span>
-                                    </div>
-                                    <div className="flex justify-between items-center text-base pl-4 relative pt-1 border-t border-slate-50">
-                                        <div className={`w-2 h-2 rounded-full absolute -left-[4px] ${item.unit_economy.profit > 0 ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-                                        <span className="font-bold text-slate-800">Чистая прибыль (CM2)</span>
-                                        <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                            {item.unit_economy.profit} ₽
+
+                                    <div className="flex gap-2">
+                                        <span className={`flex-1 text-center py-2 rounded-xl text-xs font-bold ${item.unit_economy.roi > 100 ? 'bg-emerald-100 text-emerald-700' : item.unit_economy.roi > 30 ? 'bg-blue-100 text-blue-700' : 'bg-red-50 text-red-600'}`}>
+                                            ROI: {item.unit_economy.roi}%
+                                        </span>
+                                        <span className="flex-1 text-center py-2 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                                            Маржа: {item.unit_economy.margin}%
                                         </span>
                                     </div>
                                 </div>
-
-                                <div className="flex gap-2">
-                                    <span className={`flex-1 text-center py-2 rounded-xl text-xs font-bold ${item.unit_economy.roi > 100 ? 'bg-emerald-100 text-emerald-700' : item.unit_economy.roi > 30 ? 'bg-blue-100 text-blue-700' : 'bg-red-50 text-red-600'}`}>
-                                        ROI: {item.unit_economy.roi}%
-                                    </span>
-                                    <span className="flex-1 text-center py-2 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
-                                        Маржа: {item.unit_economy.margin}%
-                                    </span>
-                                </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
             )}
