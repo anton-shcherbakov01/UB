@@ -3,6 +3,7 @@ from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, B
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
+from loguru import logger
 from datetime import datetime
 
 
