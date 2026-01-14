@@ -13,7 +13,8 @@ celery_app = Celery(
         'tasks.monitoring',
         'tasks.seo',
         'tasks.finance',
-        'tasks.bidder'
+        'tasks.bidder',
+        'tasks.supply'
     ] 
 )
 

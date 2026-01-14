@@ -236,3 +236,64 @@ class WBStatisticsMixin(WBApiBase):
                 continue
                 
         return tariffs
+
+    async def _request(self, endpoint: str, params: Dict[str, Any] = None, retries: int = 3) -> List[Dict[str, Any]]:
+        url = f"{self.BASE_URL}{endpoint}"
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(retries):
+                try:
+                    async with session.get(url, headers=self.headers, params=params, timeout=30) as resp:
+                        if resp.status == 200:
+                            return await resp.json()
+                        elif resp.status == 429:
+                            wait_time = 2 ** attempt
+                            logger.warning(f"Rate limit 429. Waiting {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        elif resp.status == 401:
+                            logger.error("WB API Unauthorized.")
+                            raise HTTPException(status_code=401, detail="Invalid WB Token")
+                        else:
+                            text = await resp.text()
+                            logger.error(f"WB API Error {resp.status}: {text}")
+                            return []
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout on {endpoint}. Retrying...")
+                except Exception as e:
+                    logger.error(f"Request failed: {e}")
+                    
+        return []
+
+    async def get_stocks(self) -> List[Dict[str, Any]]:
+        """
+        Метод «Склад». Возвращает остатки товаров на складах.
+        Endpoint: /api/v1/supplier/stocks
+        """
+        date_from = datetime.utcnow().strftime("%Y-%m-%d")
+        return await self._request("/api/v1/supplier/stocks", params={"dateFrom": date_from})
+
+    async def get_orders(self, days: int = 30) -> List[Dict[str, Any]]:
+        """
+        Метод «Заказы». Возвращает заказы.
+        Endpoint: /api/v1/supplier/orders
+        """
+        date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        return await self._request("/api/v1/supplier/orders", params={"dateFrom": date_from, "flag": 0})
+
+    async def get_sales(self, days: int = 30) -> List[Dict[str, Any]]:
+        """
+        Метод «Продажи». Возвращает продажи (факты выкупа).
+        Endpoint: /api/v1/supplier/sales
+        """
+        date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        return await self._request("/api/v1/supplier/sales", params={"dateFrom": date_from, "flag": 0})
+
+    async def get_turnover_data(self) -> Dict[str, Any]:
+        """
+        Aggregates data for supply analysis.
+        """
+        stocks, orders = await asyncio.gather(
+            self.get_stocks(),
+            self.get_orders(days=30)
+        )
+        return {"stocks": stocks, "orders": orders}
