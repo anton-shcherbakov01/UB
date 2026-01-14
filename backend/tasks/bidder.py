@@ -9,7 +9,7 @@ from wb_api_service import wb_api_service
 from database import SyncSessionLocal, User, BidderSettings
 from bidder_engine import PIDController, StrategyManager
 from .utils import log_bidder_action_sync
-from parser_parts import parser_service
+import parser_service
 
 logger = logging.getLogger("Tasks-Bidder")
 
