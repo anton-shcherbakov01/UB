@@ -167,6 +167,10 @@ class BidderSettings(Base):
     max_bid = Column(Integer, default=500)    # Максимальная ставка (RUB)
     min_bid = Column(Integer, default=125)    # Минимальная ставка
     
+    keyword = Column(String, nullable=True)
+    check_organic = Column(Boolean, default=False)
+    last_check_time = Column(DateTime, default=datetime.utcnow)
+
     # Safety Layers
     target_cpa = Column(Integer, default=0)   # Целевая цена действия (0 = выкл)
     max_cpm = Column(Integer, default=2000)   # Хард лимит CPM

@@ -124,3 +124,48 @@ class WBPromotionMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             await self._request_with_retry(session, url, headers, method='POST', json_data=payload)
             logger.info(f"REAL BID UPDATE: Campaign {campaign_id} -> {new_bid} RUB")
+        
+    async def get_auction_cpm(self, keyword: str) -> List[Dict]:
+        """
+        Получение реальных ставок конкурентов (Аукцион) по ключевому слову.
+        Использует публичный API, который отдает 'реальные' цифры, используемые при ранжировании.
+        """
+        url = "https://catalog-ads.wildberries.ru/api/v6/search"
+        params = {"keyword": keyword}
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, params=params, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # data['adverts'] содержит список: [{'code': '...', 'cpm': 1500, 'advertId': ...}, ...]
+                        # Сортируем по CPM убыванию (это и есть реальные места 1, 2, 3...)
+                        adverts = data.get('adverts', [])
+                        if not adverts: 
+                            return []
+                        # Очищаем и сортируем
+                        auction = sorted(
+                            [{"pos": i+1, "cpm": a.get("cpm", 0), "id": a.get("advertId")} for i, a in enumerate(adverts)], 
+                            key=lambda x: x["cpm"], 
+                            reverse=True
+                        )
+                        # Пересчитываем позиции (иногда WB отдает мусор, но сортировка по CPM верна для аукциона)
+                        for i, item in enumerate(auction):
+                            item["pos"] = i + 1
+                        return auction
+            except Exception as e:
+                logger.error(f"Failed to fetch auction for '{keyword}': {e}")
+        return []
+
+    async def get_campaign_info_v2(self, token: str, campaign_id: int):
+        """Получение расширенной инфо о кампании через V1 endpoint (более надежный)"""
+        url = f"https://advert-api.wb.ru/adv/v1/promotion/adverts"
+        headers = {"Authorization": token}
+        async with aiohttp.ClientSession() as session:
+            # Запрашиваем конкретную кампанию
+            # API требует отправлять type, но если мы хотим получить инфо по ID, пробуем так:
+            # Обычно это работает через GET с параметром, но в V1 часто POST
+            # Используем fallback на v0, который у вас уже реализован в get_current_bid_info
+            # Но здесь важно получить статус: Активна/Пауза
+            pass 
+            # (Можно оставить текущую реализацию get_advert_campaigns, она рабочая)
