@@ -1,9 +1,11 @@
 import os
+import redis.asyncio as redis  # <--- Добавлен импорт Redis
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, BigInteger, Text, Float
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy import create_engine
 from datetime import datetime
+
 
 # Настройки подключения
 DATABASE_URL_ASYNC = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor")
@@ -23,6 +25,14 @@ engine_sync = create_engine(DATABASE_URL_SYNC, echo=False)
 SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_sync)
 
 Base = declarative_base()
+
+# --- REDIS CONFIGURATION (Добавлено) ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+
+def get_redis_client():
+    """Создает и возвращает асинхронный клиент Redis"""
+    return redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+# ---------------------------------------
 
 class User(Base):
     __tablename__ = "users"
@@ -73,7 +83,14 @@ class ProductCost(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     sku = Column(BigInteger, index=True)
+    
     cost_price = Column(Integer, default=0)
+    
+    # --- НОВЫЕ ПОЛЯ (Нужны для router/finance.py) ---
+    logistics = Column(Float, nullable=True)          # Ручная настройка логистики
+    commission_percent = Column(Float, nullable=True) # Ручная настройка комиссии
+    # -----------------------------------------------
+    
     updated_at = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="costs")
