@@ -145,50 +145,6 @@ class WBStatisticsMixin(WBApiBase):
             if data and 'response' in data and 'data' in data['response']:
                 return data['response']['data']
             return []
-
-    async def calculate_transit(self, liters: int, destination: str = "Koledino"):
-        """
-        Calculates transit costs vs direct delivery.
-        Now uses more realistic approximation logic if API is limited.
-        """
-        # Тарифы на прямую поставку (Москва/Коледино) - примерные рыночные или из тарифов WB
-        # Если бы мы могли дергать /tariffs/transit, мы бы брали оттуда.
-        # Пока используем эвристику: Транзит стоит ~2000-3000р за паллету/куб.
-        
-        # 1. Прямая поставка (Газель/ТК до Москвы)
-        # Грубая оценка: ~15 руб за литр объема если везти ТК
-        direct_rate_per_liter = 12.0
-        direct_base_cost = 2000.0 # Минималка за забор груза
-        
-        # 2. Транзит (Сдать в ПВЗ/СЦ рядом)
-        # Приемка: обычно бесплатно или дешево (15-50 руб за короб)
-        # Логистика WB: берем средний тариф транзита ~5000р за паллет (1000л) -> 5р за литр
-        transit_rate_per_liter = 5.0
-        transit_acceptance_cost = 0.0 # Часто бесплатно на региональных складах
-        
-        direct_total = int(direct_base_cost + (liters * direct_rate_per_liter))
-        transit_total = int(transit_acceptance_cost + (liters * transit_rate_per_liter))
-        
-        is_profitable = transit_total < direct_total
-        benefit = direct_total - transit_total
-
-        return {
-            "destination": destination,
-            "is_profitable": is_profitable,
-            "benefit": benefit,
-            "direct_cost": direct_total,
-            "transit_cost": transit_total,
-            "details": {
-                "direct": {
-                    "rate": direct_rate_per_liter,
-                    "base": direct_base_cost
-                },
-                "transit": {
-                    "rate": transit_rate_per_liter,
-                    "base": transit_acceptance_cost
-                }
-            }
-        }
     
     async def get_all_commissions(self, token: str) -> Dict[str, float]:
         """Получает тарифы комиссий по всем категориям."""
@@ -354,3 +310,55 @@ class WBStatisticsAPI:
             self.get_orders(days=30)
         )
         return {"stocks": stocks, "orders": orders}
+    
+    async def calculate_transit(self, liters: int, origin: str, destination: str, custom_transit_rate: float = None):
+        """
+        Умный калькулятор транзита.
+        """
+        # --- 1. Тарифы на прямую доставку ---
+        direct_tariffs = {
+            "Коледино": 15.0, "Электросталь": 14.0, "Казань": 8.0, 
+            "Краснодар": 10.0, "Тула": 12.0
+        }
+        
+        direct_base_freight = 3000.0 
+        
+        if origin.lower() in destination.lower() or destination.lower() in origin.lower():
+            direct_base_freight = 1500.0
+            direct_rate = 2.0 
+        else:
+            direct_rate = direct_tariffs.get(destination, 12.0)
+
+        direct_cost = int(direct_base_freight + (liters * direct_rate))
+
+        # --- 2. Тарифы на Транзит WB ---
+        # Если пользователь задал свой тариф, используем его. Иначе дефолт 4.5
+        transit_rate = custom_transit_rate if custom_transit_rate is not None else 4.5
+        
+        if origin == destination:
+            transit_rate = 0
+            
+        transit_cost = int(liters * transit_rate)
+        
+        benefit = direct_cost - transit_cost
+        is_profitable = benefit > 0 and origin != destination
+
+        return {
+            "origin": origin,
+            "destination": destination,
+            "volume": liters,
+            "custom_rate": transit_rate,
+            "direct": {
+                "total": direct_cost,
+                "rate": direct_rate,
+                "base": direct_base_freight,
+                "description": "Своя машина / ТК"
+            },
+            "transit": {
+                "total": transit_cost,
+                "rate": transit_rate,
+                "description": "Транзит силами WB"
+            },
+            "is_profitable": is_profitable,
+            "benefit": benefit
+        }

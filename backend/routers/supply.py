@@ -15,6 +15,12 @@ from tasks.supply import sync_supply_data_task
 logger = logging.getLogger("SupplyRouter")
 router = APIRouter(prefix="/api/supply", tags=["Supply"])
 
+class TransitRequest(BaseModel):
+    volume: int
+    origin: str = "Казань"
+    destination: str = "Коледино"
+    transit_rate: Optional[float] = None # Новое поле
+
 # --- Pydantic Models for Input ---
 class SupplySettingsSchema(BaseModel):
     lead_time: int
@@ -148,3 +154,20 @@ async def refresh_supply_data(user: User = Depends(get_current_user)):
     if r_client:
         r_client.delete(f"supply:analysis:{user.id}")
     return {"status": "ok", "message": "Cache cleared"}
+
+@router.post("/transit_calc")
+async def calculate_transit_route(
+    data: TransitRequest,
+    user: User = Depends(get_current_user)
+):
+    """
+    Калькулятор транзита.
+    """
+    wb_api = WBStatisticsAPI(user.wb_api_token or "demo")
+    result = await wb_api.calculate_transit(
+        data.volume, 
+        data.origin, 
+        data.destination,
+        data.transit_rate
+    )
+    return result
