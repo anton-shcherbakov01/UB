@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, Percent 
+    Loader2, Calculator, DollarSign, Info, Truck, Percent, ArrowDown 
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -34,8 +34,6 @@ const FinancePage = () => {
 
     useEffect(() => { fetchProducts(); }, []);
 
-    // Обновленная функция сохранения.
-    // Теперь она ожидает объект formData: { cost_price, logistics, commission_percent }
     const handleUpdateCost = async (sku, formData) => {
         try {
             await fetch(`${API_URL}/api/internal/cost/${sku}`, {
@@ -65,22 +63,20 @@ const FinancePage = () => {
         
         products.forEach(p => {
             const velocity = p.supply?.metrics?.avg_daily_demand || 0;
-            const monthlySales = velocity * 30; // Прогноз продаж на месяц
+            const monthlySales = velocity * 30;
             
             if (monthlySales > 0) {
-                // Выручка
-                grossSales += p.price * monthlySales;
+                // Используем selling price (с учетом скидки)
+                const price = p.price_structure?.selling || 0;
+                grossSales += price * monthlySales;
                 
-                // Себестоимость товара
                 cogs += p.cost_price * monthlySales;
                 
-                // Логистика (берем реальную из API)
                 const itemLogistics = p.logistics || 50; 
                 logisticsTotal += itemLogistics * monthlySales;
                 
-                // Комиссия (берем реальный % из API)
                 const commPct = p.commission_percent || 25;
-                const itemCommission = p.price * (commPct / 100);
+                const itemCommission = price * (commPct / 100);
                 commissionTotal += itemCommission * monthlySales;
             }
         });
@@ -90,7 +86,7 @@ const FinancePage = () => {
         const netSales = grossSales;
         const cm1 = netSales - cogs;
         const cm2 = cm1 - logisticsTotal - commissionTotal;
-        const marketing = cm2 * 0.1; // Условные 10% на маркетинг (можно вынести в настройки)
+        const marketing = cm2 * 0.1; 
         const ebitda = cm2 - marketing;
 
         return [
@@ -190,13 +186,12 @@ const FinancePage = () => {
                     <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex gap-3 items-start">
                         <Info className="text-blue-600 min-w-[20px]" size={20}/>
                         <p className="text-xs text-blue-800 leading-relaxed">
-                            <strong>Отказ от ответственности:</strong> Расчеты строятся на основе текущих остатков и загруженных данных API.
+                            <strong>Важно:</strong> Расчет строится на "Цене реализации" (с учетом вашей скидки). Скидка WB Кошелек (СПП) обычно компенсируется маркетплейсом и не влияет на вашу выплату, но влияет на привлекательность для клиента.
                         </p>
                     </div>
                 </div>
             ) : (
                 <div className="space-y-4 animate-in slide-in-from-left-8">
-                    {/* Unit Economics List */}
                     <div className="grid grid-cols-2 gap-3">
                         <MetricCard title="Товаров в анализе" value={products.length} color="text-slate-800" />
                         <MetricCard 
@@ -208,9 +203,12 @@ const FinancePage = () => {
 
                     <div className="space-y-3">
                         {products.map((item) => {
-                            // Расчеты для отображения
+                            const price = item.price_structure?.selling || 0;
+                            const basicPrice = item.price_structure?.basic || 0;
+                            const discount = item.price_structure?.discount || 0;
+
                             const commPct = item.commission_percent || 25;
-                            const commVal = Math.round(item.price * (commPct / 100));
+                            const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
                             return (
@@ -218,7 +216,16 @@ const FinancePage = () => {
                                     <div className="flex justify-between items-start mb-4">
                                         <div className="min-w-0">
                                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
-                                            <div className="font-bold text-lg leading-tight">{item.price} ₽</div>
+                                            
+                                            {/* Блок Цены - ВОДОПАД */}
+                                            <div className="flex flex-col">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-sm text-slate-400 line-through decoration-slate-300">{basicPrice} ₽</span>
+                                                    <span className="text-[10px] font-bold bg-red-50 text-red-500 px-1.5 py-0.5 rounded-md">-{discount}%</span>
+                                                </div>
+                                                <div className="font-bold text-xl leading-tight text-slate-800">{price} ₽</div>
+                                                <div className="text-[9px] text-slate-400 mt-0.5">Реализация</div>
+                                            </div>
                                         </div>
                                         <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
                                             <Calculator size={20} />
@@ -228,13 +235,6 @@ const FinancePage = () => {
                                     <div className="space-y-2 mb-4 relative">
                                         <div className="absolute left-[3px] top-2 bottom-2 w-0.5 bg-slate-100 rounded-full"></div>
                                         
-                                        {/* Цена */}
-                                        <div className="flex justify-between items-center text-sm pl-4 relative">
-                                            <div className="w-2 h-2 bg-slate-300 rounded-full absolute -left-[4px]"></div>
-                                            <span className="text-slate-500">Цена продажи</span>
-                                            <span className="font-bold">{item.price} ₽</span>
-                                        </div>
-
                                         {/* Комиссия */}
                                         <div className="flex justify-between items-center text-sm pl-4 relative">
                                             <div className="w-2 h-2 bg-purple-300 rounded-full absolute -left-[4px]"></div>

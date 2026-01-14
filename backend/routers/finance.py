@@ -6,11 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from database import get_db, User, ProductCost
-from dependencies import get_current_user, get_redis_client
+from database import get_db, get_redis_client
+from dependencies import get_current_user
+from models import User, ProductCost
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
-from tasks.finance import sync_product_metadata
+from tasks.finance import sync_product_metadata 
 
 router = APIRouter(prefix="/api", tags=["Finance"])
 
@@ -23,16 +24,13 @@ class TransitCalcRequest(BaseModel):
     volume: int 
     destination: str = "Koledino"
 
-
 def calculate_auto_logistics(volume_l: float, tariffs_map: dict) -> float:
     """
-    Считает логистику на основе тарифов склада (по умолчанию Коледино как эталон).
-    Формула: База + (Объем - 5л) * Ставка_за_литр
+    Считает логистику на основе тарифов склада.
     """
     if not tariffs_map:
-        return 50.0 # Fallback
+        return 50.0 
     
-    # Пытаемся взять Коледино, иначе берем первый попавшийся склад
     wh_tariff = tariffs_map.get('Коледино') 
     if not wh_tariff and tariffs_map:
         wh_tariff = list(tariffs_map.values())[0]
@@ -49,6 +47,7 @@ def calculate_auto_logistics(volume_l: float, tariffs_map: dict) -> float:
     extra = volume_l - 5
     return round(base + (extra * liter_rate), 2)
 
+
 @router.get("/internal/stats")
 async def get_internal_stats(user: User = Depends(get_current_user)):
     if not user.wb_api_token:
@@ -61,7 +60,6 @@ async def get_internal_stats(user: User = Depends(get_current_user)):
 @router.get("/internal/stories")
 async def get_stories(user: User = Depends(get_current_user)):
     stories = []
-    
     orders_sum = 0
     stocks_qty = 0
     
@@ -70,7 +68,6 @@ async def get_stories(user: User = Depends(get_current_user)):
             stats = await wb_api_service.get_dashboard_stats(user.wb_api_token)
             orders_sum = stats.get('orders_today', {}).get('sum', 0)
             stocks_qty = stats.get('stocks', {}).get('total_quantity', 0)
-            
             stories.append({
                 "id": 1, 
                 "title": "Продажи", 
@@ -86,7 +83,7 @@ async def get_stories(user: User = Depends(get_current_user)):
         stories.append({
             "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Нет данных"
         })
-
+        
     if user.subscription_plan == "free":
         stories.append({
             "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Upgrade"
@@ -95,17 +92,17 @@ async def get_stories(user: User = Depends(get_current_user)):
         stories.append({
             "id": 2, "title": "Биддер", "val": "Active", "color": "bg-purple-500", "subtitle": "Safe Mode"
         })
-
+        
     if user.wb_api_token:
         stories.append({
             "id": 3, "title": "Склад", "val": f"{stocks_qty}", "color": "bg-blue-500", "subtitle": "Всего шт."
         })
-
+        
     return stories
 
 @router.get("/internal/products")
 async def get_my_products_finance(
-    background_tasks: BackgroundTasks, # Добавили для запуска синхронизации
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
@@ -113,6 +110,7 @@ async def get_my_products_finance(
         return []
     
     # 1. Получаем остатки из WB API
+    # Нам нужны поля 'Price' (базовая) и 'Discount' (скидка)
     try:
         stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
         if not stocks: 
@@ -130,18 +128,18 @@ async def get_my_products_finance(
             sku_map[sku] = {
                 "sku": sku, 
                 "quantity": 0, 
-                "price": s.get('Price', 0), 
-                "discount": s.get('Discount', 0)
+                "basic_price": s.get('Price', 0),    # Цена до скидки
+                "discount": s.get('Discount', 0)     # Скидка продавца
             }
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
     
-    # 3. Загружаем ручные настройки расходов из БД (приоритет №1)
+    # 3. Загружаем настройки расходов из БД
     costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
     costs_map = {c.sku: c for c in costs_res.scalars().all()}
     
-    # 4. Подключаемся к Redis для получения метаданных (приоритет №2)
+    # 4. Redis кеш
     r_client = get_redis_client()
     
     commissions_global = {}
@@ -149,28 +147,23 @@ async def get_my_products_finance(
     products_meta_cache = {}
 
     if r_client:
-        # Забираем глобальные тарифы
         comm_data = r_client.get(f"meta:commissions:{user.id}")
         tariffs_data = r_client.get("meta:logistics_tariffs")
         
         if comm_data: commissions_global = json.loads(comm_data)
         if tariffs_data: logistics_tariffs = json.loads(tariffs_data)
 
-        # Если данных нет — запускаем фоновую задачу на сбор данных
+        # Фоновое обновление
         if not comm_data or not tariffs_data:
             background_tasks.add_task(sync_product_metadata, user.id)
 
-        # Паттерн Pipeline для быстрого сбора метаданных по всем SKU сразу
         pipe = r_client.pipeline()
         for sku in skus:
             pipe.get(f"meta:product:{user.id}:{sku}")
-            # Также собираем прогнозы спроса в том же пайплайне, чтобы не бегать дважды
             pipe.get(f"forecast:{user.id}:{sku}")
             
         redis_results = pipe.execute()
         
-        # Разбираем результаты pipeline (они идут парами: meta, forecast, meta, forecast...)
-        # Структура: [meta_sku1, forecast_sku1, meta_sku2, forecast_sku2, ...]
         for i, sku in enumerate(skus):
             meta_raw = redis_results[i * 2]
             forecast_raw = redis_results[i * 2 + 1]
@@ -185,36 +178,33 @@ async def get_my_products_finance(
     for sku, data in sku_map.items():
         cost_obj = costs_map.get(sku)
         
-        # Достаем кешированные данные
         cache_entry = products_meta_cache.get(sku, {})
         meta = cache_entry.get("meta") or {}
         forecast_json = cache_entry.get("forecast")
         
-        # --- БЛОК ЛОГИСТИКИ ---
-        # 1. Если задано вручную - берем ручное
-        # 2. Если есть габариты и тарифы - считаем авто
-        # 3. Иначе 50р
+        # --- ЛОГИСТИКА ---
         if cost_obj and cost_obj.logistics is not None:
             logistics_val = cost_obj.logistics
         else:
-            volume = meta.get('volume', 1.0) # Дефолт 1л
+            volume = meta.get('volume', 1.0) 
             logistics_val = calculate_auto_logistics(volume, logistics_tariffs)
 
-        # --- БЛОК КОМИССИИ ---
-        # 1. Если задано вручную - берем ручное
-        # 2. Если есть категория товара - берем из глобальной таблицы комиссий
-        # 3. Иначе 25%
+        # --- КОМИССИЯ ---
         if cost_obj and cost_obj.commission_percent is not None:
             commission_pct = cost_obj.commission_percent
         else:
             subj_id = str(meta.get('subject_id', ''))
             commission_pct = commissions_global.get(subj_id, 25.0)
 
-        # Себестоимость (только ручной ввод)
         cost_price = cost_obj.cost_price if cost_obj else 0
         
-        # Расчеты
-        selling_price = data['price'] * (1 - data['discount']/100)
+        # --- ЦЕНООБРАЗОВАНИЕ ---
+        basic_price = data['basic_price']
+        discount_percent = data['discount']
+        
+        # Реальная цена реализации = База - Скидка
+        selling_price = basic_price * (1 - discount_percent/100)
+        
         commission_rub = selling_price * (commission_pct / 100.0)
         
         profit = selling_price - commission_rub - logistics_val - cost_price
@@ -222,13 +212,13 @@ async def get_my_products_finance(
         roi = round((profit / cost_price * 100), 1) if cost_price > 0 else 0
         margin = int(profit / selling_price * 100) if selling_price > 0 else 0
         
-        # --- БЛОК ПОСТАВОК (Supply) ---
+        # --- SUPPLY ---
         supply_data = None
         if forecast_json:
             try:
                 supply_data = analysis_service.calculate_supply_metrics(
                     current_stock=data['quantity'],
-                    sales_history=[], # Здесь можно оптимизировать и передать историю, если она есть
+                    sales_history=[],
                     forecast_data=forecast_json
                 )
             except: pass
@@ -236,7 +226,7 @@ async def get_my_products_finance(
         if not supply_data:
             supply_data = {
                 "status": "unknown",
-                "recommendation": "Анализ...", # Изменили текст, чтобы юзер понимал, что идет расчет
+                "recommendation": "Анализ...",
                 "metrics": {
                     "safety_stock": 0, "rop": 0, "days_left": 0, 
                     "avg_daily_demand": 0, "current_stock": data['quantity']
@@ -246,7 +236,11 @@ async def get_my_products_finance(
         result.append({
             "sku": sku,
             "quantity": data['quantity'],
-            "price": int(selling_price),
+            "price_structure": {
+                "basic": int(basic_price),
+                "discount": int(discount_percent),
+                "selling": int(selling_price)
+            },
             "cost_price": cost_price,
             "logistics": logistics_val,
             "commission_percent": commission_pct,
@@ -269,7 +263,6 @@ async def set_product_cost(
 ):
     stmt = select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku == sku)
     cost_obj = (await db.execute(stmt)).scalars().first()
-    
     if cost_obj:
         cost_obj.cost_price = req.cost_price
         cost_obj.logistics = req.logistics
@@ -284,7 +277,6 @@ async def set_product_cost(
             commission_percent=req.commission_percent
         )
         db.add(cost_obj)
-    
     await db.commit()
     return {"status": "saved", "data": req.dict()}
 
