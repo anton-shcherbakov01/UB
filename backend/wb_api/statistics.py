@@ -177,46 +177,62 @@ class WBStatisticsMixin(WBApiBase):
             
         return {"total_quantity": 0}
     
-    async def get_all_commissions(self, token: str) -> Dict[int, float]:
+    async def get_all_commissions(self, token: str) -> Dict[str, float]:
         """
         Получает тарифы комиссий по всем категориям.
-        Возвращает: {subject_id: commission_percent}
+        API: https://common-api.wildberries.ru/api/v1/tariffs/commission
+        Возвращает: {subject_id_str: commission_percent}
         """
-        url = f"{self.COMMON_URL}/tariffs/commission"
+        url = "https://common-api.wildberries.ru/api/v1/tariffs/commission"
         headers = {"Authorization": token}
         
-        data = await self._request_with_retry(None, url, headers, method='GET') # session нужно прокинуть
+        data = await self._request_with_retry(None, url, headers, method='GET')
+        
         if not data or 'report' not in data:
             return {}
             
         commissions = {}
         for item in data['report']:
-            sub_id = item.get('subjectID')
-            # WB может возвращать разные тарифы (kgvp, is_kgvp и т.д.), берем базовый
-            pct = item.get('kgvpMarketplace', 25.0) # Берем комиссию для Маркетплейса или FBO
+            sub_id = str(item.get('subjectID'))
+            # Берем комиссию для Маркетплейса (kgvpMarketplace) или FBO (kgvp)
+            # Обычно они близки, берем kgvpMarketplace как базу для большинства селлеров
+            pct = item.get('kgvpMarketplace', 25.0) 
             commissions[sub_id] = float(pct)
             
         return commissions
 
     async def get_box_tariffs(self, token: str, date_str: str) -> Dict[str, Dict]:
         """
-        Получает коэффициенты и базовые ставки логистики складов.
+        Получает коэффициенты и базовые ставки логистики коробов.
+        API: https://common-api.wildberries.ru/api/v1/tariffs/box
         """
-        url = f"{self.COMMON_URL}/tariffs/box"
+        url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
         params = {"date": date_str}
         headers = {"Authorization": token}
         
         data = await self._request_with_retry(None, url, headers, params=params)
+        
         if not data or 'response' not in data:
             return {}
 
-        # Формируем словарь: {'Koledino': {'box_delivery_base': 30, 'box_delivery_liter': 7}, ...}
-        # Упрощенная логика для примера
+        # Формируем словарь: {'Koledino': {'base': 30, 'liter': 7}, ...}
         tariffs = {}
-        for w in data['response']['data']['warehouseList']:
-            name = w['warehouseName']
-            tariffs[name] = {
-                "base": float(w.get('boxDeliveryBase', '0').replace(',', '.')),
-                "liter": float(w.get('boxDeliveryLiter', '0').replace(',', '.'))
-            }
+        warehouse_list = data['response'].get('data', {}).get('warehouseList', [])
+        
+        for w in warehouse_list:
+            name = w.get('warehouseName')
+            if not name: continue
+            
+            # Данные приходят в формате строк с запятыми: "30,5" -> 30.5
+            try:
+                base_s = w.get('boxDeliveryBase', '0').replace(',', '.')
+                liter_s = w.get('boxDeliveryLiter', '0').replace(',', '.')
+                
+                tariffs[name] = {
+                    "base": float(base_s),
+                    "liter": float(liter_s)
+                }
+            except ValueError:
+                continue
+                
         return tariffs
