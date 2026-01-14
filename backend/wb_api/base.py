@@ -1,99 +1,113 @@
 import logging
 import asyncio
 import aiohttp
-import json
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Any, Dict, Union
 
 logger = logging.getLogger("WB-API-Base")
 
 class WBApiBase:
     """
-    Базовый класс для работы с API WB.
-    Содержит общие настройки, кэширование и метод отправки запросов.
+    Базовый класс для всех API сервисов Wildberries.
+    Отвечает за выполнение HTTP запросов, повторные попытки (retry) и обработку ошибок.
     """
     
-    BASE_URL = "https://statistics-api.wildberries.ru/api/v1/supplier"
-    COMMON_URL = "https://common-api.wildberries.ru/api/v1" 
-    ADV_URL = "https://advert-api.wb.ru/adv/v1" 
-    
-    # In-Memory Cache: { "token_method_params": (timestamp, data) }
-    _cache: Dict[str, Any] = {}
-    _cache_ttl = 300 # 5 минут (TTL)
+    COMMON_URL = "https://common-api.wildberries.ru/api/v1"
+    STATISTICS_URL = "https://statistics-api.wildberries.ru"
+    ADVERT_URL = "https://advert-api.wb.ru/adv/v1"
+    CONTENT_URL = "https://content-api.wildberries.ru/content/v2"
 
-    async def _request_with_retry(self, session, url, headers, params=None, method='GET', json_data=None, retries=3):
+    def __init__(self):
+        pass
+
+    async def _request_with_retry(
+        self,
+        session: Optional[aiohttp.ClientSession],
+        url: str,
+        headers: Dict[str, Any],
+        params: Optional[Dict] = None,
+        method: str = "GET",
+        json_data: Optional[Dict] = None,
+        retries: int = 3,
+        delay: int = 1
+    ) -> Optional[Any]:
         """
-        Выполняет запрос с повторными попытками при 429/5xx ошибках.
+        Выполняет запрос с автоматическим ретраем.
+        Если session is None, создает новую сессию на один запрос.
         """
-        backoff = 2
+        if session is None:
+            # Если сессии нет, создаем контекст (connection pool на один запрос)
+            async with aiohttp.ClientSession() as new_session:
+                return await self._execute_request(
+                    new_session, url, headers, params, method, json_data, retries, delay
+                )
+        else:
+            # Если сессия есть, используем её
+            return await self._execute_request(
+                session, url, headers, params, method, json_data, retries, delay
+            )
+
+    async def _execute_request(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        headers: Dict[str, Any],
+        params: Optional[Dict],
+        method: str,
+        json_data: Optional[Dict],
+        retries: int,
+        delay: int
+    ) -> Optional[Any]:
         
-        for attempt in range(retries):
+        for attempt in range(1, retries + 1):
             try:
-                if method == 'GET':
-                    coro = session.get(url, headers=headers, params=params, timeout=20)
-                else:
-                    coro = session.post(url, headers=headers, json=json_data, timeout=20)
-
-                async with coro as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-                    elif resp.status == 429:
-                        logger.warning(f"WB API Rate Limit (429) on {url}. Retrying in {backoff}s...")
-                        await asyncio.sleep(backoff)
-                        backoff *= 2 
-                    elif resp.status >= 500:
-                        logger.warning(f"WB API Server Error ({resp.status}). Retrying...")
-                        await asyncio.sleep(backoff)
-                        backoff *= 2
-                    elif resp.status == 204:
-                         return None # No content
-                    else:
-                        text = await resp.text()
-                        logger.error(f"WB API Error {resp.status} on {url}: {text}")
-                        return None
+                if method.upper() == "GET":
+                    async with session.get(url, headers=headers, params=params) as response:
+                        return await self._process_response(response)
+                
+                elif method.upper() == "POST":
+                    async with session.post(url, headers=headers, json=json_data, params=params) as response:
+                        return await self._process_response(response)
+                        
+                elif method.upper() == "PUT":
+                    async with session.put(url, headers=headers, json=json_data, params=params) as response:
+                        return await self._process_response(response)
+                        
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error {url}: {e}")
+                if attempt == retries:
+                    return None
             except Exception as e:
-                logger.error(f"Request failed: {e}")
-                await asyncio.sleep(backoff)
+                logger.error(f"Request failed {url}: {e}")
+                if attempt == retries:
+                    return None
+            
+            # Экспоненциальная задержка перед следующей попыткой
+            await asyncio.sleep(delay * attempt)
         
         return None
 
-    def _get_cache_key(self, token, method, params):
-        token_part = token[-10:] if token else "none"
-        param_str = json.dumps(params, sort_keys=True)
-        return f"{token_part}:{method}:{param_str}"
-
-    async def _get_cached_or_request(self, session, url, headers, params, use_cache=True):
-        if not use_cache:
-            return await self._request_with_retry(session, url, headers, params)
-
-        cache_key = self._get_cache_key(headers.get("Authorization"), url, params)
-        
-        if cache_key in self._cache:
-            ts, data = self._cache[cache_key]
-            if (datetime.now() - ts).total_seconds() < self._cache_ttl:
-                return data
-        
-        data = await self._request_with_retry(session, url, headers, params)
-        
-        if data is not None:
-            self._cache[cache_key] = (datetime.now(), data)
-            
-        return data
-
-    async def check_token(self, token: str) -> bool:
-        if not token: 
-            return False
-        
-        url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
-        headers = {"Authorization": token}
-        
-        async with aiohttp.ClientSession() as session:
+    async def _process_response(self, response: aiohttp.ClientResponse) -> Optional[Any]:
+        """Обработка статусов ответа"""
+        if response.status == 200:
             try:
-                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
-                    if resp.status == 401:
-                        return False
-                    return True
-            except Exception as e:
-                logger.error(f"Token check error: {e}")
-                return False
+                return await response.json()
+            except:
+                text = await response.text()
+                # Иногда WB возвращает 200, но пустой или битый JSON
+                if not text: return {}
+                return {"text": text}
+        
+        elif response.status == 401:
+            logger.error(f"Unauthorized (401) for {response.url}. Check token.")
+            return None
+            
+        elif response.status == 429:
+            logger.warning(f"Rate Limit (429) for {response.url}. Sleeping...")
+            await asyncio.sleep(5)
+            # Возбуждаем ошибку, чтобы сработал внешний retry loop
+            raise aiohttp.ClientError("Rate Limit")
+            
+        else:
+            text = await response.text()
+            logger.error(f"API Error {response.status}: {text[:200]}")
+            return None
