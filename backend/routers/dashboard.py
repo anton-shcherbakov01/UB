@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from datetime import datetime, timedelta
+import time
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db, User
 from dependencies import get_current_user
 from wb_api.statistics import WBStatisticsAPI
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
+
+# Простой кэш в оперативной памяти: {user_id: {"data": dict, "timestamp": float}}
+_dashboard_cache = {}
+CACHE_TTL = 300  # 5 минут (в секундах)
 
 @router.get("/summary")
 async def get_dashboard_summary(
@@ -15,130 +20,93 @@ async def get_dashboard_summary(
     if not user.wb_api_token:
         return {"status": "no_token"}
 
+    # 1. Проверяем кэш
+    current_time = time.time()
+    if user.id in _dashboard_cache:
+        cached_entry = _dashboard_cache[user.id]
+        # Если прошло меньше 5 минут, отдаем из памяти
+        if current_time - cached_entry["timestamp"] < CACHE_TTL:
+            return cached_entry["data"]
+
     try:
-        # Инициализация API клиента
         stats_api = WBStatisticsAPI(user.wb_api_token)
         
-        # 1. Получаем заказы и продажи (берем запас 3 дня, чтобы точно захватить "вчера" и "сегодня" по UTC)
-        # API WB может отдавать данные с задержкой
+        # Запрашиваем данные (тяжелый запрос)
         orders = await stats_api.get_orders(days=3) 
-        sales = await stats_api.get_sales(days=30)
         
-        if not isinstance(orders, list):
-            orders = []
-        if not isinstance(sales, list):
-            sales = []
+        if not isinstance(orders, list): orders = []
 
-        # Даты для фильтрации (в формате строки API WB "YYYY-MM-DD")
         today_str = datetime.now().strftime("%Y-%m-%d")
         yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        # Вспомогательная функция для получения цены
+
         def get_price(item):
-            # Пробуем взять готовое поле
             val = item.get('priceWithDiscount')
-            if val is not None: 
-                return float(val)
-            
-            # Если нет, считаем: totalPrice * (1 - discount/100)
-            price = float(item.get('totalPrice', 0))
-            disc = float(item.get('discountPercent', 0))
-            return price * (1 - disc/100)
+            if val is not None: return float(val)
+            return float(item.get('totalPrice', 0)) * (1 - float(item.get('discountPercent', 0))/100)
 
-        # Фильтрация данных
-        # isCancel может отсутствовать, поэтому get('isCancel', False)
-        orders_today = [
-            o for o in orders 
-            if o.get('date', '').startswith(today_str) and not o.get('isCancel')
-        ]
+        orders_today = [o for o in orders if o.get('date', '').startswith(today_str) and not o.get('isCancel')]
+        orders_yesterday = [o for o in orders if o.get('date', '').startswith(yesterday_str) and not o.get('isCancel')]
         
-        orders_yesterday = [
-            o for o in orders 
-            if o.get('date', '').startswith(yesterday_str) and not o.get('isCancel')
-        ]
-        
-        # Расчет метрик
         sum_today = sum(get_price(x) for x in orders_today)
-        count_today = len(orders_today)
-        
         sum_yesterday = sum(get_price(x) for x in orders_yesterday)
-        
-        # Расчет выкупа (Buyout Rate) за 30 дней
-        # Грубая оценка: (Кол-во продаж / Кол-во заказов) * 100
-        total_orders_30 = len(orders) if len(orders) > 0 else 1 # Защита от деления на 0
-        total_sales_30 = len(sales)
-        
-        # Если get_orders вернул только 3 дня (как мы просили выше), то статистика будет неточной.
-        # Для точного выкупа нужно делать отдельный запрос get_orders(days=30), но это долго.
-        # Пока ставим 0 или считаем на основе того что есть, если список большой.
-        # В идеале нужно хранить статистику в БД (ClickHouse) и читать оттуда.
-        # Для лайт-версии просто выводим отношение, если данных достаточно.
-        buyout_rate = 0
-        if total_sales_30 > 0:
-             # Примерный коэффициент, так как orders мы загрузили мало
-             buyout_rate = 90 # Заглушка, или реальный расчет если загрузим больше данных
+        count_today = len(orders_today)
 
-        # 2. Генерация "Историй" (Stories)
+        # Логика историй
+        diff_percent = 0
+        if sum_yesterday > 0:
+            diff_percent = int(((sum_today - sum_yesterday) / sum_yesterday) * 100)
+
         stories = []
         
-        # История 1: Пульс (Сумма заказов)
-        percent_diff = 0
-        if sum_yesterday > 0:
-            percent_diff = int(((sum_today - sum_yesterday) / sum_yesterday) * 100)
-        
+        # Story 1: Динамика
         stories.append({
             "id": 1, 
             "title": "Динамика", 
-            "val": f"{'+' if percent_diff > 0 else ''}{percent_diff}%" if sum_yesterday > 0 else "N/A", 
-            "color": "bg-gradient-to-tr from-emerald-400 to-teal-500" if percent_diff >= 0 else "bg-rose-500", 
-            "icon": "trending-up" if percent_diff >= 0 else "trending-down"
+            "val": f"{'+' if diff_percent > 0 else ''}{diff_percent}%", 
+            "color": "bg-gradient-to-tr from-emerald-400 to-teal-500" if diff_percent >= 0 else "bg-rose-500", 
+            "icon": "trending-up" if diff_percent >= 0 else "trending-down",
+            "details": f"Вчера было {int(sum_yesterday)}₽. {'Мы растем!' if diff_percent >=0 else 'Нужно поднажать.'}"
         })
 
-        # История 2: Выкуп (если есть данные)
+        # Story 2: Средний чек
+        avg_check = int(sum_today / count_today) if count_today > 0 else 0
         stories.append({
             "id": 2, 
-            "title": "Выкуп", 
-            "val": f"{buyout_rate}%" if buyout_rate > 0 else "--", 
-            "color": "bg-gradient-to-tr from-violet-500 to-purple-500", 
-            "icon": "percent"
+            "title": "Ср. чек", 
+            "val": f"{avg_check}₽", 
+            "color": "bg-gradient-to-tr from-blue-400 to-indigo-500", 
+            "icon": "wallet",
+            "details": "Средняя стоимость одного заказа сегодня."
         })
 
-        # История 3: Топ товар дня
+        # Story 3: Хит
         if orders_today:
-            top_item = max(orders_today, key=lambda x: get_price(x))
-            price = int(get_price(top_item))
+            top = max(orders_today, key=lambda x: get_price(x))
             stories.append({
-                "id": 3, 
-                "title": "Хит дня", 
-                "val": f"{price}₽", 
-                "color": "bg-gradient-to-tr from-amber-400 to-orange-500", 
-                "icon": "star"
+                "id": 3, "title": "Хит", "val": f"{int(get_price(top))}₽", 
+                "color": "bg-gradient-to-tr from-amber-400 to-orange-500", "icon": "star",
+                "details": "Самый дорогой заказ за сегодня."
             })
 
-        return {
+        result = {
             "status": "success",
             "header": {
                 "balance": int(sum_today),
                 "orders_count": count_today,
                 "growth": sum_today >= sum_yesterday
             },
-            "cards": [
-                {"label": "Заказы сегодня", "value": count_today, "sub": "шт", "color": "blue"},
-                {"label": "Сумма заказов", "value": f"{int(sum_today):,}".replace(',', ' '), "sub": "₽", "color": "emerald"},
-                {"label": "Вчера заказов", "value": f"{int(sum_yesterday):,}".replace(',', ' '), "sub": "₽", "color": "slate"},
-                {"label": "Логистика (est)", "value": count_today * 50, "sub": "₽", "color": "rose"} 
-            ],
             "stories": stories,
             "last_updated": datetime.now().strftime("%H:%M")
         }
 
-    except Exception as e:
-        # Логируем ошибку, но не роняем фронтенд
-        print(f"Dashboard Error: {e}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "header": {"balance": 0, "orders_count": 0, "growth": False},
-            "cards": [],
-            "stories": []
+        # Сохраняем в кэш
+        _dashboard_cache[user.id] = {
+            "data": result,
+            "timestamp": current_time
         }
+
+        return result
+
+    except Exception as e:
+        print(f"Dashboard Error: {e}")
+        return {"status": "error", "message": str(e), "header": {"balance": 0, "orders_count": 0}, "stories": []}
