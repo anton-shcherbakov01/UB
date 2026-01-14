@@ -26,7 +26,7 @@ async def get_or_create_settings(session: AsyncSession, user_id: int) -> SupplyS
     """Helper to fetch settings or create default"""
     stmt = select(SupplySettings).where(SupplySettings.user_id == user_id)
     
-    # FIX: Added await here
+    # Executing the statement with await
     result = await session.execute(stmt) 
     settings = result.scalar_one_or_none()
     
@@ -92,8 +92,8 @@ async def get_supply_analysis(
     Uses user-specific SupplySettings (Lead Time, ABC share).
     """
     if not user.wb_api_token:
-        # Return empty list or error code handled by frontend
-        # Assuming empty list lets frontend show "Add Token" empty state
+        # Return empty list implies "No data available" which frontend handles
+        # Or could raise 400 if strictly enforced
         raise HTTPException(status_code=400, detail="WB API Token required")
 
     r_client = get_redis_client()
@@ -117,7 +117,11 @@ async def get_supply_analysis(
 
         # 3. Fetch Real Data from WB
         wb_api = WBStatisticsAPI(user.wb_api_token)
-        stocks, orders = await wb_api.get_turnover_data()
+        
+        # FIX: unpack dictionary by keys, not tuple unpacking
+        turnover_data = await wb_api.get_turnover_data()
+        stocks = turnover_data.get("stocks", [])
+        orders = turnover_data.get("orders", [])
 
         # 4. Analyze using Config
         analysis = supply_service.analyze_supply(stocks, orders, config)
@@ -134,8 +138,8 @@ async def get_supply_analysis(
     except HTTPException as e:
         raise e
     except Exception as e:
-        logger.error(f"Supply analysis error: {e}")
-        raise HTTPException(status_code=500, detail="Internal analysis error")
+        logger.error(f"Supply analysis error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal analysis error: {str(e)}")
 
 @router.post("/refresh")
 async def refresh_supply_data(user: User = Depends(get_current_user)):
