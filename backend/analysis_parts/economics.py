@@ -190,3 +190,25 @@ class EconomicsModule:
             "is_profitable": benefit > 0,
             "recommendation": "Используйте транзит через Казань" if benefit > 0 else "Прямая поставка выгоднее"
         }
+    
+    def calculate_real_logistics(self, volume_l: float, warehouse_tariffs: dict) -> float:
+        """
+        Считает логистику по формуле WB:
+        База (за 5л) + (Объем - 5) * Ставка за литр
+        """
+        # Берем Коледино как эталон, если не знаем конкретный склад отгрузки
+        # В идеале нужно смотреть остатки по складам и делать средневзвешенное
+        target_wh = warehouse_tariffs.get('Коледино') or warehouse_tariffs.get('Подольск')
+        
+        if not target_wh:
+            return 50.0 # Fallback если тарифы не загрузились
+            
+        base_price = target_wh['base'] # Обычно около 30-40р
+        liter_price = target_wh['liter'] # Обычно около 3-7р
+        
+        if volume_l <= 5:
+            return base_price
+        
+        extra_liters = volume_l - 5
+        cost = base_price + (extra_liters * liter_price)
+        return round(cost, 2)

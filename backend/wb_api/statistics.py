@@ -174,4 +174,49 @@ class WBStatisticsMixin(WBApiBase):
             total_qty = sum(item.get("quantity", 0) for item in data)
             return {"total_quantity": total_qty}
             
+            
         return {"total_quantity": 0}
+    
+    async def get_all_commissions(self, token: str) -> Dict[int, float]:
+        """
+        Получает тарифы комиссий по всем категориям.
+        Возвращает: {subject_id: commission_percent}
+        """
+        url = f"{self.COMMON_URL}/tariffs/commission"
+        headers = {"Authorization": token}
+        
+        data = await self._request_with_retry(None, url, headers, method='GET') # session нужно прокинуть
+        if not data or 'report' not in data:
+            return {}
+            
+        commissions = {}
+        for item in data['report']:
+            sub_id = item.get('subjectID')
+            # WB может возвращать разные тарифы (kgvp, is_kgvp и т.д.), берем базовый
+            pct = item.get('kgvpMarketplace', 25.0) # Берем комиссию для Маркетплейса или FBO
+            commissions[sub_id] = float(pct)
+            
+        return commissions
+
+    async def get_box_tariffs(self, token: str, date_str: str) -> Dict[str, Dict]:
+        """
+        Получает коэффициенты и базовые ставки логистики складов.
+        """
+        url = f"{self.COMMON_URL}/tariffs/box"
+        params = {"date": date_str}
+        headers = {"Authorization": token}
+        
+        data = await self._request_with_retry(None, url, headers, params=params)
+        if not data or 'response' not in data:
+            return {}
+
+        # Формируем словарь: {'Koledino': {'box_delivery_base': 30, 'box_delivery_liter': 7}, ...}
+        # Упрощенная логика для примера
+        tariffs = {}
+        for w in data['response']['data']['warehouseList']:
+            name = w['warehouseName']
+            tariffs[name] = {
+                "base": float(w.get('boxDeliveryBase', '0').replace(',', '.')),
+                "liter": float(w.get('boxDeliveryLiter', '0').replace(',', '.'))
+            }
+        return tariffs

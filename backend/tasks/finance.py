@@ -232,3 +232,65 @@ def train_forecasting_models():
                 
     except Exception as e:
         logger.error(f"Forecasting cycle failed: {e}")
+
+@celery_app.task(name="sync_product_metadata")
+def sync_product_metadata(user_id: int):
+    """
+    Фоновая задача:
+    1. Скачивает габариты всех товаров.
+    2. Скачивает текущие комиссии WB.
+    3. Скачивает тарифы логистики.
+    4. Сохраняет все в Redis для быстрого доступа.
+    """
+    logger.info(f"Starting metadata sync for user {user_id}")
+    session = SyncSessionLocal()
+    try:
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user or not user.wb_api_token:
+            return
+        token = user.wb_api_token
+    finally:
+        session.close()
+
+    if not r_client:
+        logger.error("Redis not available")
+        return
+
+    # Используем asyncio внутри celery для вызова асинхронных методов WB API
+    async def _async_sync():
+        async with aiohttp.ClientSession() as http_session:
+            # Инжектим сессию в сервис (нужно доработать wb_api_service для приема сессии или использовать его методы)
+            # Для простоты предполагаем, что wb_api_service методы обновлены для приема session
+            
+            # 1. Габариты
+            dimensions_map = await wb_api_service.get_cards_with_dimensions(token)
+            
+            # 2. Комиссии
+            commissions_map = await wb_api_service.get_all_commissions(token)
+            
+            # 3. Тарифы логистики (берем на сегодня)
+            today = datetime.now().strftime("%Y-%m-%d")
+            logistics_tariffs = await wb_api_service.get_box_tariffs(token, today)
+            
+            # Сохраняем в Redis
+            pipe = r_client.pipeline()
+            
+            # Кешируем габариты на 24 часа
+            for nm_id, data in dimensions_map.items():
+                key = f"meta:product:{user_id}:{nm_id}"
+                pipe.set(key, json.dumps(data), ex=86400)
+                
+            # Кешируем комиссии на 24 часа (общие для юзера или глобально)
+            # Можно кешировать глобально, но тарифы могут зависеть от СПП юзера в будущем
+            pipe.set(f"meta:commissions:{user_id}", json.dumps(commissions_map), ex=86400)
+            
+            # Кешируем логистику
+            pipe.set(f"meta:logistics_tariffs", json.dumps(logistics_tariffs), ex=3600*4) # на 4 часа
+            
+            pipe.execute()
+            logger.info(f"Synced {len(dimensions_map)} products metadata")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_async_sync())
+    loop.close()
