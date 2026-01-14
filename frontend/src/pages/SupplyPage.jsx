@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Truck, Scale, Loader2, MapPin, ArrowRight, 
     PackageCheck, AlertTriangle, Box, RefreshCw,
-    Activity, Settings, X, Save
+    Activity, Settings, X, Save, HelpCircle, Info
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -15,8 +15,11 @@ const SupplyPage = () => {
     const [products, setProducts] = useState([]);
     const [error, setError] = useState(null);
     
-    // Settings State
+    // UI States
     const [showSettings, setShowSettings] = useState(false);
+    const [showHelp, setShowHelp] = useState(false);
+
+    // Settings Data
     const [settings, setSettings] = useState({
         lead_time: 7,
         min_stock_days: 14,
@@ -52,14 +55,12 @@ const SupplyPage = () => {
 
             const cData = coeffRes.ok ? await coeffRes.json() : [];
             
-            // Handle analysis errors gracefully
             if (analysisRes.ok) {
                 const aData = await analysisRes.json();
                 setProducts(Array.isArray(aData) ? aData : []);
             } else if (analysisRes.status === 400) {
                  setError("Необходимо добавить API токен Wildberries в настройках.");
             } else {
-                 // Non-blocking error for supply data if user just wants calculator
                  console.error("Analysis fetch failed");
             }
             
@@ -102,7 +103,6 @@ const SupplyPage = () => {
             
             if (res.ok) {
                 setShowSettings(false);
-                // Reload analysis with new settings
                 await fetchData(); 
             }
         } catch (e) {
@@ -121,14 +121,59 @@ const SupplyPage = () => {
                 body: JSON.stringify({ volume: Number(volume), destination: "Koledino" })
             });
             if (res.ok) {
-                setCalculation(await res.json());
+                const data = await res.json();
+                setCalculation(data);
             }
         } catch(e) {
             console.error("Calculator error", e);
         }
     };
 
-    // --- Subcomponents ---
+    // --- Modals & Helpers ---
+
+    const HelpModal = () => {
+        if (!showHelp) return null;
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in" onClick={() => setShowHelp(false)}>
+                <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4" onClick={e => e.stopPropagation()}>
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                            <HelpCircle size={20} className="text-indigo-600"/> Справочник
+                        </h3>
+                        <button onClick={() => setShowHelp(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200">
+                            <X size={16}/>
+                        </button>
+                    </div>
+                    
+                    <div className="space-y-3 text-sm text-slate-600 overflow-y-auto max-h-[60vh]">
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">Velocity (Скорость)</div>
+                            Среднее количество продаж в день за последние 30 дней.
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">Lead Time (Срок поставки)</div>
+                            Время (в днях) от заказа товара у поставщика до его появления на складе WB.
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">ROP (Точка заказа)</div>
+                            <div className="text-xs mb-1 italic">Reorder Point</div>
+                            Критический остаток. Если товара меньше этого числа — вы рискуете уйти в Out-of-Stock пока едет новая партия.
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1">ABC Анализ</div>
+                            <b>A</b> - товары-локомотивы (80% выручки).<br/>
+                            <b>B</b> - стабильные середнячки (15%).<br/>
+                            <b>C</b> - аутсайдеры или новинки (5%).
+                        </div>
+                    </div>
+                    
+                    <button onClick={() => setShowHelp(false)} className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold">
+                        Понятно
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     const SettingsModal = () => {
         if (!showSettings) return null;
@@ -146,7 +191,10 @@ const SupplyPage = () => {
 
                     <div className="space-y-4">
                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Срок поставки (Lead Time)</label>
+                            <div className="flex justify-between mb-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase">Срок поставки</label>
+                                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">Lead Time</span>
+                            </div>
                             <div className="flex items-center gap-2">
                                 <input 
                                     type="number" 
@@ -156,7 +204,7 @@ const SupplyPage = () => {
                                 />
                                 <span className="text-xs font-bold text-slate-400">дней</span>
                             </div>
-                            <p className="text-[10px] text-slate-400 mt-1">Сколько дней едет товар от поставщика до WB.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">Время доставки от поставщика до склада WB.</p>
                         </div>
 
                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -170,11 +218,11 @@ const SupplyPage = () => {
                                 />
                                 <span className="text-xs font-bold text-slate-400">дней</span>
                             </div>
-                            <p className="text-[10px] text-slate-400 mt-1">На сколько дней продаж хранить "подушку безопасности".</p>
+                            <p className="text-[10px] text-slate-400 mt-1">Доп. запас на случай задержек поставок.</p>
                         </div>
 
                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Группа А (ABC-анализ)</label>
+                            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Группа А (ABC)</label>
                             <div className="flex items-center gap-2">
                                 <input 
                                     type="number" 
@@ -184,7 +232,7 @@ const SupplyPage = () => {
                                 />
                                 <span className="text-xs font-bold text-slate-400">%</span>
                             </div>
-                            <p className="text-[10px] text-slate-400 mt-1">Процент выручки, определяющий топовые товары.</p>
+                            <p className="text-[10px] text-slate-400 mt-1">Доля выручки для товаров группы А.</p>
                         </div>
                     </div>
 
@@ -194,7 +242,7 @@ const SupplyPage = () => {
                         className="w-full bg-slate-900 text-white py-3 rounded-xl font-bold flex justify-center items-center gap-2 active:scale-95 transition-transform"
                     >
                         {savingSettings ? <Loader2 className="animate-spin"/> : <Save size={18}/>}
-                        Сохранить и пересчитать
+                        Сохранить
                     </button>
                 </div>
             </div>
@@ -239,24 +287,26 @@ const SupplyPage = () => {
                          abc === 'B' ? 'bg-amber-100 text-amber-800' : 
                          'bg-slate-100 text-slate-500';
 
-        const maxScale = rop > 0 ? rop * 2 : (stock > 0 ? stock * 1.5 : 10);
+        // Progress calculation
+        const safeRop = rop || 0;
+        const maxScale = safeRop > 0 ? safeRop * 2 : (stock > 0 ? stock * 1.5 : 10);
         const fillPercent = Math.min(100, (stock / maxScale) * 100);
-        const ropPercent = rop > 0 ? Math.min(100, (rop / maxScale) * 100) : 0;
+        const ropPercent = safeRop > 0 ? Math.min(100, (safeRop / maxScale) * 100) : 0;
 
         return (
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-3 animate-in fade-in">
                 <div className="flex justify-between items-start mb-3">
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0 pr-2">
                         <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${abcColor}`}>{abc}</span>
-                            <span className="font-bold text-sm text-slate-800 truncate max-w-[180px]">{name}</span>
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${abcColor} flex-shrink-0`}>{abc}</span>
+                            <span className="font-bold text-sm text-slate-800 truncate block">{name}</span>
                         </div>
                         <div className="text-[10px] text-slate-400 flex gap-2">
                              <span>SKU: {sku}</span>
                              {size && <span>Размер: {size}</span>}
                         </div>
                     </div>
-                    <div className={`px-2 py-1 rounded-lg flex items-center gap-1 text-xs font-bold ${colorClass} ${textClass}`}>
+                    <div className={`px-2 py-1 rounded-lg flex items-center gap-1 text-xs font-bold ${colorClass} ${textClass} whitespace-nowrap`}>
                         {icon} 
                         {days_to_stock > 365 ? '>1 года' : `${days_to_stock} дн.`}
                     </div>
@@ -264,18 +314,18 @@ const SupplyPage = () => {
                 
                 <div className="grid grid-cols-3 gap-2 mb-3">
                     <div className="bg-slate-50 p-2 rounded-xl">
-                        <div className="text-[10px] text-slate-400">Остаток</div>
-                        <div className="font-bold text-slate-800">{stock} шт</div>
+                        <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">Остаток</div>
+                        <div className="font-bold text-slate-800">{stock}</div>
                     </div>
                     <div className="bg-slate-50 p-2 rounded-xl">
-                        <div className="text-[10px] text-slate-400">Скорость</div>
+                        <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">Velocity</div>
                         <div className="font-bold text-slate-800 flex items-center gap-1">
                             {velocity} <span className="text-[8px] opacity-60">шт/д</span>
                         </div>
                     </div>
                     <div className="bg-slate-50 p-2 rounded-xl">
-                        <div className="text-[10px] text-slate-400">ROP (Заказ)</div>
-                        <div className="font-bold text-slate-800">{rop} шт</div>
+                        <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">ROP</div>
+                        <div className="font-bold text-slate-800">{safeRop}</div>
                     </div>
                 </div>
 
@@ -294,11 +344,11 @@ const SupplyPage = () => {
                 
                 <div className="flex justify-between items-center gap-2">
                     <div className="flex-1 text-[10px] text-slate-500 font-medium bg-slate-50 p-2 rounded-lg flex items-center gap-2">
-                        {status === 'ok' ? <PackageCheck size={12}/> : <AlertTriangle size={12}/>}
-                        {recommendation}
+                        {status === 'ok' ? <PackageCheck size={12} className="flex-shrink-0"/> : <AlertTriangle size={12} className="flex-shrink-0"/>}
+                        <span className="truncate">{recommendation}</span>
                     </div>
                     {to_order > 0 && (
-                        <div className="bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1">
+                        <div className="bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-bold whitespace-nowrap flex items-center gap-1 shadow-lg shadow-slate-200">
                             +{to_order} шт
                         </div>
                     )}
@@ -327,6 +377,7 @@ const SupplyPage = () => {
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in relative">
              <SettingsModal />
+             <HelpModal />
 
              <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[32px] text-white shadow-xl shadow-orange-200 relative overflow-hidden">
                 <div className="relative z-10 flex justify-between items-center">
@@ -357,16 +408,17 @@ const SupplyPage = () => {
                  <div className="bg-slate-50 p-4 rounded-2xl mb-4 border border-slate-100">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-2">Объем поставки (литры)</label>
                     <div className="flex items-center gap-2">
+                        {/* Added min-w-0 for mobile flex fix */}
                         <input 
                             type="number"
                             value={volume}
                             onChange={e => setVolume(e.target.value)}
-                            className="flex-1 bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500/20"
+                            className="flex-1 min-w-0 bg-white p-3 rounded-xl font-black text-xl outline-none text-slate-800 shadow-sm transition-all focus:ring-2 focus:ring-indigo-500/20"
                         />
                         <button 
                             onClick={handleCalculate} 
                             disabled={loading}
-                            className="bg-indigo-600 text-white p-3 rounded-xl active:scale-95 transition-transform shadow-lg shadow-indigo-200 disabled:opacity-50"
+                            className="bg-indigo-600 text-white p-3 rounded-xl active:scale-95 transition-transform shadow-lg shadow-indigo-200 disabled:opacity-50 flex-shrink-0"
                         >
                             {loading && calculation === null ? <Loader2 className="animate-spin"/> : <ArrowRight />}
                         </button>
@@ -375,20 +427,21 @@ const SupplyPage = () => {
 
                  {calculation && (
                      <div className="space-y-3 animate-in slide-in-from-top-4">
+                         {/* Added safe access checks ?. */}
                          <div className={`p-4 rounded-2xl border-2 transition-all ${!calculation.is_profitable ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100 opacity-60'}`}>
                              <div className="flex justify-between items-center mb-1">
                                  <span className="font-bold text-sm flex items-center gap-1"><MapPin size={14}/> Коледино (Прямая)</span>
-                                 <span className="font-black text-lg">{calculation.direct_cost.toLocaleString()} ₽</span>
+                                 <span className="font-black text-lg">{calculation.direct_cost?.toLocaleString() || 0} ₽</span>
                              </div>
                          </div>
                          <div className={`p-4 rounded-2xl border-2 transition-all ${calculation.is_profitable ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100 opacity-60'}`}>
                              <div className="flex justify-between items-center mb-1">
                                  <span className="font-bold text-sm flex items-center gap-1"><Truck size={14}/> Казань (Транзит)</span>
-                                 <span className="font-black text-lg">{calculation.transit_cost.toLocaleString()} ₽</span>
+                                 <span className="font-black text-lg">{calculation.transit_cost?.toLocaleString() || 0} ₽</span>
                              </div>
                              {calculation.is_profitable && (
                                  <div className="mt-2 bg-emerald-200 text-emerald-800 text-xs font-bold px-2 py-1 rounded-lg inline-block">
-                                      Выгода: {calculation.benefit.toLocaleString()} ₽
+                                      Выгода: {calculation.benefit?.toLocaleString() || 0} ₽
                                  </div>
                              )}
                          </div>
@@ -404,6 +457,13 @@ const SupplyPage = () => {
                         Анализ запасов
                     </h3>
                     <div className="flex items-center gap-2">
+                        <button 
+                            onClick={() => setShowHelp(true)}
+                            className="bg-slate-100 text-slate-500 p-2 rounded-full hover:bg-slate-200 transition-colors"
+                        >
+                             <HelpCircle size={18} />
+                        </button>
+                        
                         {settings.lead_time !== 7 && (
                             <span className="text-[10px] bg-slate-100 px-2 py-1 rounded text-slate-500">
                                 Lead: {settings.lead_time}д
