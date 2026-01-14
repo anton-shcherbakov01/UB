@@ -53,6 +53,25 @@ class User(Base):
     bidder_settings = relationship("BidderSettings", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
 
+class SupplySettings(Base):
+    """
+    Персональные настройки логистики для расчета поставок.
+    """
+    __tablename__ = "supply_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+
+    lead_time = Column(Integer, default=7)          # Срок доставки до склада WB (дней)
+    min_stock_days = Column(Integer, default=14)    # Минимальный запас (дней продаж)
+    planning_period = Column(Integer, default=30)   # Горизонт планирования (дней)
+    
+    # Коэффициенты ABC анализа (можно настроить границы групп)
+    abc_a_share = Column(Float, default=80.0)       # Граница группы А (%)
+    
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="supply_settings")
+
 class Payment(Base):
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True, index=True)
