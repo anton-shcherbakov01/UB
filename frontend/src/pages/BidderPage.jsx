@@ -18,7 +18,6 @@ const BidderPage = () => {
     const [saving, setSaving] = useState(false);
 
     const fetchData = async () => {
-        // Не включаем глобальный лоадер при фоновом обновлении
         if (campaigns.length === 0) setLoading(true);
         setError(null);
         try {
@@ -45,12 +44,11 @@ const BidderPage = () => {
 
     useEffect(() => {
         fetchData();
-        const interval = setInterval(fetchData, 10000); // Обновляем каждые 10 сек
+        const interval = setInterval(fetchData, 10000); 
         return () => clearInterval(interval);
     }, []);
 
     const openSettings = (camp) => {
-        // Инициализируем форму текущими настройками или дефолтными
         setFormData({
             is_active: camp.is_active || false,
             keyword: camp.keyword || '',
@@ -60,7 +58,7 @@ const BidderPage = () => {
             max_bid: camp.max_bid || 1000,
             max_cpm: camp.max_cpm || 2000,
             check_organic: camp.check_organic || false,
-            sku: camp.sku || '' // Если есть привязка к SKU
+            sku: camp.sku || ''
         });
         setEditingCamp(camp);
     };
@@ -68,7 +66,6 @@ const BidderPage = () => {
     const saveSettings = async () => {
         setSaving(true);
         try {
-            // Предполагаем endpoint для сохранения настроек
             const res = await fetch(`${API_URL}/api/bidder/campaigns/${editingCamp.id}/settings`, {
                 method: 'POST',
                 headers: {
@@ -82,7 +79,6 @@ const BidderPage = () => {
             });
 
             if (res.ok) {
-                // Обновляем локально список, чтобы интерфейс среагировал мгновенно
                 setCampaigns(prev => prev.map(c => 
                     c.id === editingCamp.id ? { ...c, ...formData } : c
                 ));
@@ -102,7 +98,6 @@ const BidderPage = () => {
 
     const CampaignCard = ({ camp }) => (
         <div className="bg-slate-900 text-white p-5 rounded-3xl relative overflow-hidden mb-3 shadow-lg shadow-slate-300">
-            {/* Background Decor */}
             <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl -mr-10 -mt-10 transition-colors duration-500 ${camp.is_active ? 'bg-emerald-500/20' : 'bg-slate-600/20'}`}></div>
             
             <div className="flex justify-between items-start mb-4 relative z-10">
@@ -111,7 +106,6 @@ const BidderPage = () => {
                         <span className={`w-2 h-2 rounded-full shrink-0 ${camp.is_active ? 'bg-emerald-400 shadow-[0_0_10px_#34d399]' : 'bg-slate-500'}`}></span>
                         <h4 className="font-bold text-sm text-slate-200 line-clamp-1">{camp.name || `Кампания ${camp.id}`}</h4>
                     </div>
-                    {/* Ключевое слово - самое важное теперь */}
                     {camp.keyword ? (
                         <div className="flex items-center gap-1 text-[10px] text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded w-fit mt-1">
                             <Search size={10} /> {camp.keyword}
@@ -166,7 +160,6 @@ const BidderPage = () => {
 
                     <div className="space-y-5 max-h-[70vh] overflow-y-auto pr-1 custom-scrollbar">
                         
-                        {/* Главный переключатель */}
                         <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
                             <span className="font-bold text-slate-700">Биддер включен</span>
                             <label className="relative inline-flex items-center cursor-pointer">
@@ -180,7 +173,6 @@ const BidderPage = () => {
                             </label>
                         </div>
 
-                        {/* Ключевое слово (Обязательно) */}
                         <div>
                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">
                                 Ключевая фраза (обязательно)
@@ -198,7 +190,6 @@ const BidderPage = () => {
                             <p className="text-[10px] text-slate-400 mt-1 ml-1">По этой фразе мы будем проверять реальный аукцион.</p>
                         </div>
 
-                        {/* Стратегия */}
                         <div>
                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Стратегия</label>
                             <div className="grid grid-cols-3 gap-2">
@@ -223,7 +214,6 @@ const BidderPage = () => {
                             </div>
                         </div>
 
-                        {/* Основные цифры */}
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 ml-1">Целевое место</label>
@@ -245,7 +235,6 @@ const BidderPage = () => {
                             </div>
                         </div>
 
-                        {/* Дополнительные настройки (Safety) */}
                         <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
                             <h4 className="flex items-center gap-2 font-bold text-slate-700 text-sm">
                                 <ShieldCheck size={16} className="text-emerald-500"/> Защита бюджета
@@ -364,8 +353,12 @@ const BidderPage = () => {
                                         {l.msg || l.reason}
                                         {l.calculated_bid && (
                                             <div className="mt-1 flex gap-2 text-[10px]">
-                                                <span className="text-slate-500">Ставка: {l.previous_bid} -> <span className="text-indigo-600 font-bold">{l.calculated_bid}₽</span></span>
-                                                <span className="text-slate-500">Поз: {l.current_pos} -> {l.target_pos}</span>
+                                                <span className="text-slate-500">
+                                                    Ставка: {l.previous_bid} &rarr; <span className="text-indigo-600 font-bold">{l.calculated_bid}₽</span>
+                                                </span>
+                                                <span className="text-slate-500">
+                                                    Поз: {l.current_pos} &rarr; {l.target_pos}
+                                                </span>
                                             </div>
                                         )}
                                     </div>
