@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Truck, Scale, Loader2, MapPin, ArrowRight, 
     PackageCheck, AlertTriangle, Box, RefreshCw,
     Activity, Settings, X, Save, HelpCircle, Info,
-    ArrowDown
+    ArrowDown, FilterX
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
+import AbcXyzMatrix from '../components/AbcXyzMatrix'; // <-- Импорт матрицы
 
 const SupplyPage = () => {
     const [coeffs, setCoeffs] = useState([]);
@@ -14,6 +15,9 @@ const SupplyPage = () => {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState(null);
     
+    // --- STATE: МАТРИЦА ---
+    const [filterGroup, setFilterGroup] = useState(null); // Например 'AX', 'BZ'
+
     // Calculator State
     const [volume, setVolume] = useState(1000);
     const [origin, setOrigin] = useState("Казань");
@@ -140,6 +144,32 @@ const SupplyPage = () => {
         return defaultWarehouses.sort();
     };
 
+    // --- LOGIC: MATRIX & FILTERING ---
+    // 1. Формируем данные для матрицы на основе загруженных продуктов
+    const matrixData = useMemo(() => {
+        if (!products.length) return null;
+        
+        const summary = {};
+        products.forEach(p => {
+            // Если xyz еще нет в API, ставим заглушку Z. 
+            // В будущем убедитесь, что API возвращает поля abc и xyz.
+            const group = `${p.abc || 'C'}${p.xyz || 'Z'}`; 
+            summary[group] = (summary[group] || 0) + 1;
+        });
+
+        return { summary };
+    }, [products]);
+
+    // 2. Фильтруем список товаров
+    const filteredProducts = useMemo(() => {
+        if (!filterGroup) return products;
+        return products.filter(p => {
+            const group = `${p.abc || 'C'}${p.xyz || 'Z'}`;
+            return group === filterGroup;
+        });
+    }, [products, filterGroup]);
+
+
     // --- Components ---
 
     const InfoTooltip = ({ text }) => (
@@ -181,11 +211,10 @@ const SupplyPage = () => {
                             Критический остаток. Если товара меньше этого числа — вы рискуете уйти в Out-of-Stock пока едет новая партия.
                         </div>
                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <div className="font-bold text-slate-800 mb-1">ABC Анализ</div>
+                            <div className="font-bold text-slate-800 mb-1">ABC/XYZ Анализ</div>
                             <ul className="list-disc list-inside space-y-1 mt-1 text-xs">
-                                <li><b>A</b> - товары-локомотивы (80% выручки).</li>
-                                <li><b>B</b> - стабильные середнячки (15%).</li>
-                                <li><b>C</b> - аутсайдеры или новинки (5%).</li>
+                                <li><b>A-C</b> - Доля в выручке (A-много, C-мало).</li>
+                                <li><b>X-Z</b> - Стабильность спроса (X-стабильно, Z-скачки).</li>
                             </ul>
                         </div>
                     </div>
@@ -322,7 +351,7 @@ const SupplyPage = () => {
     const StockHealthCard = ({ item }) => {
         const { 
             sku, name, size, stock, velocity, 
-            days_to_stock, rop, abc, status, 
+            days_to_stock, rop, abc, xyz, status, // <-- xyz добавлен
             recommendation, to_order 
         } = item;
         
@@ -368,7 +397,10 @@ const SupplyPage = () => {
                 <div className="flex justify-between items-start mb-3">
                     <div className="flex-1 min-w-0 pr-2">
                         <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${abcColor} flex-shrink-0`}>{abc}</span>
+                            {/* Показываем группу ABCXYZ */}
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${abcColor} flex-shrink-0 uppercase`}>
+                                {abc}{xyz}
+                            </span>
                             <span className="font-bold text-sm text-slate-800 truncate block">{name}</span>
                         </div>
                         <div className="text-[10px] text-slate-400 flex gap-2 items-center">
@@ -479,7 +511,7 @@ const SupplyPage = () => {
                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
             </div>
 
-            {/* Calculator Section */}
+            {/* Calculator Section (Без изменений, только сворачиваемость можно добавить по желанию) */}
             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative">
                  <button 
                     onClick={() => setShowCalcHelp(true)}
@@ -584,13 +616,38 @@ const SupplyPage = () => {
                  )}
             </div>
 
+            {/* --- ABC/XYZ MATRIX INTEGRATION --- */}
+            {/* Вставляем матрицу здесь, чтобы она служила фильтром для списка ниже */}
+            {matrixData && (
+                <div className="animate-in fade-in slide-in-from-bottom-2">
+                    <AbcXyzMatrix 
+                        data={{ items: {}, summary: matrixData.summary }}
+                        loading={loading}
+                        onCellClick={(group) => setFilterGroup(group === filterGroup ? null : group)}
+                        selectedGroup={filterGroup}
+                    />
+                </div>
+            )}
+
             {/* Stock Health Section */}
             <div className="px-2">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
-                        <Activity size={20} className="text-emerald-500"/>
-                        Анализ запасов
-                    </h3>
+                    <div className="flex items-center gap-2">
+                         <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                            <Activity size={20} className="text-emerald-500"/>
+                            Анализ запасов
+                        </h3>
+                        {/* Кнопка сброса фильтра */}
+                        {filterGroup && (
+                            <button 
+                                onClick={() => setFilterGroup(null)} 
+                                className="flex items-center gap-1 bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg text-xs font-bold animate-in fade-in active:scale-95"
+                            >
+                                <FilterX size={12}/> {filterGroup} <X size={12}/>
+                            </button>
+                        )}
+                    </div>
+
                     <div className="flex items-center gap-2">
                         <button 
                             onClick={() => setShowHelp(true)}
@@ -614,14 +671,16 @@ const SupplyPage = () => {
                     </div>
                 </div>
 
-                {products.length > 0 ? (
+                {filteredProducts.length > 0 ? (
                     <div className="space-y-1">
-                        {products.map(item => <StockHealthCard key={item.sku} item={item} />)}
+                        {filteredProducts.map(item => <StockHealthCard key={item.sku} item={item} />)}
                     </div>
                 ) : (
                     <div className="text-center p-8 text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
-                        Нет данных о товарах. <br/>
-                        <span className="text-xs">Убедитесь, что API ключ WB добавлен и корректен.</span>
+                        {products.length > 0 ? 'Нет товаров в выбранной группе' : 'Нет данных о товарах.'} <br/>
+                        <span className="text-xs">
+                            {products.length === 0 && 'Убедитесь, что API ключ WB добавлен и корректен.'}
+                        </span>
                     </div>
                 )}
             </div>
