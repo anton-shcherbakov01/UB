@@ -1,8 +1,7 @@
 import React from 'react';
-import { Check, Star, CreditCard, Loader2, Sparkles, Zap } from 'lucide-react';
+import { Check, Star, CreditCard, Loader2, Sparkles } from 'lucide-react';
 
 const TariffCard = ({ plan, onPayStars, onPayRubles, loading }) => {
-  // Логика определения "Лучшего выбора" (Analyst/Pro)
   const isBestValue = plan.is_best || plan.id === 'pro';
   const isCurrent = plan.current;
 
@@ -11,17 +10,17 @@ const TariffCard = ({ plan, onPayStars, onPayRubles, loading }) => {
       isCurrent 
         ? 'border-emerald-500 bg-white shadow-emerald-100 shadow-xl scale-[1.01]' 
         : isBestValue
-          ? 'border-indigo-500/30 bg-white shadow-indigo-100 shadow-lg scale-[1.01] z-10' // Выделяем Analyst
+          ? 'border-indigo-500/30 bg-white shadow-indigo-100 shadow-lg scale-[1.01] z-10' 
           : 'border-slate-100 bg-white hover:border-slate-200'
     }`}>
-      {/* Бейджик BEST VALUE */}
+      {/* Бейджик ХИТ/BEST */}
       {isBestValue && !isCurrent && (
         <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[10px] font-black uppercase tracking-widest px-4 py-1.5 rounded-full shadow-lg shadow-indigo-200 flex items-center gap-1 whitespace-nowrap">
-          <Sparkles size={10} className="text-yellow-300 fill-yellow-300" /> Best Value
+          <Sparkles size={10} className="text-yellow-300 fill-yellow-300" /> ХИТ ПРОДАЖ
         </div>
       )}
 
-      {/* Бейджик CURRENT */}
+      {/* Бейджик АКТИВЕН */}
       {isCurrent && (
         <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl rounded-tr-[20px]">
           АКТИВЕН
@@ -38,7 +37,6 @@ const TariffCard = ({ plan, onPayStars, onPayRubles, loading }) => {
         </div>
       </div>
 
-      {/* Список фич */}
       <div className="space-y-3 mb-6 flex-1">
         {plan.features.map((feature, i) => (
           <div key={i} className="flex items-start gap-3 text-xs font-bold text-slate-600">
@@ -52,7 +50,6 @@ const TariffCard = ({ plan, onPayStars, onPayRubles, loading }) => {
         ))}
       </div>
 
-      {/* Кнопки оплаты */}
       <div className="mt-auto">
         {isCurrent ? (
           <div className="w-full py-3.5 rounded-xl font-bold text-sm bg-emerald-50 text-emerald-600 flex justify-center items-center gap-2 border border-emerald-100">
