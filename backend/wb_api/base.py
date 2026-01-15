@@ -7,15 +7,6 @@ from typing import Optional, Dict, Any, List, Union
 
 logger = logging.getLogger("WB-API-Base")
 
-URLS = {
-        "common": "https://common-api.wildberries.ru",
-        "content": "https://content-api.wildberries.ru",
-        "statistics": "https://statistics-api.wildberries.ru",
-        "advert": "https://advert-api.wb.ru",
-        "marketplace": "https://marketplace-api.wildberries.ru",
-        "feedbacks": "https://feedbacks-api.wildberries.ru"
-    }
-
 class WBApiBase:
     """
     Базовый класс для работы с API WB.
@@ -32,6 +23,15 @@ class WBApiBase:
     # In-Memory Cache: { "token_method_params": (timestamp, data) }
     _cache: Dict[str, Any] = {}
     _cache_ttl = 300 # 5 минут (TTL)
+
+    URLS = {
+        "common": "https://common-api.wildberries.ru",
+        "content": "https://content-api.wildberries.ru",
+        "statistics": "https://statistics-api.wildberries.ru",
+        "advert": "https://advert-api.wb.ru",
+        "marketplace": "https://marketplace-api.wildberries.ru",
+        "feedbacks": "https://feedbacks-api.wildberries.ru"
+    }
 
     def __init__(self):
         # Короткий таймаут, чтобы проверка профиля не висела долго

@@ -22,7 +22,14 @@ except ImportError:
 
 logger = logging.getLogger("WB-API-Stats")
 
-URLS = {
+
+class WBStatisticsMixin(WBApiBase):
+    """
+    Mixin containing business logic for Statistics API.
+    Used by the main WBApiService (Legacy & General features).
+    """
+
+    URLS = {
         "common": "https://common-api.wildberries.ru",
         "content": "https://content-api.wildberries.ru",
         "statistics": "https://statistics-api.wildberries.ru",
@@ -30,12 +37,6 @@ URLS = {
         "marketplace": "https://marketplace-api.wildberries.ru",
         "feedbacks": "https://feedbacks-api.wildberries.ru"
     }
-
-class WBStatisticsMixin(WBApiBase):
-    """
-    Mixin containing business logic for Statistics API.
-    Used by the main WBApiService (Legacy & General features).
-    """
 
     def __init__(self):
         # Короткий таймаут, чтобы проверка профиля не висела долго
