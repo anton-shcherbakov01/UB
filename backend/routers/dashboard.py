@@ -88,6 +88,8 @@ async def get_dashboard_summary(
                 "details": "Самый дорогой заказ за сегодня."
             })
 
+        msk_time = datetime.utcnow() + timedelta(hours=3)
+
         result = {
             "status": "success",
             "header": {
@@ -96,7 +98,7 @@ async def get_dashboard_summary(
                 "growth": sum_today >= sum_yesterday
             },
             "stories": stories,
-            "last_updated": datetime.now().strftime("%H:%M")
+            "last_updated": msk_time.strftime("%H:%M")
         }
 
         # Сохраняем в кэш
