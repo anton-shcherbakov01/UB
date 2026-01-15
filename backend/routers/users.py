@@ -129,52 +129,52 @@ async def delete_wb_token(
 
 @router.get("/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
+    """
+    Возвращает список тарифов с переведенными названиями и описаниями.
+    """
     return [
         {
             "id": "free",
-            "name": "Start",
+            "name": "Старт",  # Было "Start"
             "price": "0 ₽",
             "stars": 0,
             "features": [
-                "History Depth: 7 Days",
-                "10 AI Credits / mo",
-                "Basic Analytics",
-                "3 Monitored Items"
+                "История: 7 дней",
+                "10 AI-запросов / мес",
+                "Базовая аналитика",
+                "3 товара в отслеживании"
             ],
             "current": user.subscription_plan == "free",
-            "color": "slate",
             "is_best": False
         },
         {
             "id": "pro",
-            "name": "Analyst",
-            "price": "2990 ₽",
-            "stars": 2500,
+            "name": "Аналитик",  # Было "Analyst"
+            "price": "1490 ₽",
+            "stars": 1000,
             "features": [
-                "History Depth: 60 Days",
-                "500 AI Credits / mo",
-                "ABC/XYZ Analysis",
-                "Unit Economics P&L",
-                "50 Monitored Items"
+                "История: 60 дней",
+                "500 AI-запросов / мес",
+                "ABC/XYZ анализ",
+                "Unit-экономика (P&L)",
+                "50 товаров в отслеживании"
             ],
             "current": user.subscription_plan == "pro",
-            "color": "indigo",
             "is_best": True
         },
         {
             "id": "business",
-            "name": "Strategist",
-            "price": "6990 ₽",
-            "stars": 6000,
+            "name": "Стратег",  # Было "Strategist"
+            "price": "4990 ₽",
+            "stars": 4500,
             "features": [
-                "History Depth: 365 Days",
-                "Unlimited AI",
-                "API Access",
-                "Personal Manager",
-                "500 Monitored Items"
+                "История: 365 дней",
+                "Безлимитный AI",
+                "API доступ (все методы)",
+                "Личный менеджер",
+                "500 товаров в отслеживании"
             ],
             "current": user.subscription_plan == "business",
-            "color": "emerald",
             "is_best": False
         }
     ]
