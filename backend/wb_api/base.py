@@ -7,6 +7,15 @@ from typing import Optional, Dict, Any, List, Union
 
 logger = logging.getLogger("WB-API-Base")
 
+URLS = {
+        "common": "https://common-api.wildberries.ru",
+        "content": "https://content-api.wildberries.ru",
+        "statistics": "https://statistics-api.wildberries.ru",
+        "advert": "https://advert-api.wb.ru",
+        "marketplace": "https://marketplace-api.wildberries.ru",
+        "feedbacks": "https://feedbacks-api.wildberries.ru"
+    }
+
 class WBApiBase:
     """
     Базовый класс для работы с API WB.
@@ -146,20 +155,24 @@ class WBApiBase:
         return data
 
     async def check_token(self, token: str) -> bool:
-        if not token: 
-            return False
-        
-        url = f"{self.BASE_URL}/incomes"
-        params = {"dateFrom": datetime.now().strftime("%Y-%m-%d")}
+        """
+        Умная проверка: проверяет Контент, если нет - Статистику.
+        Используется при сохранении токена.
+        """
         headers = {"Authorization": token}
-        
-        # Здесь создаем сессию явно, так как это одиночный запрос
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
             try:
-                async with session.get(url, headers=headers, params=params, timeout=10) as resp:
-                    if resp.status == 401:
-                        return False
-                    return True
+                # 1. Проверка через Content API (лимиты - очень легкий запрос)
+                url = f"{self.URLS['content']}/content/v2/cards/limits"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status in [200, 429]: return True
+                    
+                    # 2. Если 401 (нет доступа к контенту), пробуем Статистику
+                    if resp.status in [401, 403]:
+                        url_stat = f"{self.URLS['statistics']}/api/v1/supplier/incomes"
+                        async with session.get(url_stat, headers=headers, params={"dateFrom": "2024-01-01"}) as resp_stat:
+                            return resp_stat.status in [200, 204, 429]
+                return False
             except Exception as e:
                 logger.error(f"Token check error: {e}")
                 return False
