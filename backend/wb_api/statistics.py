@@ -308,7 +308,8 @@ class WBStatisticsAPI:
         Метод «Склад». Возвращает остатки товаров на складах.
         Endpoint: /api/v1/supplier/stocks
         """
-        date_from = datetime.utcnow().strftime("%Y-%m-%d")
+        date_from = "2023-01-01T00:00:00"
+        # date_from = datetime.utcnow().strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/stocks", params={"dateFrom": date_from})
 
     async def get_orders(self, days: int = 30) -> List[Dict[str, Any]]:
