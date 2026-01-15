@@ -10,7 +10,7 @@ const AbcXyzMatrix = ({ data, loading, onCellClick, selectedGroup }) => {
     // Цветовая схема для ячеек
     const getCellColor = (group) => {
         const colors = {
-            'AX': 'bg-emerald-100 border-emerald-200 text-emerald-800', // Лучшие
+            'AX': 'bg-emerald-100 border-emerald-200 text-emerald-800',
             'AY': 'bg-emerald-50 border-emerald-100 text-emerald-700',
             'AZ': 'bg-yellow-50 border-yellow-100 text-yellow-700',
             'BX': 'bg-emerald-50 border-emerald-100 text-emerald-700',
@@ -18,7 +18,7 @@ const AbcXyzMatrix = ({ data, loading, onCellClick, selectedGroup }) => {
             'BZ': 'bg-yellow-50 border-yellow-100 text-yellow-700',
             'CX': 'bg-slate-50 border-slate-100 text-slate-500',
             'CY': 'bg-red-50 border-red-100 text-red-600',
-            'CZ': 'bg-red-100 border-red-200 text-red-800', // Худшие
+            'CZ': 'bg-red-100 border-red-200 text-red-800',
         };
         return colors[group] || 'bg-gray-50 border-gray-100 text-gray-500';
     };
@@ -33,7 +33,7 @@ const AbcXyzMatrix = ({ data, loading, onCellClick, selectedGroup }) => {
     };
 
     return (
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 relative overflow-hidden">
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 relative overflow-visible z-10">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <h3 className="font-bold text-lg text-slate-800">Матрица ABC/XYZ</h3>
@@ -44,15 +44,49 @@ const AbcXyzMatrix = ({ data, loading, onCellClick, selectedGroup }) => {
                     )}
                 </div>
                 
-                <div className="group relative z-20">
-                    <Info size={18} className="text-slate-400 cursor-help"/>
-                    <div className="absolute right-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-xl opacity-0 group-hover:opacity-100 transition pointer-events-none top-6 shadow-xl">
-                        Кликните на ячейку, чтобы отфильтровать список товаров.
+                {/* --- ОБНОВЛЕННАЯ ПОДСКАЗКА --- */}
+                <div className="group relative z-50">
+                    <Info size={18} className="text-slate-400 cursor-help hover:text-indigo-500 transition-colors"/>
+                    
+                    {/* Контейнер тултипа */}
+                    <div className="absolute right-0 top-8 w-[340px] bg-slate-800 text-white rounded-xl p-4 shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right translate-y-2 group-hover:translate-y-0">
+                        {/* Стрелочка сверху */}
+                        <div className="absolute -top-1.5 right-1 w-3 h-3 bg-slate-800 rotate-45"></div>
+                        
+                        <h4 className="font-bold text-sm mb-3 text-slate-100">Как читать матрицу?</h4>
+                        
+                        <div className="grid grid-cols-2 gap-4 text-xs">
+                            {/* Колонка ABC */}
+                            <div>
+                                <div className="font-bold text-emerald-400 mb-1 border-b border-slate-600 pb-1">ABC (Выручка)</div>
+                                <ul className="space-y-1.5 text-slate-300">
+                                    <li><b className="text-white">A</b> — Лидеры (80% денег)</li>
+                                    <li><b className="text-white">B</b> — Середняки (15%)</li>
+                                    <li><b className="text-white">C</b> — Аутсайдеры (5%)</li>
+                                </ul>
+                            </div>
+                            
+                            {/* Колонка XYZ */}
+                            <div>
+                                <div className="font-bold text-indigo-400 mb-1 border-b border-slate-600 pb-1">XYZ (Спрос)</div>
+                                <ul className="space-y-1.5 text-slate-300">
+                                    <li><b className="text-white">X</b> — Стабильно</li>
+                                    <li><b className="text-white">Y</b> — Сезонно/Скачки</li>
+                                    <li><b className="text-white">Z</b> — Хаотично</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div className="mt-3 pt-2 border-t border-slate-600 text-[10px] text-slate-400 italic">
+                            💡 Кликните на любую ячейку (например, <span className="text-emerald-400">AX</span>), чтобы увидеть список товаров этой группы.
+                        </div>
                     </div>
                 </div>
+                {/* ----------------------------- */}
+
             </div>
 
-            <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-2 select-none">
+            <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-2 select-none relative z-0">
                 {/* Заголовки столбцов (XYZ) */}
                 <div className="p-2"></div>
                 {['X', 'Y', 'Z'].map(axis => (
@@ -76,9 +110,8 @@ const AbcXyzMatrix = ({ data, loading, onCellClick, selectedGroup }) => {
                             const group = `${row}${col}`;
                             const count = summary[group] || 0;
                             
-                            // Логика выделения
                             const isSelected = selectedGroup === group;
-                            const isDimmed = selectedGroup && !isSelected; // Затухание, если выбрано что-то другое
+                            const isDimmed = selectedGroup && !isSelected;
 
                             return (
                                 <div 
