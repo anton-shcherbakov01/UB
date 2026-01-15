@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import pandas as pd
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -212,3 +213,105 @@ class EconomicsModule:
         extra_liters = volume_l - 5
         cost = base_price + (extra_liters * liter_price)
         return round(cost, 2)
+
+    def calculate_abc_xyz(sales_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Расчет ABC/XYZ анализа.
+    Вход sales_data: список словарей [{'sku': 123, 'date': '2023-10-01', 'revenue': 1000, 'qty': 5}, ...]
+    """
+    if not sales_data:
+        return {"status": "error", "message": "Нет данных для анализа"}
+
+    try:
+        # Конвертируем в DataFrame
+        df = pd.DataFrame(sales_data)
+        
+        # Приведение типов (на случай строк)
+        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce').fillna(0)
+        df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(0)
+        
+        # ---------------------------
+        # ABC Анализ (по Выручке)
+        # ---------------------------
+        # Группировка по SKU
+        abc_df = df.groupby('sku')['revenue'].sum().reset_index()
+        # Сортировка по убыванию выручки
+        abc_df = abc_df.sort_values(by='revenue', ascending=False)
+        
+        total_revenue = abc_df['revenue'].sum()
+        if total_revenue == 0:
+             return {"status": "error", "message": "Общая выручка равна 0"}
+
+        # Кумулятивная доля
+        abc_df['cumsum'] = abc_df['revenue'].cumsum()
+        abc_df['share'] = abc_df['cumsum'] / total_revenue
+        
+        # Присвоение классов
+        # A: 0-80%, B: 80-95%, C: 95-100%
+        def get_abc(share):
+            if share <= 0.8: return 'A'
+            elif share <= 0.95: return 'B'
+            return 'C'
+            
+        abc_df['abc_class'] = abc_df['share'].apply(get_abc)
+        
+        # Словарь {sku: 'A'}
+        abc_map = abc_df.set_index('sku')['abc_class'].to_dict()
+
+        # ---------------------------
+        # XYZ Анализ (по Стабильности спроса)
+        # ---------------------------
+        # Группируем по SKU и Дате (чтобы схлопнуть продажи внутри одного дня, если есть дубли)
+        daily_sales = df.groupby(['sku', 'date'])['qty'].sum().reset_index()
+        
+        # Считаем стд. отклонение и среднее по дням для каждого SKU
+        xyz_stats = daily_sales.groupby('sku')['qty'].agg(['std', 'mean']).reset_index()
+        
+        # Коэффициент вариации (CV) = sigma / mu
+        # Если mean = 0, CV = 0 (защита от деления на 0)
+        xyz_stats['cv'] = np.where(xyz_stats['mean'] > 0, xyz_stats['std'] / xyz_stats['mean'], 0)
+        # Заполняем NaN нулями (если была всего 1 продажа, std=NaN)
+        xyz_stats['cv'] = xyz_stats['cv'].fillna(0)
+
+        # Присвоение классов
+        # X: 0 - 0.1 (стабильные)
+        # Y: 0.1 - 0.25 (колебания)
+        # Z: > 0.25 (случайные)
+        def get_xyz(cv):
+            if cv <= 0.1: return 'X'
+            elif cv <= 0.25: return 'Y'
+            return 'Z'
+            
+        xyz_stats['xyz_class'] = xyz_stats['cv'].apply(get_xyz)
+        xyz_map = xyz_stats.set_index('sku')['xyz_class'].to_dict()
+
+        # ---------------------------
+        # Слияние результатов
+        # ---------------------------
+        results = {}
+        # Все уникальные SKU
+        all_skus = set(abc_map.keys()) | set(xyz_map.keys())
+        
+        summary_counts = {g: 0 for g in ["AX","AY","AZ","BX","BY","BZ","CX","CY","CZ"]}
+
+        for sku in all_skus:
+            a = abc_map.get(sku, 'C') # Если нет выручки, то C
+            x = xyz_map.get(sku, 'Z') # Если нет продаж в шт, то Z
+            group = f"{a}{x}"
+            
+            results[sku] = {
+                "abc": a,
+                "xyz": x,
+                "group": group
+            }
+            if group in summary_counts:
+                summary_counts[group] += 1
+                
+        return {
+            "status": "success",
+            "items": results,
+            "summary": summary_counts
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

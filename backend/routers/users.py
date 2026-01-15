@@ -129,40 +129,55 @@ async def delete_wb_token(
 
 @router.get("/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
-    # Динамически определяем текущий тариф
-    plan = user.subscription_plan
-    
     return [
         {
-            "id": "free", 
-            "name": "Start", 
-            "price": "0 ₽", 
-            "stars": 0, 
-            "features": ["3 товара", "История 24ч", "SEO (Лайт)", "Ding! (1 раз/день)"], 
-            "current": plan == "free", 
-            "color": "slate"
+            "id": "free",
+            "name": "Start",
+            "price": "0 ₽",
+            "stars": 0,
+            "features": [
+                "History Depth: 7 Days",
+                "10 AI Credits / mo",
+                "Basic Analytics",
+                "3 Monitored Items"
+            ],
+            "current": user.subscription_plan == "free",
+            "color": "slate",
+            "is_best": False
         },
         {
-            "id": "pro", 
-            "name": "Pro", 
-            "price": "2990 ₽", 
-            "stars": 2500, 
-            "features": ["50 товаров", "SEO (Pro)", "Unit-экономика", "Ding! (Безлимит)", "Excel отчеты"], 
-            "current": plan == "pro", 
-            "color": "indigo", 
+            "id": "pro",
+            "name": "Analyst",
+            "price": "2990 ₽",
+            "stars": 2500,
+            "features": [
+                "History Depth: 60 Days",
+                "500 AI Credits / mo",
+                "ABC/XYZ Analysis",
+                "Unit Economics P&L",
+                "50 Monitored Items"
+            ],
+            "current": user.subscription_plan == "pro",
+            "color": "indigo",
             "is_best": True
         },
         {
-            "id": "business", 
-            "name": "Business", 
-            "price": "6990 ₽", 
-            "stars": 6000, 
-            "features": ["Автобиддер", "API доступ", "Прогноз поставок", "Команда (3 чел)"], 
-            "current": plan == "business", 
-            "color": "emerald"
+            "id": "business",
+            "name": "Strategist",
+            "price": "6990 ₽",
+            "stars": 6000,
+            "features": [
+                "History Depth: 365 Days",
+                "Unlimited AI",
+                "API Access",
+                "Personal Manager",
+                "500 Monitored Items"
+            ],
+            "current": user.subscription_plan == "business",
+            "color": "emerald",
+            "is_best": False
         }
     ]
-
 # --- History Routes (без изменений, кратко) ---
 @router.get("/history")
 async def get_user_history(
