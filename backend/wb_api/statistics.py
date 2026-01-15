@@ -141,7 +141,8 @@ class WBStatisticsMixin(WBApiBase):
         
         today = datetime.now().strftime("%Y-%m-%dT00:00:00")
         url = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
-        params = {"dateFrom": today}
+        date_from = "2023-01-01T00:00:00"
+        params = {"dateFrom": date_from}
         headers = {"Authorization": token}
         
         async with aiohttp.ClientSession() as session:
