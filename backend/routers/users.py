@@ -81,12 +81,41 @@ async def save_wb_token(
 
 @router.get("/token/scopes")
 async def get_token_scopes(user: User = Depends(get_current_user)):
-    """Диагностика прав токена"""
+    """
+    Возвращает права доступа по полному списку WB.
+    """
+    # Полный список ключей, которые ожидает фронтенд
+    default_scopes = {
+        "content": False,       # Контент
+        "marketplace": False,   # Маркетплейс
+        "analytics": False,     # Аналитика
+        "promotion": False,     # Продвижение
+        "returns": False,       # Возвраты
+        "documents": False,     # Документы
+        "statistics": False,    # Статистика
+        "finance": False,       # Финансы
+        "supplies": False,      # Поставки
+        "chat": False,          # Чат с покупателем
+        "questions": False,     # Вопросы и отзывы
+        "prices": False,        # Цены и скидки
+        "users": False          # Пользователи
+    }
+
     if not user.wb_api_token:
-        # Возвращаем структуру с False
-        return {"statistics": False, "standard": False, "promotion": False, "questions": False}
+        return default_scopes
     
-    return await wb_api_service.get_token_scopes(user.wb_api_token)
+    # Получаем реальные права от сервиса WB API
+    # Сервис должен вернуть словарь. Мы мержим его с дефолтным, 
+    # чтобы гарантировать наличие всех ключей.
+    try:
+        real_scopes = await wb_api_service.get_token_scopes(user.wb_api_token)
+        # Обновляем дефолтные значения теми, что пришли (если пришли)
+        # Логика: если в real_scopes есть ключ - берем его значение, иначе False
+        result = {key: real_scopes.get(key, False) for key in default_scopes}
+        return result
+    except Exception:
+        # Если ошибка связи с WB, возвращаем все False
+        return default_scopes
 
 @router.delete("/token")
 async def delete_wb_token(
