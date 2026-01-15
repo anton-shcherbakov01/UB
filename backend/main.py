@@ -12,7 +12,7 @@ from routers import users, finance, monitoring, seo, ai, payments, admin, bidder
 load_dotenv()
 logger = logging.getLogger("API")
 
-app = FastAPI(title="WB Analytics Platform")
+app = FastAPI(title="JuicyStat")
 
 # CORS
 app.add_middleware(
