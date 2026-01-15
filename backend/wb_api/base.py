@@ -34,7 +34,8 @@ class WBApiBase:
     _cache_ttl = 300 # 5 минут (TTL)
 
     def __init__(self):
-        pass
+        # Короткий таймаут, чтобы проверка профиля не висела долго
+        self.timeout = aiohttp.ClientTimeout(total=8)
 
     async def _request_with_retry(
         self, 

@@ -36,6 +36,10 @@ class WBStatisticsMixin(WBApiBase):
     Mixin containing business logic for Statistics API.
     Used by the main WBApiService (Legacy & General features).
     """
+
+    def __init__(self):
+        # Короткий таймаут, чтобы проверка профиля не висела долго
+        self.timeout = aiohttp.ClientTimeout(total=8)
     
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
         """
