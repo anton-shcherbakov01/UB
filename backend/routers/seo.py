@@ -1,19 +1,25 @@
 import os
 import io
 import logging
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_cache.decorator import cache
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 from fpdf import FPDF
 
 from database import get_db, User, SeoPosition
 from dependencies import get_current_user
 from tasks import generate_seo_task, check_seo_position_task, cluster_keywords_task
+from services.selenium_search import selenium_service, GEO_COOKIES
 from parser_service import parser_service
+
+executor = ThreadPoolExecutor(max_workers=3)
 
 logger = logging.getLogger("SEO-Router")
 router = APIRouter(prefix="/api", tags=["SEO"])
@@ -39,6 +45,50 @@ class SeoPdfRequest(BaseModel):
     description: str
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
+
+@router.get("/seo/regions")
+async def get_regions():
+    return [{"key": k, "label": k.upper()} for k in GEO_COOKIES.keys()]
+
+@router.get("/seo/position")
+async def check_position(
+    query: str, 
+    sku: int, 
+    geo: str = Query("moscow")
+):
+    logger.info(f"🔎 SELENIUM SEARCH: SKU={sku} Query='{query}' Geo={geo}")
+
+    if geo not in GEO_COOKIES:
+        geo = "moscow"
+
+    loop = asyncio.get_event_loop()
+    try:
+        # 3. Запускаем синхронную функцию Selenium в отдельном потоке executor'а
+        result = await loop.run_in_executor(
+            executor, 
+            selenium_service.get_position, 
+            query, 
+            sku, 
+            geo
+        )
+        
+        if not result['found']:
+            return {
+                "status": "not_found", 
+                "message": f"Не найдено (проверено {result.get('page', 0)} стр)",
+                "data": result
+            }
+        
+        logger.info(f"✅ FOUND! Pos: {result['position']}")
+        return {"status": "success", "data": result}
+        
+    except Exception as e:
+        logger.error(f"Selenium Critical Error: {e}")
+        # Если драйвер упал, пробуем его перезапустить для следующих запросов
+        try:
+            selenium_service.close()
+        except: pass
+        raise HTTPException(500, detail=f"Ошибка парсера: {str(e)}")
 
 @router.post("/seo/track")
 async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):

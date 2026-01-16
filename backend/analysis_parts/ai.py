@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import requests
+import time
 from typing import Dict, Any
 
 logger = logging.getLogger("Analysis-AI")
@@ -10,7 +11,18 @@ logger = logging.getLogger("Analysis-AI")
 class AIModule:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
-        self.ai_url = "https://api.artemox.com/v1/chat/completions"
+        self.ai_url = os.getenv("AI_API_URL", "https://api.artemox.com/v1/chat/completions")
+        # ИСПРАВЛЕНО: Сменил дефолтную модель на доступную
+        self.model_name = os.getenv("AI_MODEL", "deepseek-chat") 
+        
+        # Настраиваем заголовки один раз
+        self.headers = {
+            "Authorization": f"Bearer {self.ai_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        if not self.ai_api_key:
+            logger.warning("⚠️ AI_API_KEY не установлен! AI функции будут возвращать заглушки.")
 
     def clean_ai_text(self, text: str) -> str:
         if not text: return ""
@@ -29,47 +41,71 @@ class AIModule:
         else:
             return data
 
-    def _call_ai(self, prompt: str, fallback_json: dict, temperature: float = 0.7):
-        try:
-            payload = {
-                "model": "deepseek-chat", 
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
-            resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=90) 
-            if resp.status_code != 200:
-                logger.error(f"AI API Error: {resp.text}")
-                return fallback_json
-            
-            result = resp.json()
-            content = result['choices'][0]['message']['content']
-            try:
-                # Очистка Markdown-блоков кода
-                content = re.sub(r'^```json\s*', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^```\s*', '', content, flags=re.MULTILINE)
-                content = content.strip()
+    def _call_ai(self, prompt: str, fallback_data: dict, temperature: float = 0.5):
+        """
+        Универсальный метод вызова LLM с авто-исправлением JSON.
+        """
+        if not self.ai_api_key:
+            return fallback_data
 
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    # Рекурсивная очистка
-                    return self._clean_recursive(parsed)
-                else: 
-                    logger.warning(f"No JSON found in AI response: {content[:100]}...")
-                    return fallback_json
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": "You are a precise JSON generator. Output ONLY valid JSON without Markdown blocks (```json). Do not add comments."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+        }
+
+        for attempt in range(3):
+            try:
+                logger.info(f"Запрос к AI API: {self.ai_url} (Model: {self.model_name})")
+                response = requests.post(self.ai_url, headers=self.headers, json=payload, timeout=60)
+                
+                if response.status_code != 200:
+                    logger.error(f"AI API Error {response.status_code}: {response.text}")
+                    # Если 401 и модель не та - пробуем переключиться (хак на случай, если env не сработал)
+                    if response.status_code == 401 and "model" in response.text:
+                         logger.warning("Switching to deepseek-chat due to 401 error...")
+                         payload["model"] = "deepseek-chat"
+                    
+                    time.sleep(2)
+                    continue
+
+                raw_content = response.json()['choices'][0]['message']['content']
+                
+                # --- AUTO-FIX JSON ---
+                clean_json = re.sub(r'```json\s*|\s*```', '', raw_content).strip()
+                clean_json = clean_json.strip('`').strip()
+                clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
+                clean_json = re.sub(r':\s*&{', ': {', clean_json)
+
+                try:
+                    data = json.loads(clean_json)
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON Parse Error: {e}. Content: {clean_json[:200]}...")
+                    try:
+                        start = clean_json.find('{')
+                        end = clean_json.rfind('}') + 1
+                        if start != -1 and end != 0:
+                            return json.loads(clean_json[start:end])
+                    except: pass
+                    
+                    if attempt == 2:
+                        fallback_data["_error"] = f"Ошибка парсинга JSON от AI: {str(e)}"
+                        return fallback_data
+
             except Exception as e:
-                logger.error(f"JSON Parse Error: {e}")
-                return fallback_json
-        except Exception as e:
-            logger.error(f"AI Connection Error: {e}")
-            return fallback_json
+                logger.error(f"AI Connection Error: {e}")
+                time.sleep(2)
+
+        fallback_data["_error"] = "AI сервис недоступен после 3 попыток"
+        return fallback_data
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
-        Комплексный анализ отзывов с использованием DeepSeek-V3.
-        1. ABSA (Aspect-Based Sentiment Analysis).
-        2. Психографическое профилирование.
+        Комплексный анализ отзывов (DeepSeek-Chat).
         """
         if not reviews: 
             return {
@@ -145,7 +181,12 @@ class AIModule:
         
         ai_response = self._call_ai(prompt, fallback, temperature=0.5)
         
-        # Post-Processing
+        if "_error" in ai_response:
+            logger.error(f"AI анализ провалился: {ai_response['_error']}")
+            ai_response["global_summary"] = f"⚠️ Ошибка AI: {ai_response['_error']}"
+            ai_response["flaws"] = [f"AI сервис недоступен: {ai_response['_error']}"]
+            ai_response["strategy"] = ["Проверьте настройки AI_API_KEY в переменных окружения"]
+        
         aspects = ai_response.get("aspects", [])
         
         negative_aspects = sorted(
@@ -157,54 +198,80 @@ class AIModule:
         positive_strategies = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 0) < 7.5]
         ai_response["strategy"] = positive_strategies[:7] if positive_strategies else ["Масштабируйте продажи"]
 
-        if not ai_response["flaws"]:
+        if not ai_response.get("flaws"):
             ai_response["flaws"] = ["Критических проблем не выявлено"]
 
         return ai_response
 
-    def generate_product_content(self, keywords: list, tone: str, title_len: int = 100, desc_len: int = 1000):
+    def generate_product_content(self, keywords: list, tone: str, title_len: int = 60, desc_len: int = 1000):
         """
-        GEO-Optimized Generation (Generative Engine Optimization).
-        Создает контент, оптимизированный для AI-поисковиков (Perplexity, SGE, Yandex GPT).
-        Включает структурированные данные и FAQ.
+        WB-Optimized Generation (DeepSeek-Chat).
         """
-        kw_str = ", ".join(keywords)
+        main_keywords = keywords[:5]
+        lsi_keywords = keywords[5:]
+        kw_str_main = ", ".join(main_keywords)
+        kw_str_lsi = ", ".join(lsi_keywords)
+
         prompt = f"""
-        Роль: Ты профессиональный SEO-копирайтер уровня Senior, специализирующийся на GEO (Generative Engine Optimization).
-        Твоя задача — создать контент для Wildberries, который легко считывается AI-алгоритмами и ранжируется в SGE.
+        Роль: Ты ведущий SEO-эксперт Wildberries. Твоя цель — создать карточку товара, которая займет ТОП-1 в органике.
 
         Входные данные:
-        - Ключевые слова: {kw_str}
-        - Тон (Tone of Voice): {tone}
-        - Лимит заголовка: ~{title_len} симв.
-        - Лимит описания: ~{desc_len} симв.
+        - Ключевые слова (ВЧ - обязательно в Заголовок и первый абзац): {kw_str_main}
+        - LSI-фразы (НЧ - распределить по тексту): {kw_str_lsi}
+        - Тон: {tone}
+        - Лимит заголовка: {title_len} символов (СТРОГО! Не обрезай слова).
 
-        Требования к структуре (GEO Standards):
-        1. Extractability: Используй маркированные списки и четкие сущности.
-        2. Authority: Добавь таблицу характеристик для сравнения.
-        3. User Intent: Добавь блок FAQ (3-5 вопросов), закрывающий боли Рационалов, Эмоционалов и Скептиков.
+        ПРАВИЛА WILDBERRIES (ЗАПРЕТЫ):
+        1. ⛔ НИКАКИХ ЭМОДЗИ. Текст должен быть чистым.
+        2. ⛔ В Заголовке НЕ пиши название Бренда (оно подтягивается само).
+        3. ⛔ В Заголовке НЕ используй слэши (/) и повторы слов.
+           ПЛОХО: "Крем для лица / крем увлажняющий"
+           ХОРОШО: "Крем для лица увлажняющий питательный ночной"
+        4. ⛔ ЗАПРЕЩЕНО: "топ", "хит", "лучший", "акция", "скидка".
+        5. ⛔ ЗАПРЕЩЕНО: КАПС (кроме ГОСТ, ПВХ и т.д.).
 
-        Верни ответ СТРОГО в формате JSON:
+        СТРУКТУРА ОТВЕТА (JSON):
         {{
-            "title": "Продающий заголовок с вхождением топ ключей",
-            "description": "Основной текст описания с LSI-фразами и структурированными списками...",
+            "title": "Суть товара + 2-3 главные характеристики (Например: Швабра с отжимом и ведром для мытья полов)",
+            "description": "Продающий SEO-текст.
+             1 абзац: УТП товара, решение проблемы клиента + главные ключи.
+             2 блок: Преимущества (списком с '•').
+             3 блок: Для кого/чего подойдет.
+             4 блок: Технические особенности.
+             LSI-фразы вписывай органично.",
             "structured_features": {{
-                "Материал": "...",
                 "Назначение": "...",
-                "Особенность": "..."
+                "Материал изделия": "...",
+                "Комплектация": "...",
+                "Страна производства": "..."
             }},
             "faq": [
-                {{ "question": "Вопрос клиента", "answer": "Экспертный ответ" }},
-                {{ "question": "Вопрос про гарантию", "answer": "Ответ про надежность" }}
+                {{ "question": "Вопрос про размер/цвет", "answer": "Ответ" }},
+                {{ "question": "Вопрос про упаковку (анонимность/надежность)", "answer": "Ответ" }},
+                {{ "question": "Вопрос про способ применения", "answer": "Ответ" }},
+                {{ "question": "Вопрос про брак/возврат", "answer": "Ответ" }},
+                {{ "question": "Вопрос про срок годности/гарантию", "answer": "Ответ" }}
             ]
         }}
         """
         
         fallback = {
-            "title": "Ошибка генерации", 
-            "description": "Не удалось сгенерировать текст", 
+            "title": "Наименование товара", 
+            "description": "Описание генерируется...", 
             "structured_features": {}, 
             "faq": []
         }
         
-        return self._call_ai(prompt, fallback, temperature=0.7)
+        result = self._call_ai(prompt, fallback, temperature=0.4)
+        
+        if "_error" in result:
+            logger.error(f"AI WB Generation failed: {result['_error']}")
+            return fallback
+        
+        if "title" in result:
+            clean_title = result["title"].replace('"', '').replace("'", "").strip()
+            if clean_title.endswith('.'):
+                clean_title = clean_title[:-1]
+            result["title"] = clean_title
+
+        return result

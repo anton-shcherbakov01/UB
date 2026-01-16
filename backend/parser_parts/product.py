@@ -190,14 +190,23 @@ class ProductParser:
             # Извлекаем кол-во отзывов
             feedbacks_count = card_data.get('feedbacks') or card_data.get('feedbackCount') or 0
             
+            # Формируем URL изображения
+            image_url = card_data.get('image_url')
+            if not image_url:
+                host = card_data.get('host', '01')
+                vol = sku // 100000
+                part = sku // 1000
+                image_url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
+            
             return {
                 "sku": sku,
-                "name": card_data.get('imt_name') or card_data.get('subj_name'),
-                "image": card_data.get('image_url'),
+                "name": card_data.get('imt_name') or card_data.get('subj_name', f"Товар {sku}"),
+                "image": image_url,
                 "total_reviews": feedbacks_count, # Это значение пойдет в Max ползунка
                 "status": "success"
             }
         except Exception as e:
+            logger.error(f"get_review_stats error for SKU {sku}: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
     def get_product_data(self, sku: int):
@@ -323,39 +332,138 @@ class ProductParser:
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):
-        # (Код SEO из вашего файла)
-        logger.info(f"--- SEO PARSE SKU: {sku} ---")
+        """
+        Master SEO Extraction: Извлекает чистые поисковые запросы, а не просто слова.
+        """
+        logger.info(f"--- 💎 SEO MASTER PARSE SKU: {sku} ---")
+        
+        # Расширенный список стоп-слов для E-com
+        STOP_WORDS = {
+            'нет', 'да', 'отсутствует', 'без', 'рисунка', 'принта', 'китай', 'россия', 
+            'узбекистан', 'турция', 'корея', 'вид', 'тип', 'для', 'на', 'из', 'от', 'и', 'в', 'с', 'по', 
+            'комплектация', 'описание', 'габариты', 'вес', 'упаковка', 'шт', 'г', 'кг', 'мл', 'л',
+            'товар', 'изделие', 'объем', 'размер', 'рост', 'состав', 'материал', 'цвет', 
+            'назначение', 'пол', 'сезон', 'коллекция', 'страна', 'бренд', 'артикул', 'код',
+            'особенности', 'модели', 'элементы', 'вещи', 'предметы', 'очень', 'как', 'так', 'или'
+        }
+
+        # Характеристики, откуда точно стоит брать ключи
+        TARGET_PARAMS = {
+            'назначение', 'рисунок', 'фактура', 'декоративные элементы', 
+            'особенности модели', 'вид застежки', 'тип рукава', 'вырез горловины', 
+            'любимые герои', 'стиль', 'сезон', 'пол', 'спортивное назначение', 'тип ростовки'
+        }
+
         try:
             card_data = await self._find_card_json(sku)
-            if not card_data: return {"status": "error", "message": "Card not found"}
-            keywords = []
-            name = card_data.get('imt_name') or card_data.get('subj_name')
-            if name: keywords.append(name)
-            subj = card_data.get('subj_name')
-            if subj and subj != name: keywords.append(subj)
+            if not card_data: 
+                return {"status": "error", "message": "Card not found"}
+
+            raw_text_corpus = []
+
+            # 1. ЗАГОЛОВОК (Самый вес)
+            name = str(card_data.get('imt_name') or card_data.get('subj_name') or '').strip()
+            if name: raw_text_corpus.append(name)
+            
+            # 2. БРЕНД (Важно для SEO)
+            brand = str(card_data.get('selling', {}).get('brand_name', '')).strip()
+            if brand: raw_text_corpus.append(brand)
+
+            # 3. ХАРАКТЕРИСТИКИ (Точечно)
             options = card_data.get('options', [])
             if not options:
                 grouped = card_data.get('grouped_options', [])
                 for group in grouped:
                     if group.get('options'): options.extend(group.get('options'))
-            stop_values = ['нет', 'да', 'отсутствует', 'без рисунка', 'китай', 'россия', '0', '1', '2', '3']
+
             for opt in options:
+                param_name = str(opt.get('name', '')).lower()
                 val = str(opt.get('value', '')).strip()
-                name_param = str(opt.get('name', '')).lower()
-                if not val or val.lower() in stop_values or len(val) < 2: continue 
-                if val.isdigit() and "год" not in name_param: continue
-                if "состав" in name_param or "назначение" in name_param or "рисунок" in name_param or "фактура" in name_param:
-                    parts = re.split(r'[,/]', val)
-                    for p in parts: keywords.append(p.strip())
-                else: keywords.append(val)
-            clean_keywords = []
-            seen = set()
-            for k in keywords:
-                k_clean = re.sub(r'[^\w\s-]', '', k).strip()
-                if k_clean and k_clean.lower() not in seen:
-                    seen.add(k_clean.lower())
-                    clean_keywords.append(k_clean)
-            return {"sku": sku, "name": name, "image": card_data.get('image_url'), "keywords": clean_keywords[:40], "status": "success"}
+                
+                if not val or val.lower() in STOP_WORDS: continue
+
+                # Если это целевая характеристика - берем значение целиком и по частям
+                if param_name in TARGET_PARAMS or any(p in param_name for p in ['назначение', 'особенност', 'декор']):
+                    # Разбиваем "повседневная; школа" -> "повседневная", "школа"
+                    parts = re.split(r'[,;/]', val)
+                    raw_text_corpus.extend(parts)
+
+            # 4. ОПИСАНИЕ (Только существительные и биграммы)
+            description = str(card_data.get('description', ''))
+            # Убираем HTML
+            description = re.sub(r'<[^>]+>', ' ', description)
+            if description:
+                # Разбиваем описание на предложения, чтобы не смешивать контекст
+                sentences = re.split(r'[.!?]', description)
+                # Берем только первые 3-5 предложений (там обычно самое важное) и последние (призывы)
+                # Но для SEO лучше взять всё и отфильтровать
+                raw_text_corpus.extend(sentences)
+
+            # --- ОБРАБОТКА И ЧИСТКА ---
+            final_keywords = {} # key: phrase, value: weight
+
+            for text_fragment in raw_text_corpus:
+                if not text_fragment: continue
+                
+                # Приводим к нижнему регистру и чистим от спецсимволов
+                clean_text = re.sub(r'[^\w\s-]', ' ', text_fragment.lower())
+                words = clean_text.split()
+                
+                # Проходим по словам (униграммы)
+                for w in words:
+                    w = w.strip('-') # убрать дефисы по краям
+                    if len(w) > 2 and w not in STOP_WORDS and not w.isdigit():
+                        # Простой стемминг (удаление окончаний) для группировки
+                        # "платья" -> "плать"
+                        root = w[:-2] if len(w) > 5 else w[:-1] if len(w) > 4 else w
+                        
+                        # Если слово уже есть в похожем виде, увеличиваем вес
+                        found = False
+                        for k in final_keywords:
+                            if k.startswith(root):
+                                final_keywords[k] += 1
+                                found = True
+                                break
+                        if not found:
+                            final_keywords[w] = 1
+
+                # Биграммы (фразы из 2 слов) - это часто и есть SEO запросы ("вечернее платье")
+                for i in range(len(words) - 1):
+                    w1 = words[i].strip('-')
+                    w2 = words[i+1].strip('-')
+                    if len(w1) > 2 and len(w2) > 2 and w1 not in STOP_WORDS and w2 not in STOP_WORDS:
+                        phrase = f"{w1} {w2}"
+                        final_keywords[phrase] = final_keywords.get(phrase, 0) + 3 # Биграммы ценнее
+
+            # --- ФИНАЛЬНЫЙ ОТБОР ---
+            # Сортируем по весу (частоте)
+            sorted_kw = sorted(final_keywords.items(), key=lambda x: x[1], reverse=True)
+            
+            # Берем топ-40, исключая вхождения (если есть "платье", "женское платье", оставляем оба, но фильтруем дубли корней)
+            result_list = []
+            seen_roots = set()
+
+            for kw, score in sorted_kw:
+                if len(result_list) >= 40: break
+                
+                # Грубая проверка уникальности
+                # Берем корень фразы (первые 70% символов)
+                root = kw[:int(len(kw)*0.7)]
+                
+                if root not in seen_roots:
+                    result_list.append(kw)
+                    seen_roots.add(root)
+
+            return {
+                "sku": sku,
+                "name": name,
+                "brand": brand,
+                "image": card_data.get('image_url'),
+                "keywords": result_list,
+                "total_keys_found": len(result_list),
+                "status": "success"
+            }
+
         except Exception as e:
-            logger.error(f"SEO Parse Error: {e}")
+            logger.error(f"SEO Master Parse Error: {e}")
             return {"status": "error", "message": str(e)}

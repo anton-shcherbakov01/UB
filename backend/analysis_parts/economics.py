@@ -315,3 +315,98 @@ class EconomicsModule:
 
         except Exception as e:
             return {"status": "error", "message": str(e)}
+    
+    async def get_return_forensics(self, user_id: int, date_from: datetime, date_to: datetime) -> Dict[str, Any]:
+        """
+        4.3. Форензика Возвратов.
+        Анализ причин потерь: корреляция возвратов с размером (ts_name) и складом (office_name).
+        """
+        # 1. Агрегация по Размерам (выявление неудачных лекал)
+        ch_query_sizes = """
+        SELECT 
+            nm_id,
+            ts_name as size,
+            countIf(doc_type_name = 'Продажа') as sales,
+            countIf(doc_type_name = 'Возврат') as returns,
+            sumIf(delivery_rub, doc_type_name = 'Возврат') as return_logistics_cost,
+            sumIf(retail_price_withdisc_rub, doc_type_name = 'Продажа') as revenue
+        FROM wb_analytics.realization_reports
+        WHERE supplier_id = %(uid)s 
+          AND sale_dt >= %(start)s 
+          AND sale_dt <= %(end)s
+        GROUP BY nm_id, size
+        HAVING (sales + returns) > 5 -- Отсекаем шум
+        ORDER BY returns DESC
+        """
+
+        # 2. Агрегация по Складам (выявление бракованных партий на конкретном складе)
+        ch_query_warehouses = """
+        SELECT 
+            nm_id,
+            office_name as warehouse,
+            countIf(doc_type_name = 'Продажа') as sales,
+            countIf(doc_type_name = 'Возврат') as returns,
+            sumIf(delivery_rub, doc_type_name = 'Возврат') as return_logistics_cost
+        FROM wb_analytics.realization_reports
+        WHERE supplier_id = %(uid)s 
+          AND sale_dt >= %(start)s 
+          AND sale_dt <= %(end)s
+        GROUP BY nm_id, warehouse
+        HAVING returns > 0
+        ORDER BY returns DESC
+        """
+        
+        params = {'uid': user_id, 'start': date_from, 'end': date_to}
+        
+        try:
+            ch_client = ch_service.get_client()
+            rows_sizes = ch_client.query(ch_query_sizes, parameters=params).result_rows
+            rows_wh = ch_client.query(ch_query_warehouses, parameters=params).result_rows
+        except Exception as e:
+            logger.error(f"Forensics Query Error: {e}")
+            return {"status": "error", "message": str(e)}
+
+        # Обработка данных по Размерам
+        size_anomalies = []
+        for r in rows_sizes:
+            nm_id, size, sales, returns, ret_cost, rev = r
+            total_ops = sales + returns
+            buyout_rate = round((sales / total_ops) * 100, 1) if total_ops > 0 else 0
+            
+            # Логика детекции аномалии: если выкуп ниже 30% при наличии продаж
+            if buyout_rate < 30 and total_ops > 10:
+                verdict = "Критически низкий выкуп. Проверьте лекала."
+            elif buyout_rate < 50:
+                verdict = "Низкий выкуп. Возможно, большемер/маломер."
+            else:
+                verdict = "Норма"
+
+            size_anomalies.append({
+                "nm_id": nm_id,
+                "size": size,
+                "buyout_rate": buyout_rate,
+                "sales": sales,
+                "returns": returns,
+                "loss_on_returns": round(ret_cost, 2),
+                "verdict": verdict
+            })
+
+        # Обработка данных по Складам
+        wh_stats = []
+        for r in rows_wh:
+            nm_id, wh, sales, returns, ret_cost = r
+            total_ops = sales + returns
+            return_rate = round((returns / total_ops) * 100, 1) if total_ops > 0 else 0
+            
+            wh_stats.append({
+                "nm_id": nm_id,
+                "warehouse": wh,
+                "return_rate": return_rate,
+                "returns_count": returns,
+                "cost": round(ret_cost, 2)
+            })
+
+        return {
+            "size_analysis": sorted(size_anomalies, key=lambda x: x['buyout_rate']),
+            "warehouse_analysis": sorted(wh_stats, key=lambda x: x['return_rate'], reverse=True)[:20] # Топ 20 проблемных складов
+        }

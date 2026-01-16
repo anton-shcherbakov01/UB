@@ -1,17 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
-    PieChart, Truck, Target, TrendingUp, Plus, Wand2, Lock
+    PieChart, Truck, Target, TrendingUp, Plus, Wand2, Lock, Microscope, Gavel, ScanBarcode
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
-import ComingSoonPage from './ComingSoonPage'; // Импортируем заглушку
+import ComingSoonModal from '../components/ComingSoonModal';
 
 const DashboardPage = ({ onNavigate, user }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
-    // Локальное состояние для отображения заглушки внутри дашборда
-    const [showStub, setShowStub] = useState(null); 
+    const [comingSoonModal, setComingSoonModal] = useState(null); 
 
     const loadData = async () => {
         setLoading(true);
@@ -29,20 +28,11 @@ const DashboardPage = ({ onNavigate, user }) => {
 
     useEffect(() => { loadData(); }, []);
 
-    // Если нажали на сервис в разработке
-    if (showStub) {
-        return <ComingSoonPage 
-            title={showStub.title} 
-            icon={showStub.icon} 
-            onBack={() => setShowStub(null)} 
-        />;
-    }
 
     if (loading && !data) {
         return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
     }
 
-    // Нет токена
     if (data?.status === 'no_token') {
         return (
             <div className="p-6 flex flex-col h-[80vh] justify-center text-center">
@@ -98,7 +88,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                 </div>
             </div>
 
-            {/* ОСНОВНЫЕ СЕРВИСЫ */}
+            {/* АКТИВНЫЕ МОДУЛИ */}
             <div>
                 <h3 className="font-bold text-lg mb-3 px-2 text-slate-800">Активные модули</h3>
                 <div className="grid grid-cols-2 gap-4">
@@ -135,7 +125,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
                     
-                     {/* SEO Tracker */}
+                    {/* SEO Tracker */}
                     <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                         <div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
                             <TrendingUp size={24} />
@@ -148,45 +138,76 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <div className="bg-blue-50 px-3 py-1 rounded-lg text-blue-600 text-xs font-bold">New</div>
                         </div>
                     </div>
+
+
+                    {/* Advanced Analytics */}
+                    <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                         <div className="flex justify-between items-start">
+                             <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
+                                <Microscope size={24} />
+                             </div>
+                             <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">PRO</span>
+                         </div>
+                         <div>
+                             <span className="font-bold text-slate-800 block">Глубокая аналитика</span>
+                             <span className="text-xs text-slate-400">Форензика возвратов и Кассовые разрывы</span>
+                         </div>
+                    </div>
                 </div>
             </div>
 
-            {/* В РАЗРАБОТКЕ (Снизу) */}
+            {/* СЕКЦИЯ "СКОРО" */}
             <div>
                 <h3 className="font-bold text-lg mb-3 px-2 text-slate-400 flex items-center gap-2">
                     <Lock size={16} /> Скоро
                 </h3>
-                <div className="grid grid-cols-2 gap-4 opacity-80">
-                    
-                    {/* Bidder (Stub) */}
+                <div className="grid grid-cols-2 gap-4">
+                    {/* Bidder */}
                     <div 
-                        onClick={() => setShowStub({ title: "Биддер", icon: <Target size={48} /> })} 
-                        className="bg-slate-50 p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"
+                        onClick={() => setComingSoonModal({
+                            title: "Биддер",
+                            icon: <Gavel size={40} />,
+                            description: "Автоматическое управление ставками рекламы. AI-оптимизация бюджета, защита от переплат и максимизация ROI."
+                        })} 
+                        className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
                     >
-                        <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600 grayscale opacity-70">
-                            <Target size={24} />
+                        <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
+                            <Gavel size={24} />
                         </div>
                         <div>
-                            <span className="font-bold text-slate-600 block">Биддер</span>
+                            <span className="font-bold text-slate-800 block">Биддер</span>
                             <span className="text-xs text-slate-400">Реклама</span>
                         </div>
                     </div>
 
-                    {/* Scanner (Stub) */}
+                    {/* Scanner */}
                     <div 
-                        onClick={() => setShowStub({ title: "Сканер", icon: <Plus size={48} /> })} 
-                        className="bg-slate-50 p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer"
+                        onClick={() => setComingSoonModal({
+                            title: "Сканер цен",
+                            icon: <ScanBarcode size={40} />,
+                            description: "Быстрый поиск товаров по артикулу. Проверка цен, СПП и рейтинга перед добавлением в мониторинг."
+                        })} 
+                        className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
                     >
-                        <div className="bg-slate-200 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600 opacity-70">
-                            <Plus size={24} />
+                        <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
+                            <ScanBarcode size={24} />
                         </div>
                         <div>
-                            <span className="font-bold text-slate-600 block">Сканер</span>
+                            <span className="font-bold text-slate-800 block">Сканер</span>
                             <span className="text-xs text-slate-400">Поиск товара</span>
                         </div>
                     </div>
                 </div>
             </div>
+
+            {/* Модальное окно "В разработке" */}
+            <ComingSoonModal
+                isOpen={comingSoonModal !== null}
+                onClose={() => setComingSoonModal(null)}
+                title={comingSoonModal?.title}
+                icon={comingSoonModal?.icon}
+                description={comingSoonModal?.description}
+            />
         </div>
     );
 };

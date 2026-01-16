@@ -1,33 +1,41 @@
 FROM python:3.9-slim
 
-# 1. Установка системных утилит, ШРИФТОВ, Edge и netcat (для entrypoint)
+# 1. Установка системных утилит и зависимостей
+# Обратите внимание: gnupg2 вместо gnupg
 RUN apt-get update && apt-get install -y \
-    wget gnupg unzip curl fontconfig fonts-dejavu libpq-dev gcc netcat-openbsd \
-    && curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /usr/share/keyrings/microsoft.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge.list \
-    && apt-get update && apt-get install -y microsoft-edge-stable \
-    && apt-get clean
+    wget \
+    gnupg2 \
+    unzip \
+    curl \
+    fontconfig \
+    fonts-dejavu \
+    libpq-dev \
+    gcc \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
 
-# 2. Драйвер (предполагаем, что файл лежит рядом с Dockerfile)
-COPY msedgedriver /usr/local/bin/msedgedriver
-RUN chmod +x /usr/local/bin/msedgedriver
+# 2. Установка Google Chrome (современный метод без apt-key)
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor > /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
 # 3. Настройка окружения
 WORKDIR /app
+
+# Копируем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. Копируем код
 COPY . .
 
-# 5. Копируем и настраиваем Entrypoint
+# 5. Entrypoint
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8000
 
-# Используем Entrypoint для преднастройки (миграций) перед запуском
 ENTRYPOINT ["docker-entrypoint.sh"]
-
-# Команда по умолчанию (если не переопределена в docker-compose)
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

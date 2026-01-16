@@ -98,8 +98,19 @@ const SeoGeneratorPage = () => {
                 await new Promise(r => setTimeout(r, 3000));
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
                 const sData = await sRes.json();
-                if (sData.status === 'SUCCESS') { setResult(sData.data.generated_content); setStep(3); break; }
-                if (sData.status === 'FAILURE') throw new Error(sData.error);
+                if (sData.status === 'SUCCESS') {
+                    // Проверяем наличие ошибки AI в результатах
+                    if (sData.data?.generated_content?._error) {
+                        setError(`⚠️ Ошибка AI: ${sData.data.generated_content._error}`);
+                    }
+                    setResult(sData.data.generated_content); 
+                    setStep(3); 
+                    break;
+                }
+                if (sData.status === 'FAILURE') {
+                    const errorMsg = sData.error || sData.data?.error || "Ошибка генерации";
+                    throw new Error(errorMsg);
+                }
                 attempts++;
             }
         } catch (e) { setError(e.message); } finally { setLoading(false); setStatus(''); }
@@ -294,7 +305,17 @@ const SeoGeneratorPage = () => {
                     </button>
 
                     {/* Header */}
-                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <div className={`p-6 rounded-3xl shadow-sm border-2 ${
+                        result._error 
+                            ? 'bg-red-50 border-red-200' 
+                            : 'bg-white border-slate-100'
+                    }`}>
+                        {result._error && (
+                            <div className="mb-4 p-3 bg-red-100 border border-red-300 rounded-xl text-sm text-red-800">
+                                <div className="font-bold mb-1">⚠️ Ошибка AI</div>
+                                <div>{result._error}</div>
+                            </div>
+                        )}
                         <div className="flex justify-between items-center mb-2">
                             <h3 className="font-bold text-slate-400 text-xs uppercase">Заголовок</h3>
                             <CopyButton text={result.title} />

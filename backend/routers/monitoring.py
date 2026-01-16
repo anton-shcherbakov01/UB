@@ -1,18 +1,43 @@
 import os
 import io
 import logging
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from fpdf import FPDF
+from concurrent.futures import ThreadPoolExecutor
 
 from database import get_db, User, MonitoredItem, PriceHistory
 from dependencies import get_current_user
 from tasks import parse_and_save_sku, get_status
+from services.selenium_search import selenium_service
 
 logger = logging.getLogger("Monitoring")
 router = APIRouter(prefix="/api", tags=["Monitoring"])
+
+# Экзекьютор нужен ТОЛЬКО для синхронной генерации PDF
+executor = ThreadPoolExecutor(max_workers=2)
+
+@router.get("/monitoring/scan/{sku}")
+async def scan_product(sku: int):
+    """
+    Мгновенный скан товара.
+    """
+    try:
+        # Прямой вызов async метода (без executor)
+        result = await selenium_service.get_product_details(sku)
+        
+        if not result.get('valid'):
+            raise HTTPException(404, "Товар не найден или ошибка парсинга WB")
+            
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Scan error: {e}")
+        raise HTTPException(500, f"Scan failed: {str(e)}")
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -29,12 +54,23 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     if (await db.execute(stmt)).scalars().first(): 
         return {"status": "exists", "message": "Товар уже в списке"}
 
-    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
+    # Исправлено: убран run_in_executor, так как метод асинхронный
+    name = "Загрузка..."
+    brand = "..."
+    try:
+        details = await selenium_service.get_product_details(sku)
+        if details.get('valid'):
+            name = details.get('name', 'Товар WB')
+            brand = details.get('brand', '')
+    except Exception as e:
+        logger.warning(f"Name fetch failed: {e}")
+
+    new_item = MonitoredItem(user_id=user.id, sku=sku, name=name, brand=brand)
     db.add(new_item)
     await db.commit()
     
     task = parse_and_save_sku.delay(sku, user.id)
-    return {"status": "accepted", "task_id": task.id}
+    return {"status": "accepted", "task_id": task.id, "name": name}
 
 @router.get("/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -74,10 +110,6 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
 
 @router.get("/monitor/status/{task_id}")
 def get_status_endpoint(task_id: str): 
-    """
-    Получение статуса задачи.
-    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
-    """
     return get_status(task_id)
 
 @router.get("/report/pdf/{sku}")
@@ -90,26 +122,39 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
 
     history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.desc()).limit(100))).scalars().all()
 
+    # Генерацию PDF оставляем в executor, так как FPDF синхронная и тяжелая
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(executor, _create_pdf_sync, sku, history)
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes), 
+        media_type='application/pdf', 
+        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
+    )
+
+def _create_pdf_sync(sku, history):
+    """Синхронная функция создания PDF для запуска в executor"""
     pdf = FPDF()
     pdf.add_page()
     
-    font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-    try:
-        if os.path.exists(font_path):
-            pdf.add_font('DejaVu', '', font_path, uni=True)
-            pdf.set_font('DejaVu', '', 14)
-        else:
-             local_font = "fonts/DejaVuSans.ttf"
-             if os.path.exists(local_font):
-                 pdf.add_font('DejaVu', '', local_font, uni=True)
-                 pdf.set_font('DejaVu', '', 14)
-             else:
-                 pdf.set_font("Arial", size=12)
-    except Exception as e:
-        logger.error(f"Font loading error: {e}")
-        pdf.set_font("Arial", size=12)
+    font_paths = [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        './fonts/DejaVuSans.ttf',
+        '/usr/share/fonts/TTF/DejaVuSans.ttf'
+    ]
+    font_loaded = False
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                pdf.add_font('DejaVu', '', path, uni=True)
+                pdf.set_font('DejaVu', '', 14)
+                font_loaded = True
+                break
+            except: continue
+            
+    if not font_loaded: pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, txt=f"Report: {sku}", ln=1, align='C')
+    pdf.cell(0, 10, txt=f"Price Report: SKU {sku}", ln=1, align='C')
     pdf.ln(5)
     
     pdf.set_font_size(10)
@@ -124,14 +169,4 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         pdf.cell(40, 10, f"{h.standard_price}", 1)
         pdf.ln()
 
-    pdf_content = pdf.output(dest='S')
-    if isinstance(pdf_content, str):
-        pdf_bytes = pdf_content.encode('latin-1') 
-    else:
-        pdf_bytes = pdf_content
-
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes), 
-        media_type='application/pdf', 
-        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
-    )
+    return pdf.output(dest='S').encode('latin-1')
