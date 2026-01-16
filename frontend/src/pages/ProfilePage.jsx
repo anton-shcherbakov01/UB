@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { 
-    User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, 
+    User, Key, X, Loader2, Shield, ArrowUpRight, 
     AlertTriangle, Check, Lock, 
-    // Импортируем иконки для категорий
     Package, Store, PieChart, Megaphone, RotateCcw, FileText, 
     BarChart3, Wallet, Truck, MessageSquare, MessageCircle, 
     Tag, Users
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
+import TariffCard from '../components/TariffCard';
 
 const ProfilePage = ({ onNavigate }) => {
-    // --- STATE ---
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
     const [wbToken, setWbToken] = useState('');
@@ -20,7 +19,6 @@ const ProfilePage = ({ onNavigate }) => {
     const [payLoading, setPayLoading] = useState(false);
     const [error, setError] = useState(null);
 
-    // --- INITIAL LOAD ---
     useEffect(() => { loadData(); }, []);
 
     const loadData = async () => {
@@ -53,7 +51,6 @@ const ProfilePage = ({ onNavigate }) => {
             .finally(() => setScopesLoading(false));
     };
 
-    // --- PAYMENT ---
     const payStars = async (plan) => {
         if (!plan.stars) return;
         try {
@@ -65,9 +62,9 @@ const ProfilePage = ({ onNavigate }) => {
             const d = await res.json();
             if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
                 window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
-                    if (status === 'paid') { alert("Успешно!"); window.location.reload(); }
+                    if (status === 'paid') { alert("Оплата успешна!"); window.location.reload(); }
                 });
-            } else { alert("Ошибка WebApp"); }
+            } else { alert("Ошибка WebApp (откройте в Telegram)"); }
         } catch (e) { alert(e.message); }
     };
 
@@ -84,11 +81,10 @@ const ProfilePage = ({ onNavigate }) => {
             if (res.ok && data.payment_url) {
                 if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(data.payment_url);
                 else window.open(data.payment_url, '_blank');
-            } else { throw new Error("Ошибка платежа"); }
+            } else { throw new Error(data.detail || "Ошибка инициализации платежа"); }
         } catch (e) { alert(e.message); } finally { setPayLoading(false); }
     };
 
-    // --- TOKEN ---
     const saveToken = async () => {
         if (!wbToken || wbToken.includes("••••") || wbToken.includes("****")) return;
         setTokenLoading(true);
@@ -102,13 +98,13 @@ const ProfilePage = ({ onNavigate }) => {
             if (res.ok) {
                 setUser(prev => ({ ...prev, has_wb_token: true }));
                 if (d.scopes) setScopes(d.scopes); else fetchScopes();
-                alert("Токен сохранен!");
+                alert("Токен успешно сохранен!");
             } else { throw new Error(d.detail); }
         } catch (e) { alert(e.message); } finally { setTokenLoading(false); }
     };
 
     const deleteToken = async () => {
-        if (!confirm("Удалить токен?")) return;
+        if (!confirm("Вы уверены, что хотите удалить токен?")) return;
         setTokenLoading(true);
         try {
             await fetch(`${API_URL}/api/user/token`, { method: 'DELETE', headers: getTgHeaders() });
@@ -118,8 +114,6 @@ const ProfilePage = ({ onNavigate }) => {
         } catch (e) { console.error(e); } finally { setTokenLoading(false); }
     };
 
-    // --- CONFIGURATION ---
-    // Полный список доступов WB (13 пунктов)
     const SCOPE_CONFIG = [
         { key: 'content', label: 'Контент', icon: Package, color: 'blue' },
         { key: 'marketplace', label: 'Маркетплейс', icon: Store, color: 'indigo' },
@@ -138,17 +132,13 @@ const ProfilePage = ({ onNavigate }) => {
 
     const ScopeCard = ({ config, active }) => {
         const Icon = config.icon;
-        // Динамические цвета для активного состояния
         const activeBg = `bg-${config.color}-50`;
         const activeBorder = `border-${config.color}-200`;
         const activeIconBg = `bg-${config.color}-100`;
         const activeText = `text-${config.color}-600`;
-
         return (
             <div className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all duration-300 min-h-[70px] ${
-                active 
-                ? `${activeBg} ${activeBorder}` 
-                : 'bg-slate-50 border-slate-100 opacity-60 grayscale'
+                active ? `${activeBg} ${activeBorder}` : 'bg-slate-50 border-slate-100 opacity-60 grayscale'
             }`}>
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center mb-1 ${
                     active ? `${activeIconBg} ${activeText}` : 'bg-slate-200 text-slate-400'
@@ -164,10 +154,18 @@ const ProfilePage = ({ onNavigate }) => {
 
     const isSaveDisabled = tokenLoading || (user?.has_wb_token && (wbToken.includes('****') || wbToken.includes('••••'))) || !wbToken;
 
+    // Перевод названий планов для шапки профиля
+    const getPlanDisplayName = (planId) => {
+        switch(planId) {
+            case 'pro': return 'Аналитик';
+            case 'business': return 'Стратег';
+            default: return 'Старт';
+        }
+    };
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             
-            {/* ERROR */}
             {error && (
                 <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex items-start gap-3">
                     <AlertTriangle className="text-red-500 shrink-0" size={20} />
@@ -182,15 +180,20 @@ const ProfilePage = ({ onNavigate }) => {
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
                 <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 relative">
                     <User size={32} />
-                    <div className="absolute bottom-0 right-0 w-5 h-5 bg-emerald-500 border-4 border-white rounded-full"></div>
+                    <div className={`absolute bottom-0 right-0 w-5 h-5 border-4 border-white rounded-full ${user?.plan === 'pro' || user?.plan === 'business' ? 'bg-indigo-500' : 'bg-emerald-500'}`}></div>
                 </div>
                 <div>
-                    <h2 className="text-xl font-black text-slate-800">{user?.name || 'Loading...'}</h2>
+                    <h2 className="text-xl font-black text-slate-800">{user?.name || 'Загрузка...'}</h2>
                     <p className="text-sm text-slate-400 mb-2">@{user?.username || '...'}</p>
                     <div className="flex gap-2">
-                         <span className="bg-slate-900 text-white px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider">
-                            {user?.plan || 'Free'}
+                         <span className="bg-slate-900 text-white px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+                            {getPlanDisplayName(user?.plan)}
                         </span>
+                        {user?.days_left > 0 && (
+                            <span className="bg-emerald-100 text-emerald-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">
+                                {user.days_left} дн.
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -225,7 +228,6 @@ const ProfilePage = ({ onNavigate }) => {
                     )}
                 </div>
 
-                {/* GRID SCOPES (3 колонки для 13 элементов = 5 рядов) */}
                 {(user?.has_wb_token || scopes) && (
                     <div className="mb-5">
                          <div className="flex justify-between items-center mb-2 px-1">
@@ -258,48 +260,16 @@ const ProfilePage = ({ onNavigate }) => {
             </div>
 
             {/* TARIFFS */}
-            <h2 className="font-bold text-lg px-2 mt-2">Тарифы</h2>
+            <h2 className="font-bold text-lg px-2 mt-2">Тарифные планы</h2>
             <div className="space-y-4">
                 {tariffs.map(plan => (
-                    <div key={plan.id} className={`p-5 rounded-[24px] border-2 transition-all relative overflow-hidden ${plan.current ? 'border-emerald-500 bg-white shadow-emerald-100 shadow-lg' : 'border-slate-100 bg-white'}`}>
-                        {plan.is_best && !plan.current && (
-                            <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl">
-                                POPULAR
-                            </div>
-                        )}
-                        <div className="flex justify-between items-start mb-2">
-                            <div>
-                                <h4 className="font-bold text-lg flex items-center gap-2">
-                                    {plan.name}
-                                    {plan.current && <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full">АКТИВЕН</span>}
-                                </h4>
-                                <div className="text-slate-900 font-black text-2xl mt-1">{plan.price}</div>
-                            </div>
-                            {plan.stars > 0 && (
-                                <div className="bg-amber-100 text-amber-700 px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
-                                    <Shield size={12} fill="currentColor" /> {plan.stars}
-                                </div>
-                            )}
-                        </div>
-                        <ul className="space-y-2 mb-4">
-                            {plan.features.slice(0, 4).map((f, i) => (
-                                <li key={i} className="text-xs font-medium text-slate-600 flex items-center gap-2">
-                                    <div className={`w-1.5 h-1.5 rounded-full ${plan.current ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                    {f}
-                                </li>
-                            ))}
-                        </ul>
-                        {!plan.current && plan.price !== "0 ₽" && (
-                            <div className="grid grid-cols-2 gap-2 mt-4">
-                                <button onClick={() => payStars(plan)} className="flex items-center justify-center gap-1.5 py-2.5 bg-amber-400 text-white rounded-xl font-bold text-xs hover:bg-amber-500 active:scale-95 transition-all">
-                                    <Shield size={14} fill="currentColor" /> Stars
-                                </button>
-                                <button onClick={() => payRubles(plan)} disabled={payLoading} className="flex items-center justify-center gap-1.5 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-slate-800 active:scale-95 transition-all">
-                                    {payLoading ? <Loader2 className="animate-spin" size={14} /> : <CreditCard size={14} />} Карта РФ
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                    <TariffCard 
+                        key={plan.id}
+                        plan={plan}
+                        onPayStars={payStars}
+                        onPayRubles={payRubles}
+                        loading={payLoading}
+                    />
                 ))}
             </div>
 
@@ -321,7 +291,7 @@ const ProfilePage = ({ onNavigate }) => {
                     <a href="#" className="hover:text-slate-600">Конфиденциальность</a> • 
                     <a href="#" className="hover:text-slate-600">Поддержка</a>
                 </div>
-                <p className="text-[10px] text-slate-300">ID: {user?.id} • Ver: 2.1.0</p>
+                <p className="text-[10px] text-slate-300">ID: {user?.id} • Версия: 2.2.0</p>
             </div>
         </div>
     );
