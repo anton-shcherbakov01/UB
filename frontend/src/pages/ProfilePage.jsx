@@ -9,7 +9,8 @@ import {
 import { API_URL, getTgHeaders } from '../config';
 import TariffCard from '../components/TariffCard';
 
-const ProfilePage = ({ onNavigate }) => {
+// Added refreshUser to props
+const ProfilePage = ({ onNavigate, refreshUser }) => {
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
     const [wbToken, setWbToken] = useState('');
@@ -98,6 +99,11 @@ const ProfilePage = ({ onNavigate }) => {
             if (res.ok) {
                 setUser(prev => ({ ...prev, has_wb_token: true }));
                 if (d.scopes) setScopes(d.scopes); else fetchScopes();
+                
+                // --- FIX START: Notify App.jsx about the change ---
+                if (refreshUser) refreshUser();
+                // --- FIX END ---
+
                 alert("Токен успешно сохранен!");
             } else { throw new Error(d.detail); }
         } catch (e) { alert(e.message); } finally { setTokenLoading(false); }
@@ -111,6 +117,11 @@ const ProfilePage = ({ onNavigate }) => {
             setWbToken('');
             setScopes(null);
             setUser(prev => ({ ...prev, has_wb_token: false }));
+
+            // --- FIX START: Notify App.jsx about the change ---
+            if (refreshUser) refreshUser();
+            // --- FIX END ---
+
         } catch (e) { console.error(e); } finally { setTokenLoading(false); }
     };
 
@@ -154,7 +165,6 @@ const ProfilePage = ({ onNavigate }) => {
 
     const isSaveDisabled = tokenLoading || (user?.has_wb_token && (wbToken.includes('****') || wbToken.includes('••••'))) || !wbToken;
 
-    // Перевод названий планов для шапки профиля
     const getPlanDisplayName = (planId) => {
         switch(planId) {
             case 'pro': return 'Аналитик';

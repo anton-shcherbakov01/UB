@@ -171,3 +171,37 @@ async def calculate_transit_route(
         data.transit_rate
     )
     return result
+
+@router.get("/warehouses")
+async def get_warehouse_coefficients(
+    user: User = Depends(get_current_user)
+):
+    """
+    NEW: Get real-time acceptance coefficients from WB Supplies API.
+    Used for checking free slots (coeff = 0) and high-load warehouses.
+    """
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+
+    r_client = get_redis_client()
+    cache_key = f"supply:warehouses:{user.id}"
+
+    if r_client:
+        cached = r_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
+    try:
+        supplies_api = WBSupplyService(user.wb_api_token)
+        data = await supplies_api.get_warehouses_coefficients()
+        
+        # Process data: sort by free slots (coeff 0 or 1)
+        # WB returns: [{'warehouseName': 'Коледино', 'date': '2023-10-25T00:00:00Z', 'coefficient': 0}, ...]
+        
+        if r_client:
+            r_client.setex(cache_key, 600, json.dumps(data)) # Cache for 10 min
+            
+        return data
+    except Exception as e:
+        logger.error(f"Warehouse fetch error: {e}")
+        return []

@@ -56,6 +56,27 @@ class User(Base):
     bidder_settings = relationship("BidderSettings", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    slot_monitors = relationship("SlotMonitor", back_populates="user", cascade="all, delete-orphan")
+
+class SlotMonitor(Base):
+    """
+    Таблица для мониторинга слотов.
+    """
+    __tablename__ = "slot_monitors"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    warehouse_id = Column(Integer)
+    warehouse_name = Column(String)
+    
+    target_coefficient = Column(Integer, default=0)
+    box_type = Column(String, default="all")
+    
+    is_active = Column(Boolean, default=True)
+    last_notified_at = Column(DateTime, nullable=True)
+    
+    user = relationship("User", back_populates="slot_monitors")
 
 class SupplySettings(Base):
     """

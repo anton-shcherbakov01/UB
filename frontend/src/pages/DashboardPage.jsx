@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
-    PieChart, Truck, Target, TrendingUp, Plus, Wand2, Lock, Microscope, Gavel, ScanBarcode
+    PieChart, Truck, TrendingUp, Wand2, Lock, Microscope, 
+    Gavel, ScanBarcode, Calendar
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
@@ -27,7 +28,6 @@ const DashboardPage = ({ onNavigate, user }) => {
     };
 
     useEffect(() => { loadData(); }, []);
-
 
     if (loading && !data) {
         return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
@@ -92,7 +92,8 @@ const DashboardPage = ({ onNavigate, user }) => {
             <div>
                 <h3 className="font-bold text-lg mb-3 px-2 text-slate-800">Активные модули</h3>
                 <div className="grid grid-cols-2 gap-4">
-                    {/* Unit Economy */}
+                    
+                    {/* 1. Finance (Full Width) */}
                     <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                         <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
                             <PieChart size={24} />
@@ -103,7 +104,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* Supply */}
+                    {/* 2. Logistics Row (Split) */}
                     <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
                             <Truck size={24} />
@@ -114,7 +115,17 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* SEO Gen */}
+                    <div onClick={() => onNavigate('slots')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                        <div className="bg-cyan-100 w-12 h-12 rounded-2xl flex items-center justify-center text-cyan-600">
+                            <Calendar size={24} />
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">Слоты</span>
+                            <span className="text-xs text-slate-400">Лимиты и Кэфы</span>
+                        </div>
+                    </div>
+
+                    {/* 3. Marketing Row (Split) */}
                     <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-yellow-100 w-12 h-12 rounded-2xl flex items-center justify-center text-yellow-600">
                             <Wand2 size={24} />
@@ -125,22 +136,17 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
                     
-                    {/* SEO Tracker */}
-                    <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                    <div onClick={() => onNavigate('seo_tracker')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-blue-100 w-12 h-12 rounded-2xl flex items-center justify-center text-blue-600">
                             <TrendingUp size={24} />
                         </div>
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <span className="font-bold text-slate-800 block">SEO Трекер</span>
-                                <span className="text-xs text-slate-400">Позиции в поиске</span>
-                            </div>
-                            <div className="bg-blue-50 px-3 py-1 rounded-lg text-blue-600 text-xs font-bold">New</div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">SEO Трекер</span>
+                            <span className="text-xs text-slate-400">Позиции</span>
                         </div>
                     </div>
 
-
-                    {/* Advanced Analytics */}
+                    {/* 4. Analytics (Full Width) */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
@@ -162,7 +168,6 @@ const DashboardPage = ({ onNavigate, user }) => {
                     <Lock size={16} /> Скоро
                 </h3>
                 <div className="grid grid-cols-2 gap-4">
-                    {/* Bidder */}
                     <div 
                         onClick={() => setComingSoonModal({
                             title: "Биддер",
@@ -180,7 +185,6 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* Scanner */}
                     <div 
                         onClick={() => setComingSoonModal({
                             title: "Сканер цен",
