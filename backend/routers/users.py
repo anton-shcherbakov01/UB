@@ -10,6 +10,7 @@ from database import get_db, User, MonitoredItem, SearchHistory
 from dependencies import get_current_user
 from wb_api_service import wb_api_service
 from tasks import sync_financial_reports
+from config.plans import TIERS, ADDONS, get_limit
 
 router = APIRouter(prefix="/api/user", tags=["User"])
 
@@ -37,6 +38,10 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         delta = user.subscription_expires_at - datetime.utcnow()
         days_left = max(0, delta.days)
 
+    # Get quota usage info
+    from config.plans import get_limit
+    ai_limit = get_limit(user.subscription_plan, "ai_requests")
+    
     return {
         "id": user.telegram_id,
         "username": user.username,
@@ -47,7 +52,10 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "has_wb_token": bool(user.wb_api_token),
         "wb_token_preview": masked_token,
         "days_left": days_left,
-        "subscription_expires_at": user.subscription_expires_at
+        "subscription_expires_at": user.subscription_expires_at,
+        "ai_requests_used": user.ai_requests_used or 0,
+        "ai_requests_limit": ai_limit,
+        "extra_ai_balance": user.extra_ai_balance or 0
     }
 
 @router.post("/token")
@@ -130,54 +138,64 @@ async def delete_wb_token(
 @router.get("/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
     """
-    Возвращает список тарифов с переведенными названиями и описаниями.
+    Возвращает список тарифов из config/plans.py с переведенными названиями и описаниями.
     """
-    return [
-        {
-            "id": "free",
-            "name": "Старт",  # Было "Start"
-            "price": "0 ₽",
-            "stars": 0,
-            "features": [
+    tariffs = []
+    
+    # Map plan IDs to display info
+    plan_mapping = {
+        "start": {
+            "id": "start",
+            "features_display": [
                 "История: 7 дней",
-                "10 AI-запросов / мес",
-                "Базовая аналитика",
-                "3 товара в отслеживании"
-            ],
-            "current": user.subscription_plan == "free",
-            "is_best": False
+                "5 AI-запросов / мес",
+                "Слоты и уведомления",
+                "P&L (демо: вчера)"
+            ]
         },
-        {
-            "id": "pro",
-            "name": "Аналитик",  # Было "Analyst"
-            "price": "1490 ₽",
-            "stars": 1000,
-            "features": [
+        "analyst": {
+            "id": "analyst",
+            "features_display": [
                 "История: 60 дней",
-                "500 AI-запросов / мес",
-                "ABC/XYZ анализ",
-                "Unit-экономика (P&L)",
-                "50 товаров в отслеживании"
+                "100 AI-запросов / мес",
+                "Слоты и уведомления",
+                "P&L (полный доступ)",
+                "Форензика возвратов"
             ],
-            "current": user.subscription_plan == "pro",
             "is_best": True
         },
-        {
-            "id": "business",
-            "name": "Стратег",  # Было "Strategist"
-            "price": "4990 ₽",
-            "stars": 4500,
-            "features": [
+        "strategist": {
+            "id": "strategist",
+            "features_display": [
                 "История: 365 дней",
-                "Безлимитный AI",
-                "API доступ (все методы)",
-                "Личный менеджер",
-                "500 товаров в отслеживании"
-            ],
-            "current": user.subscription_plan == "business",
-            "is_best": False
+                "1000 AI-запросов / мес",
+                "Слоты и уведомления",
+                "P&L экспорт",
+                "Форензика + Cash Gap",
+                "Приоритетный опрос"
+            ]
         }
-    ]
+    }
+    
+    for plan_key in ["start", "analyst", "strategist"]:
+        plan_config = TIERS.get(plan_key, {})
+        if not plan_config:
+            continue
+            
+        plan_info = plan_mapping.get(plan_key, {})
+        price = plan_config.get("price", 0)
+        
+        tariffs.append({
+            "id": plan_key,
+            "name": plan_config.get("name", plan_key).replace(" (Free)", "").replace(" (Pro)", "").replace(" (Business)", ""),
+            "price": f"{price} ₽" if price > 0 else "0 ₽",
+            "stars": 0,  # Stars payment can be added later if needed
+            "features": plan_info.get("features_display", []),
+            "current": user.subscription_plan == plan_key,
+            "is_best": plan_info.get("is_best", False)
+        })
+    
+    return tariffs
 # --- History Routes (без изменений, кратко) ---
 @router.get("/history")
 async def get_user_history(

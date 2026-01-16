@@ -4,6 +4,7 @@ import logging
 import uuid
 import base64
 import httpx
+import random
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,9 @@ from pydantic import BaseModel
 from database import get_db, User, Payment
 from dependencies import get_current_user
 from bot_service import bot_service
+from services.robokassa_service import RobokassaService
+from config.plans import TIERS, ADDONS, get_plan_config
+from dependencies.quota import increment_usage
 
 logger = logging.getLogger("Payments")
 router = APIRouter(prefix="/api", tags=["Payments"])
@@ -26,6 +30,12 @@ class StarsPaymentRequest(BaseModel):
 
 class YooPaymentRequest(BaseModel):
     plan_id: str
+
+class RobokassaSubscriptionRequest(BaseModel):
+    plan_id: str  # start, analyst, strategist
+
+class RobokassaAddonRequest(BaseModel):
+    addon_id: str  # extra_ai_100, history_audit
 
 @router.post("/payment/stars_link")
 async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_current_user)):
@@ -169,3 +179,253 @@ async def yookassa_webhook(request: Request, db: AsyncSession = Depends(get_db))
             logger.info(f"User {user.telegram_id} subscription extended (YooKassa).")
         
     return {"status": "ok"}
+
+# ==================== ROBOKASSA PAYMENTS ====================
+
+@router.post("/payment/robokassa/subscription")
+async def create_robokassa_subscription(
+    req: RobokassaSubscriptionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create Robokassa payment for subscription plan.
+    """
+    # Get plan config
+    plan_config = get_plan_config(req.plan_id)
+    if not plan_config:
+        raise HTTPException(status_code=400, detail="Invalid plan ID")
+    
+    # Check if plan is free
+    if plan_config.get("price", 0) == 0:
+        raise HTTPException(status_code=400, detail="This plan is free, no payment required")
+    
+    amount = plan_config.get("price", 0)
+    plan_name = plan_config.get("name", req.plan_id)
+    
+    # Generate unique invoice ID (using user_id + timestamp + random component)
+    import random
+    timestamp = int(datetime.utcnow().timestamp())
+    random_part = random.randint(1000, 9999)
+    inv_id = int(f"{user.id}{timestamp}{random_part}")
+    
+    # Create payment record
+    payment = Payment(
+        user_id=user.id,
+        provider_payment_id=str(inv_id),
+        amount=amount,
+        currency="RUB",
+        status="pending",
+        plan_id=req.plan_id
+    )
+    db.add(payment)
+    await db.commit()
+    
+    # Create Robokassa service
+    robokassa = RobokassaService()
+    
+    # Generate payment URL
+    description = f"Подписка {plan_name} на 1 месяц"
+    payment_url = robokassa.create_payment_url(
+        inv_id=inv_id,
+        amount=amount,
+        description=description,
+        user_id=user.id
+    )
+    
+    logger.info(f"Created Robokassa payment for user {user.id}, plan {req.plan_id}, amount {amount}")
+    
+    return {
+        "payment_url": payment_url,
+        "payment_id": str(inv_id),
+        "amount": amount,
+        "plan": plan_name
+    }
+
+@router.post("/payment/robokassa/addon")
+async def create_robokassa_addon(
+    req: RobokassaAddonRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create Robokassa payment for addon purchase.
+    """
+    # Get addon config
+    addon_config = ADDONS.get(req.addon_id)
+    if not addon_config:
+        raise HTTPException(status_code=400, detail="Invalid addon ID")
+    
+    amount = addon_config.get("price", 0)
+    if amount == 0:
+        raise HTTPException(status_code=400, detail="This addon is free")
+    
+    # Generate unique invoice ID (using user_id + timestamp + random component)
+    import random
+    timestamp = int(datetime.utcnow().timestamp())
+    random_part = random.randint(1000, 9999)
+    inv_id = int(f"{user.id}{timestamp}{random_part}")
+    
+    # Create payment record (store addon_id in plan_id field for now, or we could extend Payment model)
+    payment = Payment(
+        user_id=user.id,
+        provider_payment_id=str(inv_id),
+        amount=amount,
+        currency="RUB",
+        status="pending",
+        plan_id=f"addon_{req.addon_id}"  # Store addon ID in plan_id field
+    )
+    db.add(payment)
+    await db.commit()
+    
+    # Create Robokassa service
+    robokassa = RobokassaService()
+    
+    # Generate payment URL
+    addon_name = req.addon_id.replace("_", " ").title()
+    description = f"Дополнение: {addon_name}"
+    payment_url = robokassa.create_payment_url(
+        inv_id=inv_id,
+        amount=amount,
+        description=description,
+        user_id=user.id
+    )
+    
+    logger.info(f"Created Robokassa payment for user {user.id}, addon {req.addon_id}, amount {amount}")
+    
+    return {
+        "payment_url": payment_url,
+        "payment_id": str(inv_id),
+        "amount": amount,
+        "addon": addon_name
+    }
+
+@router.post("/payment/robokassa/result")
+async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Robokassa ResultURL webhook handler.
+    This endpoint receives payment notifications from Robokassa.
+    """
+    try:
+        # Robokassa sends form data
+        form_data = await request.form()
+        data = dict(form_data)
+    except Exception as e:
+        logger.error(f"Error parsing Robokassa callback: {e}")
+        return "ERROR"
+    
+    # Extract required fields
+    out_sum = data.get("OutSum", "")
+    inv_id_str = data.get("InvId", "")
+    signature_value = data.get("SignatureValue", "")
+    
+    # Get additional parameters (Shp_*)
+    user_id = data.get("Shp_user_id")
+    
+    if not out_sum or not inv_id_str or not signature_value:
+        logger.error("Missing required fields in Robokassa callback")
+        return "ERROR"
+    
+    try:
+        inv_id = int(inv_id_str)
+        amount = float(out_sum)
+    except (ValueError, TypeError) as e:
+        logger.error(f"Invalid amount or InvId in callback: {e}")
+        return "ERROR"
+    
+    # Verify signature
+    robokassa = RobokassaService()
+    if not robokassa.verify_callback_signature(out_sum, inv_id_str, signature_value):
+        logger.error(f"Invalid signature for payment {inv_id}")
+        return "ERROR"
+    
+    # Find payment record
+    stmt = select(Payment).where(Payment.provider_payment_id == str(inv_id))
+    payment = (await db.execute(stmt)).scalars().first()
+    
+    if not payment:
+        logger.error(f"Payment {inv_id} not found in database")
+        return robokassa.get_payment_status_response(inv_id, success=False)
+    
+    # Check if already processed
+    if payment.status == "succeeded":
+        logger.info(f"Payment {inv_id} already processed")
+        return robokassa.get_payment_status_response(inv_id, success=True)
+    
+    # Update payment status
+    payment.status = "succeeded"
+    payment.confirmed_at = datetime.utcnow()
+    db.add(payment)
+    
+    # Get user
+    user = await db.get(User, payment.user_id)
+    if not user:
+        logger.error(f"User {payment.user_id} not found for payment {inv_id}")
+        await db.rollback()
+        return robokassa.get_payment_status_response(inv_id, success=False)
+    
+    # Process payment based on type
+    plan_id = payment.plan_id
+    
+    if plan_id.startswith("addon_"):
+        # Process addon purchase
+        addon_id = plan_id.replace("addon_", "")
+        addon_config = ADDONS.get(addon_id)
+        
+        if addon_config:
+            if addon_config.get("resource") == "ai_requests":
+                # Add to extra_ai_balance
+                amount_to_add = addon_config.get("amount", 0)
+                user.extra_ai_balance = (user.extra_ai_balance or 0) + amount_to_add
+                logger.info(f"User {user.id} purchased {amount_to_add} AI requests addon")
+            elif addon_config.get("feature"):
+                # Feature addon - could be stored in user preferences or activated
+                logger.info(f"User {user.id} purchased feature addon: {addon_id}")
+    else:
+        # Process subscription purchase
+        plan_config = get_plan_config(plan_id)
+        if plan_config:
+            # Update subscription
+            user.subscription_plan = plan_id
+            now = datetime.utcnow()
+            
+            # Extend subscription (30 days)
+            if user.subscription_expires_at and user.subscription_expires_at > now:
+                user.subscription_expires_at += timedelta(days=30)
+            else:
+                user.subscription_expires_at = now + timedelta(days=30)
+            
+            # Reset usage if starting new subscription period
+            if not user.usage_reset_date or user.usage_reset_date < now:
+                user.usage_reset_date = now + timedelta(days=30)
+                user.ai_requests_used = 0
+            
+            logger.info(f"User {user.id} subscription updated to {plan_id} via Robokassa")
+    
+    db.add(user)
+    await db.commit()
+    
+    logger.info(f"Successfully processed Robokassa payment {inv_id} for user {user.id}")
+    return robokassa.get_payment_status_response(inv_id, success=True)
+
+@router.get("/payment/robokassa/success")
+async def robokassa_success(user_id: int = None):
+    """
+    Success URL redirect handler.
+    User is redirected here after successful payment.
+    """
+    return {
+        "status": "success",
+        "message": "Payment completed successfully. Your subscription has been activated."
+    }
+
+@router.get("/payment/robokassa/fail")
+async def robokassa_fail(user_id: int = None):
+    """
+    Fail URL redirect handler.
+    User is redirected here if payment failed or was cancelled.
+    """
+    return {
+        "status": "failed",
+        "message": "Payment was not completed. Please try again."
+    }

@@ -132,8 +132,8 @@ const AIAnalysisPage = ({ user }) => {
     const handleDownloadPDF = async () => {
         if (!sku && !result?.sku) return;
         const targetSku = sku || result.sku;
-        if (user?.plan === 'free') {
-            alert("Скачивание PDF доступно только на тарифе PRO");
+        if (user?.plan === 'start') {
+            alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
             return;
         }
         try {
@@ -248,6 +248,29 @@ const AIAnalysisPage = ({ user }) => {
                             </div>
 
                             <div className="mb-6 px-2">
+                                {/* Quota Display */}
+                                {user?.ai_requests_limit > 0 && (
+                                    <div className="mb-4 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                                        <div className="flex justify-between items-center text-xs mb-2">
+                                            <span className="font-bold text-indigo-700">AI запросы:</span>
+                                            <span className="font-black text-indigo-900">
+                                                {user.ai_requests_used || 0} / {user.ai_requests_limit}
+                                                {user?.extra_ai_balance > 0 && (
+                                                    <span className="text-emerald-600 ml-1">+{user.extra_ai_balance}</span>
+                                                )}
+                                            </span>
+                                        </div>
+                                        <div className="h-2 bg-indigo-100 rounded-full overflow-hidden">
+                                            <div 
+                                                className="h-full bg-indigo-600 transition-all"
+                                                style={{ 
+                                                    width: `${Math.min(100, ((user.ai_requests_used || 0) / user.ai_requests_limit) * 100)}%` 
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                                
                                 <div className="flex justify-between items-center mb-4">
                                     <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
                                         <Settings2 size={12}/> Глубина анализа
@@ -313,11 +336,11 @@ const AIAnalysisPage = ({ user }) => {
                             disabled={downloading}
                             className={`
                                 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95
-                                ${user?.plan === 'free' ? 'bg-white text-slate-400 border border-slate-200' : 'bg-slate-900 text-white shadow-lg'}
+                                ${user?.plan === 'start' ? 'bg-white text-slate-400 border border-slate-200' : 'bg-slate-900 text-white shadow-lg'}
                             `}
                         >
-                            {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'free' ? <Lock size={14}/> : <FileDown size={14}/>)}
-                            {user?.plan === 'free' ? 'PDF (PRO)' : 'Скачать PDF'}
+                            {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'start' ? <Lock size={14}/> : <FileDown size={14}/>)}
+                            {user?.plan === 'start' ? 'PDF (PRO)' : 'Скачать PDF'}
                         </button>
                     </div>
 

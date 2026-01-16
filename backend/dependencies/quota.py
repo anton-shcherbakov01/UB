@@ -1,0 +1,163 @@
+"""
+Quota and Resource Management Dependency for FastAPI
+"""
+import logging
+from datetime import datetime, timedelta
+from typing import Optional
+from fastapi import Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from database import get_db, User
+from dependencies import get_current_user, get_redis_client
+from config.plans import get_plan_config, has_feature, get_limit
+
+logger = logging.getLogger("Quota")
+
+
+class QuotaCheck:
+    """
+    Dependency for checking subscription quotas and features.
+    
+    Usage:
+        @router.post("/endpoint")
+        async def my_endpoint(
+            user: User = Depends(QuotaCheck("ai_requests", "pnl_full"))
+        ):
+            ...
+    """
+    
+    def __init__(self, resource_key: Optional[str] = None, feature_flag: Optional[str] = None):
+        """
+        Initialize quota check.
+        
+        Args:
+            resource_key: Resource to check (e.g., "ai_requests")
+            feature_flag: Feature flag to check (e.g., "pnl_full")
+        """
+        self.resource_key = resource_key
+        self.feature_flag = feature_flag
+    
+    async def __call__(
+        self,
+        user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)
+    ) -> User:
+        """
+        Check quota and feature access.
+        
+        Returns:
+            User object if checks pass
+            
+        Raises:
+            HTTPException 403 if quota exhausted or feature missing
+        """
+        # 1. Check feature flag if provided
+        if self.feature_flag:
+            plan_config = get_plan_config(user.subscription_plan)
+            if not has_feature(user.subscription_plan, self.feature_flag):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Feature '{self.feature_flag}' requires upgrade. Current plan: {plan_config.get('name', user.subscription_plan)}"
+                )
+        
+        # 2. Check resource limits if provided
+        if self.resource_key:
+            # Ensure usage_reset_date is set
+            if not user.usage_reset_date:
+                user.usage_reset_date = datetime.utcnow()
+                db.add(user)
+                await db.commit()
+            
+            # Check if monthly reset is needed
+            now = datetime.utcnow()
+            if user.usage_reset_date and now > user.usage_reset_date:
+                # Reset monthly usage
+                days_passed = (now - user.usage_reset_date).days
+                if days_passed >= 30:
+                    user.ai_requests_used = 0
+                    # Set next reset date (30 days from now)
+                    user.usage_reset_date = now + timedelta(days=30)
+                    db.add(user)
+                    await db.commit()
+            
+            # Get limit from plan
+            monthly_limit = get_limit(user.subscription_plan, self.resource_key)
+            
+            # Check usage
+            if self.resource_key == "ai_requests":
+                # Check monthly limit first
+                if user.ai_requests_used >= monthly_limit:
+                    # Check extra balance
+                    if user.extra_ai_balance <= 0:
+                        plan_config = get_plan_config(user.subscription_plan)
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"AI requests quota exhausted ({user.ai_requests_used}/{monthly_limit}). Upgrade or purchase add-on."
+                        )
+                # If we have extra balance, we can proceed (will consume from balance)
+            # Add other resource types here as needed
+        
+        return user
+
+
+async def increment_usage(
+    user: User,
+    resource_key: str,
+    amount: int = 1,
+    db: Optional[AsyncSession] = None
+) -> None:
+    """
+    Increment usage counter for a resource.
+    Consumes monthly limit first, then extra balance.
+    
+    Args:
+        user: User object
+        resource_key: Resource type (e.g., "ai_requests")
+        amount: Amount to increment (default 1)
+        db: Database session (optional, will create if not provided)
+    """
+    if resource_key == "ai_requests":
+        # Get limit from plan
+        monthly_limit = get_limit(user.subscription_plan, resource_key)
+        
+        # Check if we need to consume from monthly limit or extra balance
+        remaining_monthly = monthly_limit - user.ai_requests_used
+        
+        if remaining_monthly >= amount:
+            # Consume from monthly limit
+            user.ai_requests_used += amount
+        else:
+            # Consume remaining from monthly, rest from extra balance
+            consumed_from_monthly = remaining_monthly
+            consumed_from_balance = amount - consumed_from_monthly
+            
+            user.ai_requests_used = monthly_limit  # Exhaust monthly limit
+            user.extra_ai_balance = max(0, user.extra_ai_balance - consumed_from_balance)
+        
+        # Update Redis cache for fast reads
+        r_client = get_redis_client()
+        if r_client:
+            try:
+                cache_key = f"quota:{user.id}:{resource_key}"
+                r_client.setex(
+                    cache_key,
+                    3600,  # 1 hour TTL
+                    f"{user.ai_requests_used}:{user.extra_ai_balance}"
+                )
+            except Exception as e:
+                logger.warning(f"Redis cache update failed: {e}")
+        
+        # Update database
+        if db:
+            db.add(user)
+            await db.commit()
+        else:
+            # If no db session provided, we need to create one
+            from database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                session.add(user)
+                await session.commit()
+    
+    # Add other resource types here as needed
+

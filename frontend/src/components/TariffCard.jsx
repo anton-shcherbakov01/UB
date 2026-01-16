@@ -2,7 +2,7 @@ import React from 'react';
 import { Check, Star, CreditCard, Loader2, Sparkles } from 'lucide-react';
 
 const TariffCard = ({ plan, onPayStars, onPayRubles, loading }) => {
-  const isBestValue = plan.is_best || plan.id === 'pro';
+  const isBestValue = plan.is_best || plan.id === 'analyst';
   const isCurrent = plan.current;
 
   return (

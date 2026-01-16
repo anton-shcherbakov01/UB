@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from database import get_db, User, ProductCost
 from dependencies import get_current_user, get_redis_client
+from fastapi import HTTPException
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
 from tasks.finance import sync_product_metadata
@@ -320,3 +321,62 @@ async def get_supply_coefficients(user: User = Depends(get_current_user)):
 @router.post("/internal/transit_calc")
 async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
     return await wb_api_service.calculate_transit(req.volume, req.destination)
+
+@router.get("/finance/pnl")
+async def get_pnl_data(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get P&L (Profit & Loss) data for the user.
+    
+    For "start" plan: Only yesterday's data is available (pnl_demo feature).
+    For "analyst" and higher: Full date range is available (pnl_full feature).
+    """
+    from datetime import timedelta
+    from config.plans import has_feature
+    
+    now = datetime.utcnow()
+    
+    # Check feature access based on plan
+    if user.subscription_plan == "start":
+        # Start plan has pnl_demo feature - only yesterday
+        if not has_feature(user.subscription_plan, "pnl_demo"):
+            raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
+        yesterday = now - timedelta(days=1)
+        date_from_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        date_to_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        # Analyst+ plans have pnl_full feature - full date range
+        if not has_feature(user.subscription_plan, "pnl_full"):
+            raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
+        
+        # For analyst+ plans, allow full date range
+        if date_from:
+            try:
+                date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            except:
+                # Fallback to 30 days ago if parsing fails
+                date_from_dt = now - timedelta(days=30)
+        else:
+            date_from_dt = now - timedelta(days=30)
+        
+        if date_to:
+            try:
+                date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            except:
+                date_to_dt = now
+        else:
+            date_to_dt = now
+    
+    # Get P&L data from analysis service
+    pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
+    
+    return {
+        "plan": user.subscription_plan,
+        "date_from": date_from_dt.isoformat(),
+        "date_to": date_to_dt.isoformat(),
+        "data": pnl_data
+    }

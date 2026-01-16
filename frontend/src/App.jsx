@@ -48,7 +48,7 @@ const AppContent = () => {
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/seo" element={<SeoGeneratorPage />} />
             <Route path="/seo_tracker" element={<SeoTrackerPage />} />
-            <Route path="/finance" element={<FinancePage onNavigate={handleTabChange} />} />
+            <Route path="/finance" element={<FinancePage user={user} onNavigate={handleTabChange} />} />
             <Route path="/ai" element={<AIAnalysisPage user={user} />} />
             <Route path="/supply" element={<SupplyPage />} />
             

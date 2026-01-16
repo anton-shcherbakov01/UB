@@ -10,6 +10,7 @@ from fpdf import FPDF
 
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
+from dependencies.quota import QuotaCheck, increment_usage
 from tasks import analyze_reviews_task, get_status
 # Используем parser_service, который правильно работает с async
 from parser_service import parser_service
@@ -39,10 +40,15 @@ async def check_product_reviews(sku: int, user: User = Depends(get_current_user)
 async def start_ai_analysis(
     sku: int, 
     limit: int = Query(100, ge=10, description="Max reviews to parse"),
-    user: User = Depends(get_current_user)
+    user: User = Depends(QuotaCheck("ai_requests")),
+    db: AsyncSession = Depends(get_db)
 ):
     # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
     task = analyze_reviews_task.delay(sku, limit, user.id)
+    
+    # Increment usage after task is accepted
+    await increment_usage(user, "ai_requests", amount=1, db=db)
+    
     return {"status": "accepted", "task_id": task.id}
 
 @router.get("/ai/result/{task_id}")
@@ -50,9 +56,7 @@ def get_ai_result(task_id: str):
     return get_status(task_id)
 
 @router.get("/report/ai-pdf/{sku}")
-async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Upgrade to PRO")
+async def generate_ai_pdf(sku: int, user: User = Depends(QuotaCheck(feature_flag="pnl_full")), db: AsyncSession = Depends(get_db)):
 
     stmt = select(SearchHistory).where(
         SearchHistory.user_id == user.id, 

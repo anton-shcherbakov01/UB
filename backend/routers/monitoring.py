@@ -23,21 +23,9 @@ executor = ThreadPoolExecutor(max_workers=2)
 @router.get("/monitoring/scan/{sku}")
 async def scan_product(sku: int):
     """
-    Мгновенный скан товара.
+    Stub: Module is currently in development
     """
-    try:
-        # Прямой вызов async метода (без executor)
-        result = await selenium_service.get_product_details(sku)
-        
-        if not result.get('valid'):
-            raise HTTPException(404, "Товар не найден или ошибка парсинга WB")
-            
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Scan error: {e}")
-        raise HTTPException(500, f"Scan failed: {str(e)}")
+    return {"status": "maintenance", "message": "Module is currently in development"}
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):

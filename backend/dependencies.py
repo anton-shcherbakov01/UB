@@ -78,7 +78,7 @@ async def get_current_user(
         try:
             username = user_data_dict.get('username')
             first_name = user_data_dict.get('first_name')
-            plan = "business" if is_super else "free"
+            plan = "business" if is_super else "start"
             is_adm = is_super
             
             # Используем text() для raw query (надежнее всего для upsert в данной конфигурации)

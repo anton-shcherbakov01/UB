@@ -11,8 +11,8 @@ const ScannerPage = () => {
                     <Construction className="text-indigo-600" size={40} />
                 </div>
                 <h2 className="text-2xl font-black text-slate-800 mb-3">Сканер цен</h2>
-                <p className="text-slate-500 mb-1">Сервис находится в разработке</p>
-                <p className="text-sm text-slate-400">Скоро вы сможете сканировать товары и добавлять их в мониторинг</p>
+                <p className="text-slate-500 mb-1">Модуль находится в разработке</p>
+                <p className="text-sm text-slate-400">Module is currently in development</p>
             </div>
         </div>
     );

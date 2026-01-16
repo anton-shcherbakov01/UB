@@ -10,8 +10,8 @@ const BidderPage = () => {
                     <Construction className="text-purple-600" size={40} />
                 </div>
                 <h2 className="text-2xl font-black text-slate-800 mb-3">Биддер</h2>
-                <p className="text-slate-500 mb-1">Сервис находится в разработке</p>
-                <p className="text-sm text-slate-400">Скоро вы сможете управлять ставками рекламы автоматически</p>
+                <p className="text-slate-500 mb-1">Модуль находится в разработке</p>
+                <p className="text-sm text-slate-400">Module is currently in development</p>
             </div>
         </div>
     );

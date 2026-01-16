@@ -35,7 +35,7 @@ class User(Base):
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     is_admin = Column(Boolean, default=False)
-    subscription_plan = Column(String, default="free")
+    subscription_plan = Column(String, default="start")
     
     # Поля API WB
     wb_api_token = Column(String, nullable=True)
@@ -44,6 +44,11 @@ class User(Base):
     # SaaS поля
     subscription_expires_at = Column(DateTime, nullable=True)
     is_recurring = Column(Boolean, default=False)
+    
+    # Quota and Usage Tracking
+    usage_reset_date = Column(DateTime, nullable=True)
+    ai_requests_used = Column(Integer, default=0)
+    extra_ai_balance = Column(Integer, default=0)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

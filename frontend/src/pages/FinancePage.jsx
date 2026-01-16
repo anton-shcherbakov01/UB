@@ -9,11 +9,13 @@ import {
 import { API_URL, getTgHeaders } from '../config';
 import CostEditModal from '../components/CostEditModal';
 
-const FinancePage = () => {
+const FinancePage = ({ user }) => {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [editingCost, setEditingCost] = useState(null);
     const [viewMode, setViewMode] = useState('unit'); // 'unit' | 'pnl'
+    const [pnlData, setPnlData] = useState(null);
+    const [pnlLoading, setPnlLoading] = useState(false);
 
     const fetchProducts = async () => {
         setLoading(true);
@@ -33,6 +35,33 @@ const FinancePage = () => {
     };
 
     useEffect(() => { fetchProducts(); }, []);
+    
+    const fetchPnlData = async () => {
+        setPnlLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/finance/pnl`, {
+                headers: getTgHeaders()
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setPnlData(data);
+            } else {
+                // Fallback to local calculation if API fails
+                setPnlData(null);
+            }
+        } catch(e) { 
+            console.error(e);
+            setPnlData(null);
+        } finally {
+            setPnlLoading(false);
+        }
+    };
+    
+    useEffect(() => {
+        if (viewMode === 'pnl') {
+            fetchPnlData();
+        }
+    }, [viewMode]);
 
     const handleUpdateCost = async (sku, formData) => {
         try {
@@ -146,8 +175,58 @@ const FinancePage = () => {
             ) : viewMode === 'pnl' ? (
                 <div className="space-y-4 animate-in slide-in-from-right-8">
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                        <h3 className="font-bold text-lg mb-4">Проекция (по текущей скорости)</h3>
-                        {pnlStats.length > 0 ? (
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg">
+                                {pnlData ? 'P&L (реальные данные)' : 'Проекция (по текущей скорости)'}
+                            </h3>
+                            {user?.plan === 'start' && (
+                                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-bold">
+                                    Демо: только вчера
+                                </span>
+                            )}
+                        </div>
+                        {pnlLoading ? (
+                            <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600" size={24}/></div>
+                        ) : (pnlData?.data && pnlData.data.length > 0) ? (
+                            <>
+                                <div className="h-64 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={pnlData.data}>
+                                            <Tooltip 
+                                                cursor={{fill: '#f1f5f9'}}
+                                                contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.1)'}}
+                                            />
+                                            <ReferenceLine y={0} stroke="#cbd5e1" />
+                                            <Bar dataKey="cm3" radius={[4, 4, 4, 4]}>
+                                                {pnlData.data.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.cm3 > 0 ? '#10b981' : '#ef4444'} />
+                                                ))}
+                                            </Bar>
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 mt-4">
+                                    {pnlData.data.slice(-1)[0] && (() => {
+                                        const last = pnlData.data.slice(-1)[0];
+                                        return [
+                                            { name: 'Выручка', value: last.net_sales },
+                                            { name: 'COGS', value: -last.cogs },
+                                            { name: 'Комиссия', value: -last.commission },
+                                            { name: 'Логистика', value: -last.logistics },
+                                            { name: 'Штрафы', value: -last.penalties },
+                                            { name: 'CM3', value: last.cm3 }
+                                        ].map((s, i) => (
+                                            <div key={i} className="flex justify-between text-sm border-b border-slate-50 last:border-0 py-2">
+                                                <span className="text-slate-500">{s.name}</span>
+                                                <span className={`font-bold ${s.value > 0 ? 'text-slate-800' : 'text-red-500'}`}>
+                                                    {Math.round(s.value).toLocaleString()} ₽
+                                                </span>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            </>
+                        ) : pnlStats.length > 0 ? (
                             <>
                                 <div className="h-64 w-full">
                                     <ResponsiveContainer width="100%" height="100%">

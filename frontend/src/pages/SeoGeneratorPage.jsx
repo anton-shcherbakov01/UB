@@ -128,8 +128,8 @@ const SeoGeneratorPage = () => {
                 faq: result.faq || []
             };
 
-            if (user?.plan === 'free') {
-                alert("Скачивание PDF доступно только на тарифе PRO или Business");
+            if (user?.plan === 'start') {
+                alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
                 return;
             }
 

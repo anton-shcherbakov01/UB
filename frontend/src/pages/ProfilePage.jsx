@@ -73,7 +73,7 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/payment/yookassa/create`, {
+            const res = await fetch(`${API_URL}/api/payment/robokassa/subscription`, {
                 method: 'POST',
                 headers: getTgHeaders(),
                 body: JSON.stringify({ plan_id: plan.id })
@@ -167,8 +167,9 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
 
     const getPlanDisplayName = (planId) => {
         switch(planId) {
-            case 'pro': return 'Аналитик';
-            case 'business': return 'Стратег';
+            case 'analyst': return 'Аналитик';
+            case 'strategist': return 'Стратег';
+            case 'start': return 'Старт';
             default: return 'Старт';
         }
     };
@@ -190,18 +191,24 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
                 <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 relative">
                     <User size={32} />
-                    <div className={`absolute bottom-0 right-0 w-5 h-5 border-4 border-white rounded-full ${user?.plan === 'pro' || user?.plan === 'business' ? 'bg-indigo-500' : 'bg-emerald-500'}`}></div>
+                    <div className={`absolute bottom-0 right-0 w-5 h-5 border-4 border-white rounded-full ${user?.plan === 'analyst' || user?.plan === 'strategist' ? 'bg-indigo-500' : 'bg-emerald-500'}`}></div>
                 </div>
                 <div>
                     <h2 className="text-xl font-black text-slate-800">{user?.name || 'Загрузка...'}</h2>
                     <p className="text-sm text-slate-400 mb-2">@{user?.username || '...'}</p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                          <span className="bg-slate-900 text-white px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider">
                             {getPlanDisplayName(user?.plan)}
                         </span>
                         {user?.days_left > 0 && (
                             <span className="bg-emerald-100 text-emerald-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">
                                 {user.days_left} дн.
+                            </span>
+                        )}
+                        {user?.ai_requests_limit > 0 && (
+                            <span className="bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">
+                                AI: {user.ai_requests_used || 0}/{user.ai_requests_limit}
+                                {user?.extra_ai_balance > 0 && ` +${user.extra_ai_balance}`}
                             </span>
                         )}
                     </div>

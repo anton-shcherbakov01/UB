@@ -13,7 +13,6 @@ services:
     volumes:
       - postgres_data_final:/var/lib/postgresql/data
     ports: ["5433:5432"]
-    command: postgres -c shared_buffers=1GB
     healthcheck:
       test: ["NONE"]
     logging:
@@ -31,7 +30,6 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/memory-config.xml:ro
     environment:
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
@@ -138,45 +136,6 @@ services:
         max-size: "20m"
         max-file: "5"
 
-  selenium_worker:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: wb_selenium_worker
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    command: celery -A celery_app worker --loglevel=info --concurrency=1 -Q selenium
-    volumes: 
-      - ./backend:/app
-      - ./backend/proxy_ext:/app/proxy_ext
-    shm_size: '2gb'
-    env_file:
-      - ./backend/.env
-    environment:
-      - RUN_MIGRATIONS=false
-      - C_FORCE_ROOT=1
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=8123
-      - CLICKHOUSE_DB=wb_analytics
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=123
-      - HEADLESS=True
-    depends_on: 
-      db:
-        condition: service_started
-      redis:
-        condition: service_started
-      clickhouse:
-        condition: service_started
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-
   beat:
     build: 
       context: ./backend
@@ -208,4 +167,3 @@ services:
 volumes:
   postgres_data_final:
   clickhouse_data:
-
