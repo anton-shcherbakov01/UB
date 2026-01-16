@@ -46,27 +46,27 @@ class SeoPdfRequest(BaseModel):
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
 
-@router.get("/seo/regions")
+@router.get("/regions")
 async def get_regions():
     return [{"key": k, "label": k.upper()} for k in GEO_COOKIES.keys()]
 
-@router.get("/seo/position")
+@router.get("/position")
 async def check_position(
     query: str, 
     sku: int, 
     geo: str = Query("moscow")
 ):
-    logger.info(f"🔎 SELENIUM SEARCH: SKU={sku} Query='{query}'")
+    logger.info(f"🔎 SELENIUM SEARCH: SKU={sku} Query='{query}' Geo={geo}")
 
     if geo not in GEO_COOKIES:
         geo = "moscow"
 
-    # Запускаем тяжелый Selenium в отдельном потоке
     loop = asyncio.get_event_loop()
     try:
+        # 3. Запускаем синхронную функцию Selenium в отдельном потоке executor'а
         result = await loop.run_in_executor(
             executor, 
-            selenium_service.get_seo_position, 
+            selenium_service.get_position, 
             query, 
             sku, 
             geo
@@ -75,15 +75,20 @@ async def check_position(
         if not result['found']:
             return {
                 "status": "not_found", 
-                "message": "Не найдено в топе (Selenium)",
+                "message": f"Не найдено (проверено {result.get('page', 0)} стр)",
                 "data": result
             }
         
+        logger.info(f"✅ FOUND! Pos: {result['position']}")
         return {"status": "success", "data": result}
         
     except Exception as e:
-        logger.error(f"Selenium Error: {e}")
-        raise HTTPException(500, detail="Ошибка парсинга Wildberries")
+        logger.error(f"Selenium Critical Error: {e}")
+        # Если драйвер упал, пробуем его перезапустить для следующих запросов
+        try:
+            selenium_service.close()
+        except: pass
+        raise HTTPException(500, detail=f"Ошибка парсера: {str(e)}")
 
 @router.post("/seo/track")
 async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):
