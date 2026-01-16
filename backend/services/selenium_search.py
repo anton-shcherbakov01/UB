@@ -16,100 +16,94 @@ from selenium.webdriver.support import expected_conditions as EC
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("UniversalParser")
 
-GEO_COOKIES = {
-    "moscow": {"x-geo-id": "moscow", "dst": "-1257786"},
-    "spb": {"x-geo-id": "spb", "dst": "-1257786"}, 
-    "ekb": {"x-geo-id": "ekb", "dst": "-1113276"},
-    "krasnodar": {"x-geo-id": "krasnodar", "dst": "-1192533"},
-    "kazan": {"x-geo-id": "kazan", "dst": "-2133464"},
-}
-
 class UniversalSeleniumService:
     def __init__(self):
         self.driver = None
         self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ]
 
-    # --- ЧАСТЬ 1: БЫСТРЫЙ ПОИСК ЧЕРЕЗ КОРЗИНЫ (AIOHTTP) ---
-
-    async def _find_card_in_baskets(self, sku: int):
-        """
-        Брутфорс ВСЕХ возможных корзин (от 01 до 25).
-        Это позволяет находить даже самые новые товары без сложных формул.
-        """
-        vol = sku // 100000
-        part = sku // 1000
-        
-        # Генерируем список хостов от 01 до 25 (актуально на 2025 год)
-        hosts = [f"{i:02d}" for i in range(1, 26)] 
-
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for host in hosts:
-                url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
-                tasks.append(self._check_url(session, url, host, sku))
-            
-            # Ждем завершения всех, но возвращаем первый успешный
-            for future in asyncio.as_completed(tasks):
-                result = await future
-                if result: return result
-        
-        return None
-
-    async def _check_url(self, session, url, host, sku):
-        try:
-            # Таймаут очень короткий, чтобы не ждать мертвые сервера
-            async with session.get(url, timeout=1.0) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # Генерируем картинку
-                    vol = sku // 100000
-                    part = sku // 1000
-                    data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
-                    return data
-        except: return None
-
-    # --- ЧАСТЬ 2: ГЛАВНЫЙ МЕТОД ---
+    # --- ЧАСТЬ 1: API (МГНОВЕННО И ТОЧНО) ---
 
     async def get_product_details(self, sku: int):
         sku = int(sku)
-        logger.info(f"⚡ Scanning SKU: {sku}")
+        logger.info(f"⚡ Scanning SKU: {sku} via API")
         
-        # 1. Пробуем JSON (Супер быстро)
-        card = await self._find_card_in_baskets(sku)
+        # 1. Пробуем Mobile API (Самый надежный метод 2025)
+        # Этот endpoint используется официальным приложением и сайтом
+        url = f"https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={sku}"
         
-        if card:
-            name = card.get('imt_name') or card.get('subj_name', 'Unknown')
-            brand = card.get('selling', {}).get('brand_name', '')
-            image = card.get('image_url')
-            
-            price = 0
-            # Ищем цену в массиве sizes
-            for size in card.get('sizes', []):
-                p = size.get('price', {}).get('total') or size.get('price', {}).get('product') or size.get('priceU')
-                if p:
-                    price = int(p / 100)
-                    break
-            
-            if price > 0:
-                logger.info(f"✅ Found in JSON: {price}₽")
-                return {
-                    "valid": True, "sku": sku, "name": name, 
-                    "brand": brand, "price": price, 
-                    "image": image, "rating": 0, "review_count": 0
-                }
-            else:
-                logger.warning(f"⚠️ JSON found but NO PRICE. Fallback to Selenium.")
-        else:
-            logger.warning(f"⚠️ JSON not found (checked baskets 01-25). Fallback to Selenium.")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5.0) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        products = data.get('data', {}).get('products', [])
+                        
+                        if products:
+                            p = products[0]
+                            # Генерация ссылки на фото (алгоритм WB)
+                            image_url = self._get_image_url(p.get('id'))
+                            
+                            # Цена (ищем минимальную среди размеров, как делает WB)
+                            price = 0
+                            for size in p.get('sizes', []):
+                                current_price = size.get('price', {}).get('total') or size.get('priceU')
+                                if current_price:
+                                    current_price = int(current_price / 100)
+                                    if price == 0 or current_price < price:
+                                        price = current_price
+                            
+                            logger.info(f"✅ Found via API: {price}₽")
+                            return {
+                                "valid": True,
+                                "sku": p.get('id'),
+                                "name": p.get('name', ''),
+                                "brand": p.get('brand', ''),
+                                "price": price,
+                                "image": image_url,
+                                "rating": p.get('reviewRating', 0),
+                                "review_count": p.get('feedbacks', 0)
+                            }
+        except Exception as e:
+            logger.warning(f"API Scan failed: {e}")
 
-        # 2. Selenium Fallback
+        # 2. Если API не ответил — запускаем Selenium (Fallback)
+        logger.warning(f"⚠️ API failed. Starting Selenium fallback...")
         return await self._selenium_get_details(sku)
 
-    # --- ЧАСТЬ 3: SELENIUM (FIXED) ---
+    def _get_image_url(self, sku):
+        """Алгоритм генерации ссылки на фото без перебора"""
+        if not sku: return ""
+        _vol = sku // 100000
+        _part = sku // 1000
+        
+        # Определение хоста корзины по диапазонам (актуально на 2025)
+        if 0 <= _vol <= 143: basket = "01"
+        elif 144 <= _vol <= 287: basket = "02"
+        elif 288 <= _vol <= 431: basket = "03"
+        elif 432 <= _vol <= 719: basket = "04"
+        elif 720 <= _vol <= 1007: basket = "05"
+        elif 1008 <= _vol <= 1061: basket = "06"
+        elif 1062 <= _vol <= 1115: basket = "07"
+        elif 1116 <= _vol <= 1169: basket = "08"
+        elif 1170 <= _vol <= 1313: basket = "09"
+        elif 1314 <= _vol <= 1601: basket = "10"
+        elif 1602 <= _vol <= 1655: basket = "11"
+        elif 1656 <= _vol <= 1919: basket = "12"
+        elif 1920 <= _vol <= 2045: basket = "13"
+        elif 2046 <= _vol <= 2189: basket = "14"
+        elif 2190 <= _vol <= 2405: basket = "15"
+        elif 2406 <= _vol <= 2621: basket = "16"
+        elif 2622 <= _vol <= 2837: basket = "17"
+        else: basket = "18" # Для новых товаров часто 18+
+
+        # Для очень новых товаров может быть basket-20+, поэтому если картинка не грузится
+        # фронт обычно сам подбирает, но мы дадим наиболее вероятную.
+        return f"https://basket-{basket}.wbbasket.ru/vol{_vol}/part{_part}/{sku}/images/c246x328/1.webp"
+
+    # --- ЧАСТЬ 2: SELENIUM (РЕЗЕРВ) ---
 
     def _init_driver(self):
         if self.driver: return
@@ -118,7 +112,6 @@ class UniversalSeleniumService:
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        # Отключаем детекторы
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument(f"user-agent={random.choice(self.user_agents)}")
@@ -128,7 +121,7 @@ class UniversalSeleniumService:
                 service=Service(ChromeDriverManager().install()),
                 options=chrome_options
             )
-            self.driver.set_page_load_timeout(40) # Увеличили таймаут
+            self.driver.set_page_load_timeout(30)
             logger.info("🚀 Selenium Driver initialized")
         except Exception as e:
             logger.error(f"Driver Init Failed: {e}")
@@ -142,54 +135,38 @@ class UniversalSeleniumService:
 
         try:
             self.driver.get(url)
-            
-            # Ждем загрузки JS-стейта, а не визуальных элементов
-            await asyncio.sleep(3) 
+            await asyncio.sleep(2) # Даем прогрузиться скриптам
 
-            # Пытаемся достать данные из памяти браузера (самый надежный метод)
+            # Попытка 1: JSON из JS (самая надежная)
             json_data = self.driver.execute_script("""
-                try {
-                    return window.__INITIAL_STATE__ ? JSON.stringify(window.__INITIAL_STATE__) : 
-                           (window.staticModel ? JSON.stringify(window.staticModel) : null);
-                } catch(e) { return null; }
+                return window.__INITIAL_STATE__ ? JSON.stringify(window.__INITIAL_STATE__) : null;
             """)
 
             if json_data:
                 data = json.loads(json_data)
-                
-                # Разбор формата INITIAL_STATE
-                if 'product' in data and 'product' in data['product']:
-                    prod = data['product']['product']
-                    result['valid'] = True
-                    result['name'] = prod.get('name')
-                    result['brand'] = prod.get('brand')
-                    result['price'] = int(prod.get('salePriceU', 0) / 100)
-                
-                # Разбор формата staticModel (старый)
-                elif 'kindId' in data:
-                    result['valid'] = True
-                    result['name'] = data.get('imt_name')
-                    result['brand'] = data.get('selling', {}).get('brand_name')
-                    result['price'] = int(data.get('price', {}).get('clientPriceU', 0) / 100)
+                try:
+                    # Путь к данным в новом React-интерфейсе WB
+                    prod = data.get('product', {}).get('product', {})
+                    if prod:
+                        result['valid'] = True
+                        result['name'] = prod.get('name')
+                        result['brand'] = prod.get('brand')
+                        result['rating'] = prod.get('reviewRating')
+                        result['review_count'] = prod.get('feedbacks')
+                        result['price'] = int(prod.get('salePriceU', 0) / 100)
+                        
+                        logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
+                        return result
+                except: pass
 
-                if result['price'] > 0:
-                    logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
-                    return result
-
-            # Фолбэк на DOM (если JS не спарсился)
-            # Ищем любой текст с ценой, так как классы меняются
-            body_text = self.driver.find_element(By.TAG_NAME, "body").text
-            prices = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
-            
-            # Фильтруем адекватные цены (больше 100р, меньше 1млн)
-            valid_prices = []
-            for p in prices:
-                clean = int(p.replace(' ', '').replace('\xa0', ''))
-                if 100 < clean < 1000000:
-                    valid_prices.append(clean)
+            # Попытка 2: Тупой поиск текста (если JS спрятан)
+            text = self.driver.find_element(By.TAG_NAME, "body").text
+            prices = re.findall(r'(\d[\d\s]*)\s?₽', text)
+            valid_prices = [int(p.replace(' ', '').replace('\xa0', '')) for p in prices]
+            valid_prices = [p for p in valid_prices if 100 < p < 1000000]
             
             if valid_prices:
-                result['price'] = min(valid_prices) # Обычно цена продажи - самая низкая на экране
+                result['price'] = min(valid_prices)
                 result['valid'] = True
                 result['name'] = self.driver.title.split(' - ')[0]
                 logger.info(f"✅ Found via Text Search: {result['price']}₽")
@@ -198,46 +175,35 @@ class UniversalSeleniumService:
         except Exception as e:
             logger.error(f"Selenium error: {e}")
             self.driver.quit()
-            self.driver = None # Сброс драйвера
+            self.driver = None
 
         return result
 
-    # --- МЕТОДЫ ДЛЯ БИДДЕРА ---
+    # --- МЕТОДЫ ДЛЯ SEO и БИДДЕРА ---
     def get_search_auction(self, query: str):
         if not self.driver: self._init_driver()
         url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&sort=popular"
         ads = []
         try:
             self.driver.get(url)
-            # Ждем чуть дольше
             time.sleep(2)
-            
-            # Берем из JS
             js_data = self.driver.execute_script("return window.__INITIAL_STATE__")
             
-            products = []
             if js_data:
                 products = (js_data.get('catalog', {}).get('data', {}).get('products', []) or 
                             js_data.get('payload', {}).get('products', []))
-            
-            for idx, p in enumerate(products):
-                if 'log' in p:
-                    ads.append({
-                        "position": idx + 1,
-                        "id": p.get('id'),
-                        "cpm": p.get('log', {}).get('cpm', 0),
-                        "brand": p.get('brand'),
-                        "name": p.get('name')
-                    })
-                    if len(ads) >= 20: break
-        except Exception as e:
-            logger.error(f"Auction error: {e}")
+                for idx, p in enumerate(products):
+                    if 'log' in p:
+                        ads.append({
+                            "position": idx + 1, "id": p.get('id'),
+                            "cpm": p.get('log', {}).get('cpm', 0),
+                            "brand": p.get('brand'), "name": p.get('name')
+                        })
+                        if len(ads) >= 20: break
+        except: pass
         return ads
 
-    # --- МЕТОД ДЛЯ SEO (Синхронный враппер) ---
     def get_seo_position(self, query: str, sku: int, geo: str = "moscow"):
-        """Поиск позиции товара (Синхронно для executor)"""
-        # Этот метод запускается в executor, поэтому он должен быть синхронным
         if not self.driver: self._init_driver()
         sku = int(sku)
         result = {"found": False, "page": None, "position": None, "absolute_pos": None}
@@ -256,7 +222,7 @@ class UniversalSeleniumService:
             url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&page={page}&sort=popular"
             try:
                 self.driver.get(url)
-                time.sleep(2) # Ожидание загрузки JS
+                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                 
                 js_data = self.driver.execute_script("return window.__INITIAL_STATE__")
                 products = []
