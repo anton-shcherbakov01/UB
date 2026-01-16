@@ -18,6 +18,14 @@ logger = logging.getLogger("UniversalParser")
 # Настройки прокси (если есть в .env)
 PROXY_URL = os.getenv("PROXY_URL")  # format: http://user:pass@host:port
 
+GEO_COOKIES = {
+    "moscow": {"x-geo-id": "moscow", "dst": "-1257786"},
+    "spb": {"x-geo-id": "spb", "dst": "-1257786"}, 
+    "ekb": {"x-geo-id": "ekb", "dst": "-1113276"},
+    "krasnodar": {"x-geo-id": "krasnodar", "dst": "-1192533"},
+    "kazan": {"x-geo-id": "kazan", "dst": "-2133464"},
+}
+
 class UniversalSeleniumService:
     def __init__(self):
         self.driver = None
@@ -299,3 +307,5 @@ class UniversalSeleniumService:
         if self.driver: self.driver.quit()
 
 selenium_service = UniversalSeleniumService()
+
+
