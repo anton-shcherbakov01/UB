@@ -129,12 +129,47 @@ class WBStatisticsMixin(WBApiBase):
             new_orders = []
             for order in orders_data["items"]:
                 try:
-                    order_date = datetime.strptime(order["date"], "%Y-%m-%dT%H:%M:%S")
-                    if order_date > last_check:
+                    order_date = datetime.strptime(order["date"][:19], "%Y-%m-%dT%H:%M:%S")
+                    if order_date > last_check_dt.replace(tzinfo=None):
                         new_orders.append(order)
                 except: continue
                 
             return new_orders
+    
+    # --- НОВЫЕ МЕТОДЫ ДЛЯ МОНИТОРИНГА ---
+
+    async def get_sales_since(self, token: str, date_from: str) -> List[Dict]:
+        """Получение выкупов (продаж) через миксин"""
+        url = f"{self.URLS['statistics']}/api/v1/supplier/sales"
+        params = {"dateFrom": date_from, "flag": 0}
+        headers = {"Authorization": token}
+        
+        # Используем базовый метод запроса с ретраями
+        data = await self._request_with_retry(None, url, headers, params=params)
+        return data if isinstance(data, list) else []
+
+    async def get_statistics_today(self, token: str) -> Dict[str, Any]:
+        """Сводная статистика за сегодня для уведомлений"""
+        today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+        headers = {"Authorization": token}
+        
+        # 1. Заказы и Продажи
+        async with aiohttp.ClientSession() as session:
+            orders_data = await self._get_orders_mixin(session, token, today_start, use_cache=False)
+            sales = await self.get_sales_since(token, today_start)
+        
+        valid_sales = [s for s in sales if not str(s.get('saleID', '')).startswith('R')]
+        
+        # 2. Воронка (Эмуляция, так как требует отдельного API)
+        # В реальности здесь нужен запрос к NM-Report API
+        return {
+            "orders_sum": orders_data.get("sum", 0),
+            "orders_count": orders_data.get("count", 0),
+            "sales_sum": sum(s.get('priceWithDiscount', 0) for s in valid_sales),
+            "sales_count": len(valid_sales),
+            "visitors": 0, # Заглушка до реализации NM-Report
+            "addToCart": 0
+        }
 
     async def get_my_stocks(self, token: str):
         if not token: return []

@@ -1,78 +1,96 @@
 import os
+import logging
 from celery import Celery
 from celery.schedules import crontab
 
+# Настройка логирования для конфигурации
+logger = logging.getLogger("CeleryConfig")
+
+# Получение URL Redis из переменных окружения
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-# Инициализация приложения
+# Инициализация приложения Celery
+# Имя 'wb_tasks' используется для идентификации в системе мониторинга (например, Flower)
 celery_app = Celery(
-    "wb_tasks",  # Имя приложения
+    "wb_tasks",
     broker=REDIS_URL,
     backend=REDIS_URL,
     include=[
-        'tasks.monitoring',
-        'tasks.seo',
-        'tasks.finance',
-        'tasks.supply',
-        # 'tasks.bidder', # В разработке
+        'tasks.monitoring',  # Проверка заказов, выкупов и сводки
+        'tasks.seo',         # Мониторинг позиций и генерация текстов
+        'tasks.finance',     # Синхронизация финансовых отчетов
+        'tasks.supply',      # Планирование поставок и анализ остатков
+        # 'tasks.bidder',    # Зарезервировано для модуля управления ставками
     ] 
 )
 
+# Детальная конфигурация параметров Celery
 celery_app.conf.update(
+    # Настройки сериализации данных
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
+    
+    # Локализация времени (важно для корректной работы crontab)
     timezone="Europe/Moscow",
     enable_utc=True,
     
-    # Настройки надежности соединения
+    # Настройки надежности соединения с брокером
     broker_connection_retry_on_startup=True,
-    broker_connection_max_retries=None,
+    broker_connection_max_retries=None,  # Бесконечные попытки переподключения
+    
+    # Оптимизация транспорта для работы в Docker-сетях
     broker_transport_options={
-        "visibility_timeout": 3600,
+        "visibility_timeout": 3600,      # Час на выполнение задачи перед возвратом в очередь
         "health_check_interval": 10,
         "socket_timeout": 15,
         "socket_connect_timeout": 15,
         "socket_keepalive": True,
     },
-    worker_prefetch_multiplier=1, 
-    task_acks_late=True,
     
-    # --- РАСПИСАНИЕ ЗАДАЧ (BEAT) ---
+    # Настройки производительности воркеров
+    worker_prefetch_multiplier=1,        # Воркер берет только одну задачу за раз (для тяжелых задач)
+    task_acks_late=True,                 # Подтверждение после выполнения (защита от падения воркера)
+    task_reject_on_worker_lost=True,     # Возврат в очередь, если воркер "упал"
+    
+    # --- РАСПИСАНИЕ ПЕРИОДИЧЕСКИХ ЗАДАЧ (CELERY BEAT) ---
     beat_schedule={
-        # 1. Мгновенные уведомления (Заказы/Выкупы)
-        # Проверяем каждые 10 минут
+        # 1. Мгновенные уведомления о заказах и выкупах
+        # Проверка каждые 10 минут. Логика дедупликации внутри задачи исключает спам.
         "check-new-orders-every-10m": {
             "task": "check_new_orders",
             "schedule": crontab(minute="*/10"), 
         },
 
-        # 2. [НОВОЕ] Часовая сводка (Аналитика в Telegram)
-        # Отправляем ровно в начале каждого часа
+        # 2. Часовая сводка (Аналитика продаж и воронка в Telegram)
+        # Отправляется ровно в 00 минут каждого часа (например, 10:00, 11:00)
         "send-hourly-summary": {
             "task": "send_hourly_summary",
             "schedule": crontab(minute=0), 
         },
 
-        # 3. Парсинг позиций и цен конкурентов
-        # Ставим на 15-ю минуту каждого часа, чтобы не грузить сервер одновременно со сводкой
+        # 3. Мониторинг позиций и цен конкурентов
+        # Запуск на 15-й минуте часа, чтобы не конфликтовать по ресурсам со сводкой
         "update-monitored-items-hourly": {
             "task": "update_all_monitored_items",
             "schedule": crontab(minute=15), 
         },
         
-        # 4. Синхронизация поставок (Склады)
-        # Раз в день утром (например, в 6:00)
+        # 4. Синхронизация данных о поставках и свободных слотах
+        # Выполняется раз в сутки в 6 утра (перед началом рабочего дня)
         "sync-supply-daily": {
             "task": "sync_supply_data",
             "schedule": crontab(hour=6, minute=0),
         },
 
-        # 5. Обучение AI моделей
-        # Глубокой ночью
+        # 5. Обучение и обновление AI моделей прогнозирования
+        # Ресурсоемкая задача, выполняется глубокой ночью в 3:30
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
             "schedule": crontab(hour=3, minute=30),
         }
     }
 )
+
+if __name__ == "__main__":
+    logger.info("Celery application configuration loaded.")
