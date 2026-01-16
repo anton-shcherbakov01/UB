@@ -144,6 +144,11 @@ services:
       - RUN_MIGRATIONS=false
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
     depends_on: 
       redis:
         condition: service_started
