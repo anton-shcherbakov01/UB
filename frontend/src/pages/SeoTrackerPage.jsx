@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Search, MapPin, Rocket, Info, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { 
+    Search, MapPin, Rocket, Info, CheckCircle, 
+    AlertTriangle, Loader2, RotateCcw, HelpCircle, 
+    Target, Globe, Zap, ArrowLeft
+} from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
-const SEOTrackerPage = () => {
+const SEOTrackerPage = ({ onNavigate }) => {
     const [sku, setSku] = useState('');
     const [query, setQuery] = useState('');
     const [geo, setGeo] = useState('moscow');
@@ -14,9 +18,18 @@ const SEOTrackerPage = () => {
     useEffect(() => {
         fetch(`${API_URL}/api/seo/regions`, { headers: getTgHeaders() })
             .then(r => r.json())
-            .then(setRegions)
+            .then(data => {
+                if (Array.isArray(data)) setRegions(data);
+            })
             .catch(() => {});
     }, []);
+
+    const handleReset = () => {
+        setSku('');
+        setQuery('');
+        setResult(null);
+        setLoading(false);
+    };
 
     const handleCheck = async () => {
         if (!sku || !query) return;
@@ -37,90 +50,208 @@ const SEOTrackerPage = () => {
     };
 
     return (
-        <div className="p-4 max-w-lg mx-auto pb-32 animate-in fade-in">
-            <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-2">
-                <Rocket className="text-indigo-600" />
-                SEO Радар
-            </h2>
-
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 space-y-4 relative">
-                <div>
-                    <label className="text-xs font-bold text-slate-400 ml-1">Артикул (SKU)</label>
-                    <input type="number" value={sku} onChange={e => setSku(e.target.value)}
-                        placeholder="12345678" className="w-full mt-1 p-3 bg-slate-50 rounded-xl font-mono text-lg outline-none focus:ring-2 ring-indigo-100"/>
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+            
+            {/* HEADER (В едином стиле с AI Стратегом) */}
+            <div className="flex justify-between items-stretch h-20">
+                <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-200 flex-1 mr-3 flex flex-col justify-center">
+                    <h1 className="text-xl font-black flex items-center gap-2">
+                        <Rocket className="text-cyan-300" size={20} /> SEO Радар
+                    </h1>
+                    <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider font-bold">Real-time Rank Tracking</p>
                 </div>
-                <div>
-                    <label className="text-xs font-bold text-slate-400 ml-1">Поисковой запрос</label>
-                    <input type="text" value={query} onChange={e => setQuery(e.target.value)}
-                        placeholder="платье женское" className="w-full mt-1 p-3 bg-slate-50 rounded-xl outline-none focus:ring-2 ring-indigo-100"/>
-                </div>
-                <div className="relative">
-                    <label className="text-xs font-bold text-slate-400 ml-1 flex items-center gap-1">
-                        <MapPin size={12}/> Гео-локация 
-                        <button onClick={() => setShowGeoInfo(!showGeoInfo)} className="text-indigo-400"><Info size={12}/></button>
-                    </label>
-                    <select value={geo} onChange={e => setGeo(e.target.value)}
-                        className="w-full mt-1 p-3 bg-slate-50 rounded-xl outline-none appearance-none bg-white border border-slate-100">
-                        {regions.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
-                    </select>
+                
+                <div className="flex flex-col gap-2 h-full">
+                    <button 
+                        onClick={() => setShowGeoInfo(!showGeoInfo)}
+                        className={`p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400'}`}
+                    >
+                        <HelpCircle size={20}/>
+                    </button>
                     
-                    {showGeoInfo && (
-                        <div className="absolute z-10 top-full mt-2 p-3 bg-slate-800 text-white text-xs rounded-xl shadow-xl w-full">
-                            <p className="font-bold mb-1">Как это работает?</p>
-                            Мы подменяем системные Cookie (x-geo-id) в браузере парсера. 
-                            Это заставляет Wildberries думать, что запрос идет из выбранного города.
-                            Влияет на наличие товара, сроки доставки и ранжирование.
-                        </div>
+                    {result && (
+                        <button 
+                            onClick={handleReset}
+                            className="bg-slate-100 p-3 rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                        >
+                            <RotateCcw size={20}/>
+                        </button>
                     )}
                 </div>
+            </div>
 
-                <button onClick={handleCheck} disabled={loading}
-                    className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg active:scale-95 transition-all flex justify-center items-center gap-2 shadow-lg shadow-indigo-200">
-                    {loading ? <Loader2 className="animate-spin" /> : <Search size={20} />}
-                    {loading ? "Сканирование..." : "Найти позицию"}
+            {/* ГЕО-ПОДСКАЗКА (Выпадающая) */}
+            {showGeoInfo && (
+                <div className="bg-slate-800 text-slate-200 p-4 rounded-3xl shadow-xl animate-in zoom-in-95 duration-200 text-xs leading-relaxed border-b-4 border-indigo-500">
+                    <div className="flex items-center gap-2 mb-2 text-indigo-300 font-bold uppercase tracking-widest">
+                        <Globe size={14}/> Как работает ГЕО?
+                    </div>
+                    Мы эмулируем запрос через конкретные дата-центры. Wildberries выдает разные результаты для Москвы, Казани или Хабаровска из-за **скорости доставки** (priority) и наличия товара на локальных складах. Используйте это, чтобы проверить видимость товара в ключевых регионах.
+                </div>
+            )}
+
+            {/* ФОРМА ПОИСКА */}
+            <div className="bg-white p-5 rounded-[32px] shadow-sm border border-slate-200 space-y-4">
+                <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1 mb-1 block tracking-widest">Артикул товара</label>
+                    <div className="relative">
+                        <Target className="absolute left-3 top-3.5 text-slate-300" size={18} />
+                        <input 
+                            type="number" 
+                            value={sku} 
+                            onChange={e => setSku(e.target.value)}
+                            placeholder="Например: 12345678" 
+                            className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-2xl font-mono text-lg outline-none focus:ring-2 ring-indigo-100 border border-slate-100 transition-all"
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1 mb-1 block tracking-widest">Ключевой запрос</label>
+                    <div className="relative">
+                        <Search className="absolute left-3 top-3.5 text-slate-300" size={18} />
+                        <input 
+                            type="text" 
+                            value={query} 
+                            onChange={e => setQuery(e.target.value)}
+                            placeholder="Например: платье летнее" 
+                            className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-2xl font-bold outline-none focus:ring-2 ring-indigo-100 border border-slate-100 transition-all"
+                        />
+                    </div>
+                </div>
+
+                <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1 mb-1 block tracking-widest">Регион сканирования</label>
+                    <div className="relative">
+                        <MapPin className="absolute left-3 top-3.5 text-slate-300" size={18} />
+                        <select 
+                            value={geo} 
+                            onChange={e => setGeo(e.target.value)}
+                            className="w-full pl-10 pr-10 py-3 bg-slate-50 rounded-2xl font-bold outline-none border border-slate-100 appearance-none focus:ring-2 ring-indigo-100"
+                        >
+                            {regions.length > 0 ? regions.map(r => (
+                                <option key={r.key} value={r.key}>{r.label}</option>
+                            )) : <option value="moscow">Москва</option>}
+                        </select>
+                        <div className="absolute right-3 top-4 pointer-events-none text-slate-400">
+                            <Info size={16}/>
+                        </div>
+                    </div>
+                </div>
+
+                <button 
+                    onClick={handleCheck} 
+                    disabled={loading || !sku || !query}
+                    className={`w-full py-4 rounded-2xl font-black text-lg transition-all flex justify-center items-center gap-3 shadow-lg ${
+                        loading || !sku || !query 
+                        ? 'bg-slate-100 text-slate-300' 
+                        : 'bg-slate-900 text-white shadow-indigo-100 active:scale-95'
+                    }`}
+                >
+                    {loading ? <Loader2 className="animate-spin" /> : <Zap size={20} className="text-yellow-400 fill-current" />}
+                    {loading ? "Ищем в выдаче..." : "Запустить Радар"}
                 </button>
             </div>
 
+            {/* РЕЗУЛЬТАТЫ */}
             {result && (
-                <div className="mt-6 animate-in slide-in-from-bottom-4">
+                <div className="mt-2 animate-in slide-in-from-bottom-8 duration-500">
                     {result.status === 'success' ? (
-                        <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-3xl relative overflow-hidden">
-                            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-100 rounded-full blur-2xl -mr-10 -mt-10"></div>
-                            <div className="flex items-center gap-2 text-emerald-700 font-bold mb-2 relative z-10">
-                                <CheckCircle size={20}/> Найдено!
-                            </div>
-                            <div className="flex items-baseline gap-2 relative z-10">
-                                <span className="text-6xl font-black text-emerald-800">#{result.data.absolute_pos}</span>
-                                <span className="text-sm text-emerald-600 font-bold">место</span>
-                            </div>
-                            <div className="mt-4 flex gap-3 relative z-10">
-                                <div className="bg-white/80 px-4 py-2 rounded-xl text-xs font-bold text-emerald-800 border border-emerald-100">
-                                    Страница {result.data.page}
+                        <div className="space-y-4">
+                            <div className="bg-white border-2 border-emerald-100 p-6 rounded-[32px] relative overflow-hidden shadow-xl shadow-emerald-50">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full blur-3xl -mr-16 -mt-16 opacity-60"></div>
+                                
+                                <div className="flex items-center gap-2 text-emerald-600 font-black text-xs uppercase tracking-widest mb-4 relative z-10">
+                                    <CheckCircle size={16}/> Позиция найдена
                                 </div>
-                                <div className="bg-white/80 px-4 py-2 rounded-xl text-xs font-bold text-emerald-800 border border-emerald-100">
-                                    Позиция {result.data.position}
+
+                                <div className="flex items-end gap-3 relative z-10">
+                                    <div className="text-7xl font-black text-slate-900 tracking-tighter">
+                                        #{result.data.absolute_pos}
+                                    </div>
+                                    <div className="mb-2">
+                                        <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Место</div>
+                                        <div className="text-emerald-500 font-black text-sm">В ТОП-500</div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3 mt-6 relative z-10">
+                                    <div className="bg-slate-50 border border-slate-100 p-3 rounded-2xl text-center">
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Страница</div>
+                                        <div className="text-xl font-black text-slate-800">{result.data.page}</div>
+                                    </div>
+                                    <div className="bg-slate-50 border border-slate-100 p-3 rounded-2xl text-center">
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">На странице</div>
+                                        <div className="text-xl font-black text-slate-800">{result.data.position}</div>
+                                    </div>
+                                </div>
+
+                                {result.data.is_advertising && (
+                                    <div className="mt-4 p-3 bg-indigo-600 rounded-2xl text-white flex items-center justify-between shadow-lg shadow-indigo-100">
+                                        <div className="flex items-center gap-2">
+                                            <Zap size={16} className="text-yellow-300 fill-current" />
+                                            <span className="text-xs font-black uppercase tracking-wider">Рекламное буст-место</span>
+                                        </div>
+                                        <div className="text-[10px] font-bold bg-white/20 px-2 py-1 rounded-lg">
+                                            CPM: {result.data.cpm || 'Auto'}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Полезная карточка после нахождения */}
+                            <div className="bg-indigo-50 p-5 rounded-3xl border border-indigo-100 flex gap-4">
+                                <div className="bg-white p-2 h-10 w-10 rounded-xl shadow-sm flex items-center justify-center shrink-0">
+                                    <Info className="text-indigo-600" size={20}/>
+                                </div>
+                                <div className="text-xs text-indigo-900 leading-snug font-medium">
+                                    <b>Совет:</b> Если вы видите рекламную пометку, значит текущая позиция удерживается за счет ставок. Чтобы расти органически, работайте над CTR карточки и скоростью доставки в выбранном ГЕО.
                                 </div>
                             </div>
-                            {result.data.is_advertising && (
-                                <div className="mt-3 relative z-10 bg-indigo-100 text-indigo-700 px-3 py-2 rounded-xl text-xs font-bold border border-indigo-200 inline-block">
-                                    ⚡ Рекламное место (CPM: {result.data.cpm || 'Auto'})
-                                </div>
-                            )}
                         </div>
                     ) : (
-                        <div className="bg-white p-6 rounded-3xl border border-slate-200 text-center shadow-sm">
-                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <AlertTriangle className="text-slate-400" size={32}/>
+                        <div className="bg-white p-8 rounded-[32px] border border-slate-200 text-center shadow-lg">
+                            <div className="w-20 h-20 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-rose-100">
+                                <AlertTriangle className="text-rose-500" size={40}/>
                             </div>
-                            <div className="font-bold text-slate-800 text-lg">Не найдено</div>
-                            <div className="text-sm text-slate-500 mt-2">
-                                Товар находится за пределами Топ-500 или не ранжируется по запросу "{query}" в регионе {geo}.
+                            <div className="font-black text-slate-800 text-xl uppercase tracking-tight">Вне зоны радара</div>
+                            <div className="text-sm text-slate-500 mt-3 font-medium leading-relaxed">
+                                Товар не обнаружен в первых 500 результатах. <br/>
+                                Это может быть связано с нулевыми остатками на складах региона <b>{geo}</b> или отсутствием индексации по запросу <b>"{query}"</b>.
                             </div>
+                            <button 
+                                onClick={handleReset}
+                                className="mt-6 text-indigo-600 font-bold text-sm border-b-2 border-indigo-100 pb-1"
+                            >
+                                Попробовать другой запрос
+                            </button>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* ИНСТРУКЦИЯ (Если ничего еще не искали) */}
+            {!result && !loading && (
+                <div className="bg-slate-50 border border-dashed border-slate-300 p-6 rounded-[32px]">
+                    <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest mb-4 text-center">Как пользоваться</h3>
+                    <div className="space-y-4">
+                        <div className="flex gap-3">
+                            <div className="text-indigo-500 font-black">01.</div>
+                            <div className="text-xs text-slate-500 font-medium">Введите артикул (SKU) вашего товара или товара конкурента.</div>
+                        </div>
+                        <div className="flex gap-3">
+                            <div className="text-indigo-500 font-black">02.</div>
+                            <div className="text-xs text-slate-500 font-medium">Укажите ключевую фразу. Радар проверит позиции именно по ней.</div>
+                        </div>
+                        <div className="flex gap-3">
+                            <div className="text-indigo-500 font-black">03.</div>
+                            <div className="text-xs text-slate-500 font-medium">Выберите регион. Это критично для понимания вашей "видимости" в разных частях страны.</div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
     );
 };
+
 export default SEOTrackerPage;
