@@ -103,7 +103,9 @@ class QuotaCheck:
                 # Reset monthly usage
                 days_passed = (now - user.usage_reset_date).days
                 if days_passed >= 30:
-                    user.ai_requests_used = 0
+                    # Reset usage for ai_requests if that's the resource being checked
+                    if self.resource_key == "ai_requests":
+                        user.ai_requests_used = 0
                     # Set next reset date (30 days from now)
                     user.usage_reset_date = now + timedelta(days=30)
                     db.add(user)
@@ -114,6 +116,12 @@ class QuotaCheck:
             
             # Check usage
             if self.resource_key == "ai_requests":
+                # Initialize values if None
+                if user.ai_requests_used is None:
+                    user.ai_requests_used = 0
+                if user.extra_ai_balance is None:
+                    user.extra_ai_balance = 0
+                
                 # Check monthly limit first
                 if user.ai_requests_used >= monthly_limit:
                     # Check extra balance
@@ -146,6 +154,12 @@ async def increment_usage(
         db: Database session (optional, will create if not provided)
     """
     if resource_key == "ai_requests":
+        # Initialize values if None
+        if user.ai_requests_used is None:
+            user.ai_requests_used = 0
+        if user.extra_ai_balance is None:
+            user.extra_ai_balance = 0
+        
         # Get limit from plan
         monthly_limit = get_limit(user.subscription_plan, resource_key)
         
