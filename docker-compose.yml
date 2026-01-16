@@ -30,8 +30,11 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-    env_file:
-      - ./backend/.env
+    environment:
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     ulimits:
       nofile:
         soft: 262144
@@ -70,8 +73,12 @@ services:
       - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      # Явно задаем настройки подключения к ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
       - HEADLESS=True
       # DEBUG_MODE=True  <-- ЗАКОММЕНТИРОВАНО (Нормальный режим)
     depends_on: 
@@ -103,8 +110,12 @@ services:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      # И здесь тоже явно задаем настройки ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
       - HEADLESS=True
     depends_on: 
       db:
