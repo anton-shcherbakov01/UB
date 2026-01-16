@@ -3,7 +3,7 @@ import io
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -13,6 +13,7 @@ from fpdf import FPDF
 from database import get_db, User, SeoPosition
 from dependencies import get_current_user
 from tasks import generate_seo_task, check_seo_position_task, cluster_keywords_task
+from services.wb_search import wb_search_service, GEO_ZONES
 from parser_service import parser_service
 
 logger = logging.getLogger("SEO-Router")
@@ -39,6 +40,38 @@ class SeoPdfRequest(BaseModel):
     description: str
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
+
+@router.get("/position")
+async def check_position(
+    query: str, 
+    sku: int, 
+    geo: str = Query("moscow", description="Region key: moscow, spb, kazan, krasnodar, ekb, belarus...")
+):
+    """
+    Мгновенная проверка позиции через Mobile API
+    """
+    if geo not in GEO_ZONES:
+        geo = "moscow" # Fallback
+
+    result = await wb_search_service.get_sku_position(query, sku, geo=geo)
+    
+    if not result['found']:
+        return {
+            "status": "not_found", 
+            "message": f"Артикул не найден в топ-{result.get('total_products', 'N')} товаров",
+            "geo": geo
+        }
+    
+    return {
+        "status": "success",
+        "data": result
+    }
+
+@router.get("/regions")
+async def get_regions():
+    """Отдает список доступных регионов для фронтенда"""
+    # Превращаем словарь в список для удобства фронта
+    return [{"key": k, "label": k.upper()} for k in GEO_ZONES.keys()]
 
 @router.post("/seo/track")
 async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):
