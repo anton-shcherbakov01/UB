@@ -9,7 +9,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database import get_db, User
-from dependencies import get_current_user, get_redis_client
+# Import directly from dependencies.py file to avoid circular dependency with __init__.py
+import sys
+import os
+import importlib.util
+
+# Get path to parent dependencies.py file
+_parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_deps_file = os.path.join(_parent_dir, 'dependencies.py')
+
+# Import from the file directly
+if os.path.exists(_deps_file):
+    spec = importlib.util.spec_from_file_location("_deps_file_module", _deps_file)
+    _deps_file_module = importlib.util.module_from_spec(spec)
+    sys.modules['_deps_file_module'] = _deps_file_module
+    spec.loader.exec_module(_deps_file_module)
+    get_current_user = _deps_file_module.get_current_user
+    get_redis_client = _deps_file_module.get_redis_client
+else:
+    # Fallback: import from parent package
+    if _parent_dir not in sys.path:
+        sys.path.insert(0, _parent_dir)
+    # Use importlib to load the file directly, not the package
+    spec = importlib.util.spec_from_file_location("_deps_file_module_fallback", _deps_file)
+    _deps_file_module = importlib.util.module_from_spec(spec)
+    sys.modules['_deps_file_module_fallback'] = _deps_file_module
+    spec.loader.exec_module(_deps_file_module)
+    get_current_user = _deps_file_module.get_current_user
+    get_redis_client = _deps_file_module.get_redis_client
+
 from config.plans import get_plan_config, has_feature, get_limit
 
 logger = logging.getLogger("Quota")
