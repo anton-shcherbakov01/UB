@@ -14,8 +14,12 @@ class NotifyConfig(BaseModel):
     notify_new_orders: bool
     notify_buyouts: bool
     notify_hourly_stats: bool
+    summary_interval: int # 1, 3, 6, 12, 24
     show_daily_revenue: bool
     show_funnel: bool
+
+    class Config:
+        from_attributes = True # Pydantic V2 [cite: 3]
 
 @router.get("/settings", response_model=NotifyConfig)
 async def get_settings(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -24,7 +28,6 @@ async def get_settings(user: User = Depends(get_current_user), db: AsyncSession 
     settings = res.scalar_one_or_none()
     
     if not settings:
-        # Создаем дефолтные
         settings = NotificationSettings(user_id=user.id)
         db.add(settings)
         await db.commit()
@@ -45,6 +48,7 @@ async def update_settings(
     settings.notify_new_orders = config.notify_new_orders
     settings.notify_buyouts = config.notify_buyouts
     settings.notify_hourly_stats = config.notify_hourly_stats
+    settings.summary_interval = config.summary_interval
     settings.show_daily_revenue = config.show_daily_revenue
     settings.show_funnel = config.show_funnel
     

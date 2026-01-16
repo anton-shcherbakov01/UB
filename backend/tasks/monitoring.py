@@ -52,99 +52,58 @@ def update_all_monitored_items():
 
 # --- НОВАЯ ЛОГИКА УВЕДОМЛЕНИЙ (Telegram Bot) ---
 
-def get_redis_conn():
-    # Соединение с Redis для проверки дублей
+def get_redis_client():
     return redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
 
-async def process_user_notifications(user, settings, r_client):
-    """Проверка новых событий и отправка в ТГ"""
+async def notify_user_events(user, settings, r_client):
     if not user.wb_api_token or not user.telegram_id: return
+    orders_key = f"notif:seen:orders:{user.id}"
+    sales_key = f"notif:seen:sales:{user.id}"
 
-    # Ключи в Redis для отслеживания уже отправленного
-    orders_key = f"seen_orders:{user.id}"
-    sales_key = f"seen_sales:{user.id}"
-
-    # 1. ЗАКАЗЫ
     if settings.notify_new_orders:
-        try:
-            # Запрашиваем заказы с момента последней проверки
-            new_orders = await wb_api_service.get_new_orders_since(user.wb_api_token, user.last_order_check)
-            
-            for order in new_orders:
-                srid = order.get('srid')
-                if not srid or r_client.sismember(orders_key, srid):
-                    continue
-                
-                # Помечаем как отправленное
-                r_client.sadd(orders_key, srid)
-                r_client.expire(orders_key, 172800) # 48 часов
+        orders = await wb_api_service.get_new_orders_since(user.wb_api_token, user.last_order_check)
+        for o in orders:
+            srid = o.get('srid')
+            if not srid or r_client.sismember(orders_key, srid): continue
+            r_client.sadd(orders_key, srid)
+            r_client.expire(orders_key, 172800)
+            price = o.get('priceWithDiscount', 0)
+            msg = f"⚡️ <b>Новый заказ!</b>\n📦 {o.get('subject')} | <code>{o.get('supplierArticle')}</code>\n💰 Сумма: <b>{price:,.0f} ₽</b>\n📍 {o.get('warehouseName')} ➡️ {o.get('oblastOkrugName')}\n"
+            await bot_service.send_message(user.telegram_id, msg)
 
-                price = order.get('priceWithDiscount', 0)
-                msg = f"⚡️ <b>Новый заказ!</b>\n"
-                msg += f"📦 {order.get('subject')} | <code>{order.get('supplierArticle')}</code>\n"
-                msg += f"💰 Сумма: <b>{price:,.0f} ₽</b>\n"
-                msg += f"📍 Склад: {order.get('warehouseName')}\n"
-                
-                if settings.show_daily_revenue:
-                    msg += f"\n<i>Статистика за день доступна в ежечасной сводке.</i>"
-                
-                await bot_service.send_message(user.telegram_id, msg)
-        except Exception as e:
-            logger.error(f"Order notify error for {user.id}: {e}")
-
-    # 2. ВЫКУПЫ
     if settings.notify_buyouts:
-        try:
-            df = (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
-            sales = await wb_api_service.get_sales_since(user.wb_api_token, df)
-            
-            for sale in sales:
-                sale_id = sale.get('saleID')
-                if not sale_id or str(sale_id).startswith('R') or r_client.sismember(sales_key, sale_id):
-                    continue
-
-                r_client.sadd(sales_key, sale_id)
-                r_client.expire(sales_key, 172800)
-
-                price = sale.get('priceWithDiscount', 0)
-                msg = f"💵 <b>Товар выкуплен!</b>\n"
-                msg += f"📦 {sale.get('subject')} | <code>{sale.get('supplierArticle')}</code>\n"
-                msg += f"💰 Выручка: <b>{price:,.0f} ₽</b>"
-                
-                await bot_service.send_message(user.telegram_id, msg)
-        except Exception as e:
-            logger.error(f"Sale notify error for {user.id}: {e}")
+        date_from = (datetime.utcnow() - timedelta(minutes=30)).isoformat()
+        sales = await wb_api_service.get_sales_since(user.wb_api_token, date_from)
+        for s in sales:
+            sale_id = s.get('saleID')
+            if not sale_id or str(sale_id).startswith('R') or r_client.sismember(sales_key, sale_id): continue
+            r_client.sadd(sales_key, sale_id)
+            r_client.expire(sales_key, 172800)
+            price = s.get('priceWithDiscount', 0)
+            msg = f"💵 <b>Товар выкуплен!</b>\n📦 {s.get('subject')} | <code>{s.get('supplierArticle')}</code>\n💰 К перечислению: <b>{price:,.0f} ₽</b>"
+            await bot_service.send_message(user.telegram_id, msg)
 
 @celery_app.task(name="check_new_orders")
 def check_new_orders():
-    """Задача проверки заказов (раз в 10 мин)"""
     session = SyncSessionLocal()
     r_client = get_redis_client()
     try:
-        # Ищем пользователей с токеном и включенными уведами
-        users = session.query(User).join(NotificationSettings).filter(
-            User.wb_api_token.isnot(None),
-            (NotificationSettings.notify_new_orders == True) | (NotificationSettings.notify_buyouts == True)
-        ).all()
-        
+        users = session.query(User).join(NotificationSettings).filter(User.wb_api_token.isnot(None)).all()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
         for user in users:
-            loop.run_until_complete(process_user_notifications(user, user.notification_settings, r_client))
-            # Обновляем время проверки
-            user.last_order_check = datetime.now()
+            loop.run_until_complete(notify_user_events(user, user.notification_settings, r_client))
+            user.last_order_check = datetime.utcnow()
             session.commit()
-            
         loop.close()
-    finally:
-        session.close()
+    finally: session.close()
 
 @celery_app.task(name="send_hourly_summary")
 def send_hourly_summary():
-    """Задача часовой сводки"""
+    """Сводка с учетом персонального интервала пользователя"""
     session = SyncSessionLocal()
     try:
+        # Берем пользователей, у которых включена сводка
         users = session.query(User).join(NotificationSettings).filter(
             User.wb_api_token.isnot(None),
             NotificationSettings.notify_hourly_stats == True
@@ -152,77 +111,25 @@ def send_hourly_summary():
         
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        for user in users:
-            try:
-                stats = loop.run_until_complete(wb_api_service.get_statistics_today(user.wb_api_token))
-                
-                msg = f"📊 <b>Сводка на {datetime.now().strftime('%H:%M')}</b>\n"
-                msg += f"➖➖➖➖➖➖➖➖\n"
-                msg += f"💰 Заказов сегодня: <b>{stats['orders_sum']:,.0f} ₽</b> ({stats['orders_count']} шт)\n"
-                msg += f"💵 Выкупов сегодня: <b>{stats['sales_sum']:,.0f} ₽</b> ({stats['sales_count']} шт)\n"
-                
-                if user.notification_settings.show_funnel:
-                    msg += f"\n<b>Аналитика:</b>\n"
-                    msg += f"👁 Просмотры: {stats['visitors']}\n"
-                    msg += f"🛒 Корзины: {stats['addToCart']}"
-                
-                loop.run_until_complete(bot_service.send_message(user.telegram_id, msg))
-            except: continue
-            
-        loop.close()
-    finally:
-        session.close()
+        now = datetime.utcnow()
 
-# --- Celery Tasks для Уведомлений ---
-
-@celery_app.task(name="check_new_orders")
-def check_new_orders():
-    """
-    Задача запускается часто (каждые 5-10 мин).
-    Проверяет новые заказы/выкупы и шлет мгновенные уведомления.
-    """
-    session = SyncSessionLocal()
-    r_redis = get_redis_conn()
-    
-    try:
-        # Загружаем пользователей вместе с настройками
-        users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         for user in users:
-            # Если настроек нет, пропускаем (или создаем дефолтные, если логика позволяет)
-            if not user.notification_settings:
-                continue 
-                
-            loop.run_until_complete(process_user_events(user, user.notification_settings, r_redis))
-            
-        loop.close()
-    except Exception as e:
-        logger.error(f"Global order check failed: {e}")
-    finally:
-        session.close()
-
-@celery_app.task(name="send_hourly_summary")
-def send_hourly_summary_task():
-    """
-    Задача запускается раз в час.
-    Шлет сводку по выручке и воронке.
-    """
-    session = SyncSessionLocal()
-    try:
-        users = session.query(User).filter(User.wb_api_token.isnot(None)).all()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        for user in users:
-            if user.notification_settings and user.notification_settings.notify_hourly_stats:
-                loop.run_until_complete(send_user_summary(user, user.notification_settings))
+            settings = user.notification_settings
+            # Проверяем, пришло ли время отправки по интервалу
+            last_sent = settings.last_summary_at or (now - timedelta(hours=settings.summary_interval))
+            if (now - last_sent).total_seconds() >= (settings.summary_interval * 3600 - 60):
+                try:
+                    stats = loop.run_until_complete(wb_api_service.get_statistics_today(user.wb_api_token))
+                    msg = f"📊 <b>Сводка за сегодня</b> ({datetime.now().strftime('%H:%M')})\n➖➖➖➖➖➖➖➖\n💰 Заказы: <b>{stats['orders_sum']:,.0f} ₽</b> ({stats['orders_count']} шт)\n💵 Выкупы: <b>{stats['sales_sum']:,.0f} ₽</b> ({stats['sales_count']} шт)\n"
+                    if settings.show_funnel and stats.get('visitors', 0) > 0:
+                        msg += f"\n<b>Воронка:</b>\n👁 Просмотры: {stats['visitors']}\n🛒 Корзины: {stats['addToCart']}\n"
+                    
+                    loop.run_until_complete(bot_service.send_message(user.telegram_id, msg))
+                    # Обновляем время последней отправки
+                    settings.last_summary_at = now
+                    session.commit()
+                except Exception as e:
+                    logger.error(f"Summary failed for {user.id}: {e}")
         
         loop.close()
-    except Exception as e:
-        logger.error(f"Global summary send failed: {e}")
-    finally:
-        session.close()
+    finally: session.close()

@@ -67,15 +67,17 @@ class NotificationSettings(Base):
     user_id = Column(Integer, ForeignKey("users.id"), unique=True)
     
     # Тумблеры
-    notify_new_orders = Column(Boolean, default=True)      # О новых заказах
-    notify_buyouts = Column(Boolean, default=True)         # О выкупах (продажах)
-    notify_hourly_stats = Column(Boolean, default=False)   # Часовая сводка
+    notify_new_orders = Column(Boolean, default=True)
+    notify_buyouts = Column(Boolean, default=True)
+    notify_hourly_stats = Column(Boolean, default=False)
     
-    # Детализация мгновенных сообщений
-    show_daily_revenue = Column(Boolean, default=True)     # Показывать выручку за день
+    # Расписание
+    summary_interval = Column(Integer, default=1) # Интервал в часах (1, 3, 6, 12, 24) [cite: 14]
+    last_summary_at = Column(DateTime, nullable=True) # Время последней отправки сводки
     
-    # Детализация сводки
-    show_funnel = Column(Boolean, default=True)            # Воронка (посетители -> корзина -> заказ)
+    # Детализация
+    show_daily_revenue = Column(Boolean, default=True)
+    show_funnel = Column(Boolean, default=True)
     
     user = relationship("User", back_populates="notification_settings")
 

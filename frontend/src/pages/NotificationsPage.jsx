@@ -1,26 +1,37 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
-const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) => (
-    <div className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${checked ? `bg-${color}-100 text-${color}-600` : 'bg-slate-100 text-slate-400'}`}>
-                <Icon size={20} />
+// Карта цветов для Tailwind, чтобы избежать динамических строк, которые Tailwind не компилирует
+const COLOR_MAPS = {
+    indigo: { bg: 'bg-indigo-500', light: 'bg-indigo-100', text: 'text-indigo-600' },
+    emerald: { bg: 'bg-emerald-500', light: 'bg-emerald-100', text: 'text-emerald-600' },
+    blue: { bg: 'bg-blue-500', light: 'bg-blue-100', text: 'text-blue-600' },
+    violet: { bg: 'bg-violet-500', light: 'bg-violet-100', text: 'text-violet-600' },
+};
+
+const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) => {
+    const colors = COLOR_MAPS[color] || COLOR_MAPS.indigo;
+    return (
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl ${checked ? colors.light + ' ' + colors.text : 'bg-slate-100 text-slate-400'}`}>
+                    <Icon size={20} />
+                </div>
+                <div>
+                    <div className="font-bold text-slate-800 text-sm">{label}</div>
+                    {description && <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{description}</div>}
+                </div>
             </div>
-            <div>
-                <div className="font-bold text-slate-800 text-sm">{label}</div>
-                {description && <div className="text-xs text-slate-400 mt-0.5">{description}</div>}
-            </div>
+            <button 
+                onClick={() => onChange(!checked)}
+                className={`w-12 h-7 rounded-full transition-colors relative border border-transparent ${checked ? colors.bg : 'bg-slate-300'}`}
+            >
+                <div className={`absolute top-0.5 left-0.5 w-5.5 h-5.5 bg-white rounded-full transition-transform shadow-md ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
         </div>
-        <button 
-            onClick={() => onChange(!checked)}
-            className={`w-12 h-7 rounded-full transition-colors relative ${checked ? `bg-${color}-500` : 'bg-slate-200'}`}
-        >
-            <div className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition-transform shadow-sm ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-        </button>
-    </div>
-);
+    );
+};
 
 const NotificationsPage = ({ onNavigate }) => {
     const [settings, setSettings] = useState(null);
@@ -37,97 +48,90 @@ const NotificationsPage = ({ onNavigate }) => {
     const handleSave = async () => {
         setSaving(true);
         try {
-            await fetch(`${API_URL}/api/notifications/settings`, {
+            const res = await fetch(`${API_URL}/api/notifications/settings`, {
                 method: 'POST',
                 headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify(settings)
             });
-            alert("Настройки сохранены");
-        } catch (e) {
-            alert("Ошибка сохранения");
-        } finally {
-            setSaving(false);
-        }
+            if (res.ok) alert("Настройки успешно сохранены!");
+        } catch (e) { alert("Ошибка при сохранении"); }
+        finally { setSaving(false); }
     };
 
     const update = (key, val) => setSettings(prev => ({ ...prev, [key]: val }));
 
-    if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600"/></div>;
+    if (loading) return <div className="h-screen flex items-center justify-center bg-[#F4F4F9]"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
 
     return (
-        <div className="p-4 space-y-6 pb-24 animate-in fade-in">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    {onNavigate && <button onClick={() => onNavigate('profile')} className="p-2 bg-white rounded-xl border border-slate-100"><ArrowLeft size={20} className="text-slate-500"/></button>}
-                    <div>
-                        <h1 className="text-2xl font-black text-slate-900">Уведомления</h1>
-                        <p className="text-slate-500 text-xs font-medium">Настройка бота</p>
-                    </div>
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
+            <div className="flex items-center gap-3">
+                <button onClick={() => onNavigate('profile')} className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm"><ArrowLeft size={20} className="text-slate-500"/></button>
+                <div>
+                    <h1 className="text-2xl font-black text-slate-900 leading-none">Уведомления</h1>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-wider">Настройка Telegram бота</p>
                 </div>
             </div>
 
-            {/* Main Toggles */}
-            <div className="space-y-3">
-                <h3 className="font-bold text-slate-400 text-xs uppercase tracking-wider px-2">Мгновенные события</h3>
-                <Toggle 
-                    label="Новые заказы" 
-                    description="Присылать уведомление сразу при поступлении заказа"
-                    checked={settings.notify_new_orders} 
-                    onChange={v => update('notify_new_orders', v)}
-                    icon={ShoppingCart} color="indigo"
-                />
-                <Toggle 
-                    label="Выкупы и Продажи" 
-                    description="Уведомлять, когда клиент забрал товар"
-                    checked={settings.notify_buyouts} 
-                    onChange={v => update('notify_buyouts', v)}
-                    icon={DollarSign} color="emerald"
-                />
+            <div className="space-y-4">
+                <section className="space-y-3">
+                    <h3 className="font-bold text-slate-400 text-[10px] uppercase tracking-widest px-2">События</h3>
+                    <Toggle 
+                        label="Новые заказы" description="Мгновенно при поступлении заказа"
+                        checked={settings.notify_new_orders} onChange={v => update('notify_new_orders', v)}
+                        icon={ShoppingCart} color="indigo"
+                    />
+                    <Toggle 
+                        label="Выкупы" description="Когда клиент оплатил и забрал товар"
+                        checked={settings.notify_buyouts} onChange={v => update('notify_buyouts', v)}
+                        icon={DollarSign} color="emerald"
+                    />
+                </section>
+
+                <section className="space-y-3">
+                    <h3 className="font-bold text-slate-400 text-[10px] uppercase tracking-widest px-2">Аналитика и Расписание</h3>
+                    <Toggle 
+                        label="Периодическая сводка" description="Отчет по выручке и воронке за день"
+                        checked={settings.notify_hourly_stats} onChange={v => update('notify_hourly_stats', v)}
+                        icon={BarChart3} color="violet"
+                    />
+                    
+                    {settings.notify_hourly_stats && (
+                        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4 animate-in slide-in-from-top-2">
+                            <div>
+                                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2 mb-2">
+                                    <Clock size={12}/> Частота отправки сводки
+                                </label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {[1, 3, 6, 12, 24].map(h => (
+                                        <button 
+                                            key={h}
+                                            onClick={() => update('summary_interval', h)}
+                                            className={`py-2 rounded-xl text-xs font-bold border transition-all ${
+                                                settings.summary_interval === h 
+                                                ? 'bg-violet-600 border-violet-600 text-white shadow-lg shadow-violet-100' 
+                                                : 'bg-slate-50 border-slate-100 text-slate-500'
+                                            }`}
+                                        >
+                                            {h === 1 ? 'Раз в час' : h === 24 ? 'Раз в день' : `Каждые ${h}ч`}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <Toggle 
+                                label="Воронка продаж" description="Добавить данные о просмотрах и корзинах"
+                                checked={settings.show_funnel} onChange={v => update('show_funnel', v)}
+                                icon={Filter} color="blue"
+                            />
+                        </div>
+                    )}
+                </section>
             </div>
 
-            {/* Details Config */}
-            {(settings.notify_new_orders || settings.notify_buyouts) && (
-                <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
-                    <h3 className="font-bold text-slate-400 text-xs uppercase tracking-wider px-2">Детализация сообщений</h3>
-                    <Toggle 
-                        label="Показывать дневную выручку" 
-                        description="Добавлять сумму продаж за день в каждое уведомление"
-                        checked={settings.show_daily_revenue} 
-                        onChange={v => update('show_daily_revenue', v)}
-                        icon={Filter} color="blue"
-                    />
-                </div>
-            )}
-
-            {/* Summary */}
-            <div className="space-y-3">
-                <h3 className="font-bold text-slate-400 text-xs uppercase tracking-wider px-2">Аналитика</h3>
-                <Toggle 
-                    label="Часовая сводка" 
-                    description="Присылать отчет каждый час (Выручка, Заказы)"
-                    checked={settings.notify_hourly_stats} 
-                    onChange={v => update('notify_hourly_stats', v)}
-                    icon={BarChart3} color="violet"
-                />
-                {settings.notify_hourly_stats && (
-                    <Toggle 
-                        label="Воронка продаж" 
-                        description="Посетители -> Корзина -> Заказ в сводке"
-                        checked={settings.show_funnel} 
-                        onChange={v => update('show_funnel', v)}
-                        icon={Filter} color="violet"
-                    />
-                )}
-            </div>
-
-            {/* Save Button */}
             <button 
-                onClick={handleSave}
-                disabled={saving}
-                className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all fixed bottom-24 left-4 right-4 max-w-[calc(100%-2rem)] mx-auto"
+                onClick={handleSave} disabled={saving}
+                className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all sticky bottom-4"
             >
-                {saving ? <Loader2 className="animate-spin"/> : <Save size={20}/>}
+                {saving ? <Loader2 className="animate-spin" size={20}/> : <Save size={20}/>}
                 Сохранить настройки
             </button>
         </div>
