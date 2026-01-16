@@ -57,6 +57,28 @@ class User(Base):
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
+class SlotMonitor(Base):
+    """
+    Таблица для мониторинга слотов (Бот).
+    Пользователь подписывается на склад, и если коэффициент <= target_coefficient,
+    ему приходит уведомление в Telegram.
+    """
+    __tablename__ = "slot_monitors"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    warehouse_id = Column(Integer)     # ID склада WB
+    warehouse_name = Column(String)    # Имя (Кешируем для удобства)
+    
+    target_coefficient = Column(Integer, default=0) # Уведомлять если <= этому значению (обычно 0 или 1)
+    box_type = Column(String, default="all") # "box", "pallet" или "all"
+    
+    is_active = Column(Boolean, default=True)
+    last_notified_at = Column(DateTime, nullable=True) # Чтобы не спамить каждую минуту
+    
+    user = relationship("User", back_populates="slot_monitors")
+
 class SupplySettings(Base):
     """
     Персональные настройки логистики для расчета поставок.

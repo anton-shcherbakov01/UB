@@ -70,3 +70,55 @@ async def get_slots(
         r_client.setex(cache_key, 600, json.dumps(data))
 
     return data
+
+# --- Monitoring (Bot) Endpoints ---
+
+@router.get("/monitors", response_model=List[MonitorResponse])
+async def get_monitors(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Список складов на отслеживании"""
+    result = await db.execute(select(SlotMonitor).where(SlotMonitor.user_id == user.id))
+    return result.scalars().all()
+
+@router.post("/monitors")
+async def add_monitor(
+    data: MonitorCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Добавить склад в отслеживание"""
+    # Проверка дублей
+    existing = await db.execute(select(SlotMonitor).where(
+        SlotMonitor.user_id == user.id,
+        SlotMonitor.warehouse_id == data.warehouse_id
+    ))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Этот склад уже отслеживается")
+
+    monitor = SlotMonitor(
+        user_id=user.id,
+        warehouse_id=data.warehouse_id,
+        warehouse_name=data.warehouse_name,
+        target_coefficient=data.target_coefficient,
+        box_type=data.box_type
+    )
+    db.add(monitor)
+    await db.commit()
+    await db.refresh(monitor)
+    return monitor
+
+@router.delete("/monitors/{warehouse_id}")
+async def delete_monitor(
+    warehouse_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Удалить склад из отслеживания"""
+    await db.execute(delete(SlotMonitor).where(
+        SlotMonitor.user_id == user.id, 
+        SlotMonitor.warehouse_id == warehouse_id
+    ))
+    await db.commit()
+    return {"status": "deleted"}
