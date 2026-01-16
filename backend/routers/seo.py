@@ -66,7 +66,7 @@ async def check_position(
     try:
         result = await loop.run_in_executor(
             executor, 
-            selenium_service.get_position, 
+            selenium_service.get_seo_position, 
             query, 
             sku, 
             geo

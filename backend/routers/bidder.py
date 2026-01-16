@@ -1,14 +1,20 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from datetime import datetime, timedelta
 from pydantic import BaseModel
+from concurrent.futures import ThreadPoolExecutor
 
 from database import get_db, User, BidderLog, BidderSettings
 from dependencies import get_current_user
 from wb_api_service import wb_api_service
+# Импортируем наш новый сервис
+from services.selenium_search import selenium_service
 
 router = APIRouter(prefix="/api/bidder", tags=["Bidder"])
+# Пул потоков для Selenium
+executor = ThreadPoolExecutor(max_workers=2)
 
 class CampaignSettingsUpdate(BaseModel):
     campaign_id: int
@@ -19,9 +25,35 @@ class CampaignSettingsUpdate(BaseModel):
     target_cpa: int
     strategy: str = "pid"
 
+# --- НОВЫЙ ЭНДПОИНТ: Проверка реального аукциона ---
+@router.get("/auction")
+async def check_auction(query: str):
+    """
+    Получение реальных рекламных ставок (CPM) из выдачи через Selenium
+    """
+    if not query:
+        raise HTTPException(400, "Query param required")
+        
+    loop = asyncio.get_event_loop()
+    try:
+        # Запускаем Selenium в отдельном потоке
+        ads = await loop.run_in_executor(
+            executor, 
+            selenium_service.get_search_auction, 
+            query
+        )
+        return {"query": query, "ads_count": len(ads), "ads": ads}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+# --- СТАРЫЕ ЭНДПОИНТЫ (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
+
 @router.get("/campaigns")
 async def get_my_campaigns(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user.wb_api_token:
+        # Вместо ошибки 400 возвращаем пустой список и статус, чтобы фронт мог показать "Подключите токен"
+        # Но если фронт ждет ошибку, можно оставить как есть. 
+        # Для совместимости с твоим фронтом оставим raise, если он его обрабатывает.
         raise HTTPException(400, "WB API token not connected")
     try:
         # 1. Fetch live campaigns from WB

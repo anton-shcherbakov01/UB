@@ -1,18 +1,45 @@
 import os
 import io
 import logging
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from fpdf import FPDF
+from concurrent.futures import ThreadPoolExecutor
 
 from database import get_db, User, MonitoredItem, PriceHistory
 from dependencies import get_current_user
 from tasks import parse_and_save_sku, get_status
+# Используем наш новый универсальный сервис
+from services.selenium_search import selenium_service
 
 logger = logging.getLogger("Monitoring")
 router = APIRouter(prefix="/api", tags=["Monitoring"])
+executor = ThreadPoolExecutor(max_workers=2)
+
+@router.get("/monitoring/scan/{sku}")
+async def scan_product(sku: int):
+    """
+    Мгновенный скан товара через Selenium (для страницы Сканер)
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        # Запускаем в отдельном потоке, чтобы не блокировать API
+        result = await loop.run_in_executor(
+            executor, 
+            selenium_service.get_product_details, 
+            sku
+        )
+        
+        if not result['valid']:
+            raise HTTPException(404, "Товар не найден или ошибка парсинга WB")
+            
+        return result
+    except Exception as e:
+        logger.error(f"Scan error: {e}")
+        raise HTTPException(500, "Ошибка сервера при сканировании")
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -29,12 +56,23 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     if (await db.execute(stmt)).scalars().first(): 
         return {"status": "exists", "message": "Товар уже в списке"}
 
-    new_item = MonitoredItem(user_id=user.id, sku=sku, name="Загрузка...", brand="...")
+    # Сразу пробуем получить имя товара через Selenium, чтобы не было "Загрузка..."
+    loop = asyncio.get_event_loop()
+    try:
+        details = await loop.run_in_executor(executor, selenium_service.get_product_details, sku)
+        name = details.get('name', 'Товар WB') if details.get('valid') else "Товар WB"
+        brand = details.get('brand', '')
+    except:
+        name = "Загрузка..."
+        brand = "..."
+
+    new_item = MonitoredItem(user_id=user.id, sku=sku, name=name, brand=brand)
     db.add(new_item)
     await db.commit()
     
+    # Запускаем фоновую задачу для сохранения истории цен
     task = parse_and_save_sku.delay(sku, user.id)
-    return {"status": "accepted", "task_id": task.id}
+    return {"status": "accepted", "task_id": task.id, "name": name}
 
 @router.get("/monitor/list")
 async def get_my_items(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -74,10 +112,6 @@ async def get_history(sku: int, user: User = Depends(get_current_user), db: Asyn
 
 @router.get("/monitor/status/{task_id}")
 def get_status_endpoint(task_id: str): 
-    """
-    Получение статуса задачи.
-    Синхронный обработчик (def) для корректной работы с синхронным Celery backend.
-    """
     return get_status(task_id)
 
 @router.get("/report/pdf/{sku}")
@@ -93,29 +127,33 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
     pdf = FPDF()
     pdf.add_page()
     
-    font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-    try:
-        if os.path.exists(font_path):
-            pdf.add_font('DejaVu', '', font_path, uni=True)
-            pdf.set_font('DejaVu', '', 14)
-        else:
-             local_font = "fonts/DejaVuSans.ttf"
-             if os.path.exists(local_font):
-                 pdf.add_font('DejaVu', '', local_font, uni=True)
-                 pdf.set_font('DejaVu', '', 14)
-             else:
-                 pdf.set_font("Arial", size=12)
-    except Exception as e:
-        logger.error(f"Font loading error: {e}")
+    # Пытаемся загрузить шрифт с поддержкой кириллицы
+    font_paths = [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        './fonts/DejaVuSans.ttf',
+        '/usr/share/fonts/TTF/DejaVuSans.ttf'
+    ]
+    font_loaded = False
+    
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                pdf.add_font('DejaVu', '', path, uni=True)
+                pdf.set_font('DejaVu', '', 14)
+                font_loaded = True
+                break
+            except: continue
+            
+    if not font_loaded:
         pdf.set_font("Arial", size=12)
 
-    pdf.cell(0, 10, txt=f"Report: {sku}", ln=1, align='C')
+    pdf.cell(0, 10, txt=f"Price Report: SKU {sku}", ln=1, align='C')
     pdf.ln(5)
     
     pdf.set_font_size(10)
     pdf.cell(60, 10, "Date", 1)
-    pdf.cell(40, 10, "Wallet", 1)
-    pdf.cell(40, 10, "Regular", 1)
+    pdf.cell(40, 10, "Wallet Price", 1)
+    pdf.cell(40, 10, "Regular Price", 1)
     pdf.ln()
 
     for h in history:
