@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import requests
+import time
 from typing import Dict, Any
 
 logger = logging.getLogger("Analysis-AI")
@@ -11,6 +12,14 @@ class AIModule:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
         self.ai_url = os.getenv("AI_API_URL", "https://api.artemox.com/v1/chat/completions")
+        # ВАЖНО: Добавлено имя модели по умолчанию
+        self.model_name = os.getenv("AI_MODEL", "gpt-3.5-turbo") 
+        
+        # Настраиваем заголовки один раз
+        self.headers = {
+            "Authorization": f"Bearer {self.ai_api_key}",
+            "Content-Type": "application/json"
+        }
         
         if not self.ai_api_key:
             logger.warning("⚠️ AI_API_KEY не установлен! AI функции будут возвращать заглушки.")
@@ -36,6 +45,9 @@ class AIModule:
         """
         Универсальный метод вызова LLM с авто-исправлением JSON.
         """
+        if not self.ai_api_key:
+            return fallback_data
+
         payload = {
             "model": self.model_name,
             "messages": [
@@ -43,14 +55,12 @@ class AIModule:
                 {"role": "user", "content": prompt}
             ],
             "temperature": temperature,
-            # Добавляем response_format, если API поддерживает (для OpenAI/DeepSeek это json_object)
-            # Но для универсальности оставим пока текстом и будем парсить сами.
         }
 
         for attempt in range(3):
             try:
-                logger.info(f"Запрос к AI API: {self.api_url}")
-                response = requests.post(self.api_url, headers=self.headers, json=payload, timeout=60)
+                logger.info(f"Запрос к AI API: {self.ai_url}")
+                response = requests.post(self.ai_url, headers=self.headers, json=payload, timeout=60)
                 
                 if response.status_code != 200:
                     logger.error(f"AI API Error {response.status_code}: {response.text}")
@@ -60,24 +70,19 @@ class AIModule:
                 raw_content = response.json()['choices'][0]['message']['content']
                 
                 # --- AUTO-FIX JSON ---
-                # 1. Убираем Markdown обертки ```json ... ```
                 clean_json = re.sub(r'```json\s*|\s*```', '', raw_content).strip()
-                
-                # 2. Убираем странные символы в начале (BOM и прочее)
                 clean_json = clean_json.strip('`').strip()
-                
-                # 3. Фикс распространенной ошибки: лишняя запятая в конце списка/объекта
+                # Fix trailing commas
                 clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
-                
-                # 4. Фикс ошибки из лога: AI иногда вставляет "&" перед объектом
+                # Fix weird &{ syntax from some models
                 clean_json = re.sub(r':\s*&{', ': {', clean_json)
 
                 try:
                     data = json.loads(clean_json)
                     return data
                 except json.JSONDecodeError as e:
-                    logger.error(f"JSON Parse Error: {e}. Content: {clean_json[:500]}")
-                    # Если совсем плохо - попробуем найти первый { и последний }
+                    logger.error(f"JSON Parse Error: {e}. Content: {clean_json[:200]}...")
+                    # Greedy search for { ... }
                     try:
                         start = clean_json.find('{')
                         end = clean_json.rfind('}') + 1
@@ -98,7 +103,7 @@ class AIModule:
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
-        Комплексный анализ отзывов с использованием DeepSeek-V3.
+        Комплексный анализ отзывов с использованием DeepSeek-V3/GPT.
         1. ABSA (Aspect-Based Sentiment Analysis).
         2. Психографическое профилирование.
         """
@@ -176,15 +181,13 @@ class AIModule:
         
         ai_response = self._call_ai(prompt, fallback, temperature=0.5)
         
-        # Если была ошибка AI, логируем и добавляем информацию в ответ
         if "_error" in ai_response:
             logger.error(f"AI анализ провалился: {ai_response['_error']}")
-            # Добавляем информацию об ошибке в глобальное резюме для отображения пользователю
             ai_response["global_summary"] = f"⚠️ Ошибка AI: {ai_response['_error']}"
             ai_response["flaws"] = [f"AI сервис недоступен: {ai_response['_error']}"]
             ai_response["strategy"] = ["Проверьте настройки AI_API_KEY в переменных окружения"]
         
-        # Post-Processing
+        # Post-Processing для формирования красивых списков
         aspects = ai_response.get("aspects", [])
         
         negative_aspects = sorted(
@@ -196,7 +199,7 @@ class AIModule:
         positive_strategies = [a['actionable_advice'] for a in aspects if a.get('sentiment_score', 0) < 7.5]
         ai_response["strategy"] = positive_strategies[:7] if positive_strategies else ["Масштабируйте продажи"]
 
-        if not ai_response["flaws"]:
+        if not ai_response.get("flaws"):
             ai_response["flaws"] = ["Критических проблем не выявлено"]
 
         return ai_response
@@ -204,7 +207,7 @@ class AIModule:
     def generate_product_content(self, keywords: list, tone: str, title_len: int = 60, desc_len: int = 1000):
         """
         WB-Optimized Generation.
-        Исправлена ошибка с кодировкой заголовка и увеличено кол-во FAQ.
+        Создает контент строго по правилам ранжирования Wildberries (SEO + LSI).
         """
         # Сортировка ключей
         main_keywords = keywords[:5]
@@ -271,17 +274,9 @@ class AIModule:
         
         # --- ФИНАЛЬНАЯ ЧИСТКА ---
         if "title" in result:
-            # Убираем кавычки
             clean_title = result["title"].replace('"', '').replace("'", "").strip()
-            
-            # ВАЖНО: Убрал .encode('ascii'), который убивал русский текст.
-            # Если нужно убрать эмодзи программно, лучше использовать regex,
-            # но при temperature=0.4 модель обычно соблюдает запрет на эмодзи.
-            
-            # Убираем точку в конце заголовка (на WB заголовки без точек)
             if clean_title.endswith('.'):
                 clean_title = clean_title[:-1]
-                
             result["title"] = clean_title
 
         return result
