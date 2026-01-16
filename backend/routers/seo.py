@@ -1,6 +1,7 @@
 import os
 import io
 import logging
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,13 +9,14 @@ from fastapi_cache.decorator import cache
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 from fpdf import FPDF
 
 from database import get_db, User, SeoPosition
 from dependencies import get_current_user
 from tasks import generate_seo_task, check_seo_position_task, cluster_keywords_task
-from services.wb_search import wb_search_service, GEO_ZONES
+from services.selenium_search import selenium_service, GEO_COOKIES
 from parser_service import parser_service
 
 logger = logging.getLogger("SEO-Router")
@@ -43,51 +45,43 @@ class SeoPdfRequest(BaseModel):
     faq: Optional[List[Dict[str, str]]] = []
 
 @router.get("/seo/regions")
-@cache(expire=86400) # Кэшируем список регионов на сутки, он меняется редко
 async def get_regions():
-    """
-    Отдает список доступных регионов для фронтенда.
-    """
-    return [{"key": k, "label": k.upper()} for k in GEO_ZONES.keys()]
+    return [{"key": k, "label": k.upper()} for k in GEO_COOKIES.keys()]
 
 @router.get("/seo/position")
-@cache(expire=300) # Кэшируем результат поиска на 5 минут
 async def check_position(
     query: str, 
     sku: int, 
-    geo: str = Query("moscow", description="Region key: moscow, spb, kazan...")
+    geo: str = Query("moscow")
 ):
-    """
-    Мгновенная проверка позиции через Mobile API
-    Возвращает:
-    - Точную позицию
-    - Факт авторекламы (CPM)
-    - Соседей (кто выше/ниже) для анализа конкуренции
-    """
-    if not query or not sku:
-        raise HTTPException(status_code=400, detail="Query and SKU are required")
+    logger.info(f"🔎 SELENIUM SEARCH: SKU={sku} Query='{query}'")
 
-    # Нормализация региона
-    if geo not in GEO_ZONES:
+    if geo not in GEO_COOKIES:
         geo = "moscow"
 
+    # Запускаем тяжелый Selenium в отдельном потоке
+    loop = asyncio.get_event_loop()
     try:
-        # Вызываем сервис
-        result = await wb_search_service.get_sku_position(query, sku, geo=geo)
+        result = await loop.run_in_executor(
+            executor, 
+            selenium_service.get_position, 
+            query, 
+            sku, 
+            geo
+        )
+        
+        if not result['found']:
+            return {
+                "status": "not_found", 
+                "message": "Не найдено в топе (Selenium)",
+                "data": result
+            }
+        
+        return {"status": "success", "data": result}
+        
     except Exception as e:
-        # Логируем и отдаем 500, но аккуратно
-        raise HTTPException(status_code=500, detail=f"Search service error: {str(e)}")
-    
-    # Формируем красивый ответ
-    response_data = {
-        "status": "success" if result['found'] else "not_found",
-        "geo": geo,
-        "query": query,
-        "sku": sku,
-        "data": result
-    }
-    
-    return response_data
+        logger.error(f"Selenium Error: {e}")
+        raise HTTPException(500, detail="Ошибка парсинга Wildberries")
 
 @router.post("/seo/track")
 async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):
