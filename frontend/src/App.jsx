@@ -24,18 +24,20 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Определяем активную вкладку по URL (для подсветки TabNav)
-  // Если путь "/", то активная вкладка 'home', иначе убираем слэш (например "/bidder" -> "bidder")
-  const activeTab = location.pathname === '/' ? 'home' : location.pathname.substring(1);
-
-  useEffect(() => { 
+  // 1. Вынесли загрузку пользователя в функцию, чтобы вызывать её из ProfilePage
+  const fetchUser = () => {
       fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() })
         .then(r => r.json())
         .then(setUser)
         .catch(console.error); 
+  };
+
+  useEffect(() => { 
+      fetchUser(); 
   }, []);
 
-  // Функция для переключения, которую мы передаем в TabNav
+  const activeTab = location.pathname === '/' ? 'home' : location.pathname.substring(1);
+
   const handleTabChange = (tab) => {
       if (tab === 'home') navigate('/');
       else navigate(`/${tab}`);
@@ -47,26 +49,30 @@ const AppContent = () => {
             {/* Главная */}
             <Route path="/" element={<DashboardPage user={user} onNavigate={handleTabChange} />} />
             
-            {/* Основные модули */}
-            {/* В РАЗРАБОТКЕ: <Route path="/bidder" element={<BidderPage />} /> */}
-            {/* В РАЗРАБОТКЕ: <Route path="/scanner" element={<ScannerPage />} /> */}
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/seo" element={<SeoGeneratorPage />} />
-            
-            {/* Дополнительные страницы */}
             <Route path="/seo_tracker" element={<SeoTrackerPage />} />
             <Route path="/finance" element={<FinancePage onNavigate={handleTabChange} />} />
             <Route path="/ai" element={<AIAnalysisPage user={user} />} />
             <Route path="/supply" element={<SupplyPage />} />
-            <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} />} />
-            <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
-            <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
+            
+            {/* ИСПРАВЛЕНИЕ ЗДЕСЬ: Передаем user и onNavigate */}
             <Route path="/slots" element={<SlotsPage user={user} onNavigate={handleTabChange} />} />
             
+            {/* Передаем refreshUser, чтобы обновлять данные после ввода токена */}
+            <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} refreshUser={fetchUser} />} />
+            
+            <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
+            <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
+            
+            {/* Заглушки (если нужны) */}
+            {/* <Route path="/bidder" element={<BidderPage />} /> */}
+            {/* <Route path="/scanner" element={<ScannerPage />} /> */}
+
             {/* Редирект для несуществующих путей */}
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-
+        
         {/* Навигация снизу */}
         <TabNav active={activeTab} setTab={handleTabChange} isAdmin={user?.is_admin} />
     </div>
