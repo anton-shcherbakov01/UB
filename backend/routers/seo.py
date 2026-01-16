@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi_cache.decorator import cache
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
