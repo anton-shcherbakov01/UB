@@ -4,10 +4,12 @@ from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
 from datetime import datetime, timedelta
 # Импортируем нашу функцию расчета
-from analysis_parts.economics import calculate_abc_xyz 
+from analysis_parts.economics import calculate_abc_xyz, get_return_forensics
+from services.supply import supply_service
 # Импорт зависимостей БД (примерный)
 from database import get_db, User, get_current_user 
 from sqlalchemy import text # Или использование ORM
+from wb_api.statistics import WBStatisticsAPI
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
@@ -51,3 +53,58 @@ async def get_abc_xyz_stats(
     analysis_result = calculate_abc_xyz(raw_data)
     
     return analysis_result
+
+@router.get("/forensics/returns")
+async def get_return_forensics_endpoint(
+    days: int = Query(30, ge=7, le=90),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    4.3 Получение данных по проблемным возвратам (размеры, склады).
+    """
+    date_to = datetime.now()
+    date_from = date_to - timedelta(days=days)
+    
+    # Вызываем метод из EconomicsModule (через фасад analysis_service)
+    # Нужно убедиться, что метод добавлен в analysis_service.py как прокси
+    # Либо вызывать напрямую: analysis_service.economics.get_return_forensics
+    data = await get_return_forensics(user.id, date_from, date_to)
+    return data
+
+@router.get("/finance/cash-gap")
+async def get_cash_gap_forecast(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    4.4 Прогноз кассовых разрывов на основе Supply Chain.
+    """
+    if not user.wb_api_token:
+        return {"status": "error", "message": "No WB Token"}
+
+    # 1. Получаем настройки поставок
+    settings_res = await db.execute(select("SupplySettings").where("user_id" == user.id)) # Псевдокод, используйте реальную модель
+    # (Упрощение: используем дефолты, если нет настроек)
+    config = {"lead_time": 7, "min_stock_days": 14, "abc_a_share": 80}
+
+    # 2. Получаем данные остатков и заказов (через сервис Supply)
+    wb_api = WBStatisticsAPI(user.wb_api_token)
+    turnover_data = await wb_api.get_turnover_data()
+    
+    # 3. Рассчитываем Supply Metrics (чтобы знать velocity и ROP)
+    supply_analysis = supply_service.analyze_supply(
+        turnover_data.get("stocks", []), 
+        turnover_data.get("orders", []), 
+        config
+    )
+
+    # 4. Получаем себестоимость из БД
+    skus = [i['sku'] for i in supply_analysis]
+    stmt = select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus))
+    costs = (await db.execute(stmt)).scalars().all()
+    costs_map = {c.sku: c.cost_price for c in costs}
+
+    # 5. Считаем разрывы
+    result = supply_service.calculate_cash_gap(supply_analysis, costs_map)
+    return result

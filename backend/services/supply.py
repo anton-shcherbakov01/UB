@@ -186,5 +186,91 @@ class SupplyService:
             
         results.sort(key=lambda x: (x['abc'], -x['velocity']))
         return results
+    
+    def calculate_cash_gap(
+        self, 
+        supply_analysis: List[Dict[str, Any]], 
+        costs_map: Dict[int, float], # {sku: cost_price}
+        balance_current: float = 0.0
+    ) -> Dict[str, Any]:
+        """
+        4.4. Календарь кассовых разрывов.
+        Прогноз даты, когда потребуются средства на закупку.
+        """
+        calendar = {}
+        total_needed = 0.0
+        
+        # Сортируем товары по дате обнуления стока (days_to_stock)
+        sorted_items = sorted(
+            [i for i in supply_analysis if i.get('velocity', 0) > 0], 
+            key=lambda x: x['days_to_stock']
+        )
+
+        for item in sorted_items:
+            sku = item['sku']
+            velocity = item['velocity'] # шт/день
+            days_left = item['days_to_stock']
+            
+            # Дата X (когда товар закончится)
+            out_of_stock_date = datetime.now() + timedelta(days=days_left)
+            date_str = out_of_stock_date.strftime("%Y-%m-%d")
+            
+            # Сколько нужно закупить (по ROP или добрать до мин. остатка)
+            # Если to_order уже посчитан в analyze_supply
+            qty_to_order = item.get('to_order', 0)
+            if qty_to_order <= 0:
+                continue
+                
+            cost_price = costs_map.get(sku, 0)
+            if cost_price == 0:
+                continue # Не можем посчитать без себестоимости
+
+            money_needed = qty_to_order * cost_price
+            
+            if date_str not in calendar:
+                calendar[date_str] = {"needed": 0.0, "items": []}
+            
+            calendar[date_str]["needed"] += money_needed
+            calendar[date_str]["items"].append({
+                "sku": sku,
+                "name": item['name'],
+                "qty": qty_to_order,
+                "sum": round(money_needed, 0)
+            })
+            total_needed += money_needed
+
+        # Прогноз баланса (упрощенно)
+        # Предполагаем, что текущая скорость продаж генерирует выручку
+        # В идеале нужно вычитать комиссию и логистику, тут берем грубо "грязными" или маржинальными, если есть
+        
+        # Формируем итоговый Timeline
+        timeline = []
+        running_balance = balance_current
+        
+        # Собираем все уникальные даты событий
+        all_dates = sorted(calendar.keys())
+        
+        for date_s in all_dates:
+            needed = calendar[date_s]["needed"]
+            dt = datetime.strptime(date_s, "%Y-%m-%d")
+            days_from_now = (dt - datetime.now()).days
+            
+            # Приход денег от продаж за этот период (очень грубая оценка для примера)
+            # В реальном проекте берем sum(velocity * price * margin) по всем товарам
+            # estimated_income = daily_margin * days_from_now
+            
+            timeline.append({
+                "date": date_s,
+                "status": "GAP" if needed > running_balance else "OK", # Если бы считали приход
+                "amount_needed": round(needed, 0),
+                "items_count": len(calendar[date_s]["items"]),
+                "details": calendar[date_s]["items"]
+            })
+
+        return {
+            "total_needed_soon": round(total_needed, 0),
+            "nearest_gap_date": all_dates[0] if all_dates else None,
+            "timeline": timeline
+        }
 
 supply_service = SupplyService()

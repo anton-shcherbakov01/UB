@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
-    PieChart, Truck, Target, TrendingUp, Plus, Wand2, Lock
+    PieChart, Truck, Target, TrendingUp, Plus, Wand2, Lock, Microscope
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
@@ -150,6 +150,19 @@ const DashboardPage = ({ onNavigate, user }) => {
                     </div>
                 </div>
             </div>
+
+            <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                         <div className="flex justify-between items-start">
+                             <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
+                                <Microscope size={24} />
+                             </div>
+                             <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">PRO</span>
+                         </div>
+                         <div>
+                             <span className="font-bold text-slate-800 block">Глубокая аналитика</span>
+                             <span className="text-xs text-slate-400">Форензика возвратов и Кассовые разрывы</span>
+                         </div>
+                    </div>
 
             {/* В РАЗРАБОТКЕ (Снизу) */}
             <div>

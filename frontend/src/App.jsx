@@ -14,6 +14,7 @@ import BidderPage from './pages/BidderPage';
 import SupplyPage from './pages/SupplyPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
+import AdvancedAnalyticsPage from './pages/AdvancedAnalyticsPage';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
@@ -39,6 +40,7 @@ export default function App() {
           case 'supply': return <SupplyPage />; 
           case 'profile': return <ProfilePage onNavigate={setActiveTab} />;
           case 'admin': return <AdminPage onBack={() => setActiveTab('profile')} />;
+          case 'analytics_advanced': return <AdvancedAnalyticsPage onBack={() => setActiveTab('home')} />;
           default: return <DashboardPage onNavigate={setActiveTab} user={user} />;
       }
   };
