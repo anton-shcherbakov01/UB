@@ -11,53 +11,73 @@ logger = logging.getLogger("Tasks-SEO")
 
 @celery_app.task(bind=True, name="analyze_reviews_task")
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
-    self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
-    
-    product_info = parser_service.get_full_product_info(sku, limit)
-    if product_info.get("status") == "error":
-        return {"status": "error", "error": product_info.get("message")}
-    
-    self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
-    
-    reviews = product_info.get('reviews', [])
-    product_name = product_info.get('name', f"Товар {sku}")
-    ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
+    try:
+        self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
+        
+        product_info = parser_service.get_full_product_info(sku, limit)
+        if product_info.get("status") == "error":
+            error_msg = product_info.get("message", "Ошибка парсинга товара")
+            logger.error(f"Product parsing error for SKU {sku}: {error_msg}")
+            return {"status": "error", "error": error_msg}
+        
+        self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
+        
+        reviews = product_info.get('reviews', [])
+        product_name = product_info.get('name', f"Товар {sku}")
+        ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
 
-    final_result = {
-        "status": "success",
-        "sku": sku,
-        "product_name": product_name,
-        "image": product_info.get('image'),
-        "rating": product_info.get('rating'),
-        "reviews_count": len(reviews),
-        "ai_analysis": ai_result
-    }
+        # Проверяем наличие ошибки в AI ответе
+        if ai_result.get("_error"):
+            logger.error(f"AI analysis error: {ai_result['_error']}")
+            # Не прерываем выполнение, но пометим в результате
 
-    if user_id:
-        title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
-        save_history_sync(user_id, sku, 'ai', title, final_result)
+        final_result = {
+            "status": "success",
+            "sku": sku,
+            "product_name": product_name,
+            "image": product_info.get('image'),
+            "rating": product_info.get('rating'),
+            "reviews_count": len(reviews),
+            "ai_analysis": ai_result
+        }
 
-    return final_result
+        if user_id:
+            title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
+            save_history_sync(user_id, sku, 'ai', title, final_result)
+
+        return final_result
+    except Exception as e:
+        logger.error(f"Analyze reviews task error: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="generate_seo_task")
 def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: int = None, title_len: int = 100, desc_len: int = 1000):
-    self.update_state(state='PROGRESS', meta={'status': 'Генерация GEO контента...'})
-    
-    content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
-    
-    final_result = {
-        "status": "success",
-        "sku": sku,
-        "keywords": keywords,
-        "tone": tone,
-        "generated_content": content 
-    }
-    
-    if user_id and sku > 0:
-        title = f"GEO: {content.get('title', 'Без заголовка')[:20]}..."
-        save_history_sync(user_id, sku, 'seo', title, final_result)
+    try:
+        self.update_state(state='PROGRESS', meta={'status': 'Генерация GEO контента...'})
         
-    return final_result
+        content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
+        
+        # Проверяем наличие ошибки в AI ответе
+        if content.get("_error"):
+            logger.error(f"AI generation error: {content['_error']}")
+            # Не прерываем выполнение, но информация об ошибке будет в результате
+        
+        final_result = {
+            "status": "success",
+            "sku": sku,
+            "keywords": keywords,
+            "tone": tone,
+            "generated_content": content 
+        }
+        
+        if user_id and sku > 0:
+            title = f"GEO: {content.get('title', 'Без заголовка')[:20]}..."
+            save_history_sync(user_id, sku, 'seo', title, final_result)
+            
+        return final_result
+    except Exception as e:
+        logger.error(f"Generate SEO task error: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="cluster_keywords_task")
 def cluster_keywords_task(self, keywords: List[str], user_id: int = None, sku: int = 0):

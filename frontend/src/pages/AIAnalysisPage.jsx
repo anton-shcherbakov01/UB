@@ -81,11 +81,18 @@ const AIAnalysisPage = ({ user }) => {
                 const sData = await sRes.json();
                 
                 if (sData.status === 'SUCCESS') {
+                    // Проверяем наличие ошибки AI в результатах
+                    if (sData.data?.ai_analysis?._error) {
+                        setStatus(`⚠️ Ошибка AI: ${sData.data.ai_analysis._error}`);
+                    }
                     setResult(sData.data);
                     setStep('result');
                     break;
                 }
-                if (sData.status === 'FAILURE') throw new Error(sData.error || "Ошибка ИИ");
+                if (sData.status === 'FAILURE') {
+                    const errorMsg = sData.error || sData.data?.error || "Ошибка ИИ";
+                    throw new Error(errorMsg);
+                }
                 if (sData.info) setStatus(sData.info);
                 
                 attempts++;
@@ -302,8 +309,19 @@ const AIAnalysisPage = ({ user }) => {
                     </div>
 
                     {result.ai_analysis.global_summary && (
-                        <div className="bg-slate-800 text-slate-200 p-5 rounded-2xl text-sm italic border-l-4 border-violet-500 shadow-md">
-                            "{result.ai_analysis.global_summary}"
+                        <div className={`p-5 rounded-2xl text-sm border-l-4 shadow-md ${
+                            result.ai_analysis._error 
+                                ? 'bg-red-50 text-red-800 border-red-500' 
+                                : 'bg-slate-800 text-slate-200 border-violet-500 italic'
+                        }`}>
+                            {result.ai_analysis._error ? (
+                                <div>
+                                    <div className="font-bold mb-1">⚠️ Ошибка AI</div>
+                                    <div>{result.ai_analysis.global_summary}</div>
+                                </div>
+                            ) : (
+                                `"${result.ai_analysis.global_summary}"`
+                            )}
                         </div>
                     )}
 

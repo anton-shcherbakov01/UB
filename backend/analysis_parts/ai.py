@@ -10,7 +10,10 @@ logger = logging.getLogger("Analysis-AI")
 class AIModule:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
-        self.ai_url = "https://api.artemox.com/v1/chat/completions"
+        self.ai_url = os.getenv("AI_API_URL", "https://api.artemox.com/v1/chat/completions")
+        
+        if not self.ai_api_key:
+            logger.warning("⚠️ AI_API_KEY не установлен! AI функции будут возвращать заглушки.")
 
     def clean_ai_text(self, text: str) -> str:
         if not text: return ""
@@ -30,6 +33,12 @@ class AIModule:
             return data
 
     def _call_ai(self, prompt: str, fallback_json: dict, temperature: float = 0.7):
+        # Проверка наличия API ключа
+        if not self.ai_api_key:
+            logger.error("AI_API_KEY не установлен. Пропуск AI запроса.")
+            fallback_json["_error"] = "AI_API_KEY не настроен. Проверьте переменные окружения."
+            return fallback_json
+            
         try:
             payload = {
                 "model": "deepseek-chat", 
@@ -37,12 +46,22 @@ class AIModule:
                 "temperature": temperature
             }
             headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
+            
+            logger.info(f"Запрос к AI API: {self.ai_url}")
             resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=90) 
+            
             if resp.status_code != 200:
-                logger.error(f"AI API Error: {resp.text}")
+                error_text = resp.text[:500] if resp.text else "Нет ответа"
+                logger.error(f"AI API Error {resp.status_code}: {error_text}")
+                fallback_json["_error"] = f"AI API вернул ошибку {resp.status_code}: {error_text}"
                 return fallback_json
             
             result = resp.json()
+            if 'choices' not in result or not result['choices']:
+                logger.error(f"AI API вернул некорректный ответ: {result}")
+                fallback_json["_error"] = "AI API вернул некорректный формат ответа"
+                return fallback_json
+                
             content = result['choices'][0]['message']['content']
             try:
                 # Очистка Markdown-блоков кода
@@ -56,13 +75,24 @@ class AIModule:
                     # Рекурсивная очистка
                     return self._clean_recursive(parsed)
                 else: 
-                    logger.warning(f"No JSON found in AI response: {content[:100]}...")
+                    logger.warning(f"No JSON found in AI response. Content preview: {content[:200]}...")
+                    fallback_json["_error"] = f"AI вернул некорректный формат. Первые 200 символов: {content[:200]}"
                     return fallback_json
-            except Exception as e:
-                logger.error(f"JSON Parse Error: {e}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON Parse Error: {e}. Content: {content[:300]}")
+                fallback_json["_error"] = f"Ошибка парсинга JSON от AI: {str(e)}"
                 return fallback_json
+        except requests.exceptions.Timeout:
+            logger.error(f"AI API Timeout после 90 секунд")
+            fallback_json["_error"] = "Таймаут запроса к AI API (90s)"
+            return fallback_json
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"AI API Connection Error: {e}")
+            fallback_json["_error"] = f"Ошибка соединения с AI API: {str(e)}"
+            return fallback_json
         except Exception as e:
-            logger.error(f"AI Connection Error: {e}")
+            logger.error(f"AI Connection Error: {e}", exc_info=True)
+            fallback_json["_error"] = f"Неожиданная ошибка AI: {str(e)}"
             return fallback_json
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
@@ -145,6 +175,14 @@ class AIModule:
         
         ai_response = self._call_ai(prompt, fallback, temperature=0.5)
         
+        # Если была ошибка AI, логируем и добавляем информацию в ответ
+        if "_error" in ai_response:
+            logger.error(f"AI анализ провалился: {ai_response['_error']}")
+            # Добавляем информацию об ошибке в глобальное резюме для отображения пользователю
+            ai_response["global_summary"] = f"⚠️ Ошибка AI: {ai_response['_error']}"
+            ai_response["flaws"] = [f"AI сервис недоступен: {ai_response['_error']}"]
+            ai_response["strategy"] = ["Проверьте настройки AI_API_KEY в переменных окружения"]
+        
         # Post-Processing
         aspects = ai_response.get("aspects", [])
         
@@ -202,9 +240,17 @@ class AIModule:
         
         fallback = {
             "title": "Ошибка генерации", 
-            "description": "Не удалось сгенерировать текст", 
+            "description": "Не удалось сгенерировать текст. Проверьте настройки AI_API_KEY.", 
             "structured_features": {}, 
             "faq": []
         }
         
-        return self._call_ai(prompt, fallback, temperature=0.7)
+        result = self._call_ai(prompt, fallback, temperature=0.7)
+        
+        # Если была ошибка AI, логируем
+        if "_error" in result:
+            logger.error(f"AI генерация провалилась: {result['_error']}")
+            result["title"] = f"⚠️ Ошибка: {result['_error']}"
+            result["description"] = "Не удалось сгенерировать контент. Проверьте настройки AI_API_KEY."
+        
+        return result

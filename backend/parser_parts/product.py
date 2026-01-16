@@ -190,14 +190,23 @@ class ProductParser:
             # Извлекаем кол-во отзывов
             feedbacks_count = card_data.get('feedbacks') or card_data.get('feedbackCount') or 0
             
+            # Формируем URL изображения
+            image_url = card_data.get('image_url')
+            if not image_url:
+                host = card_data.get('host', '01')
+                vol = sku // 100000
+                part = sku // 1000
+                image_url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
+            
             return {
                 "sku": sku,
-                "name": card_data.get('imt_name') or card_data.get('subj_name'),
-                "image": card_data.get('image_url'),
+                "name": card_data.get('imt_name') or card_data.get('subj_name', f"Товар {sku}"),
+                "image": image_url,
                 "total_reviews": feedbacks_count, # Это значение пойдет в Max ползунка
                 "status": "success"
             }
         except Exception as e:
+            logger.error(f"get_review_stats error for SKU {sku}: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
     def get_product_data(self, sku: int):

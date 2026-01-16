@@ -11,14 +11,11 @@ from fpdf import FPDF
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
 from tasks import analyze_reviews_task, get_status
-# Импортируем парсер напрямую для синхронного чек-запроса (или через task, если нужно асинхронно, но тут быстро)
-from parser_parts.product import ProductParser
+# Используем parser_service, который правильно работает с async
+from parser_service import parser_service
 
 logger = logging.getLogger("AI-Router")
 router = APIRouter(prefix="/api", tags=["AI"])
-
-# Инициализируем парсер один раз (или можно внутри функции)
-product_parser = ProductParser()
 
 @router.get("/ai/check/{sku}")
 async def check_product_reviews(sku: int, user: User = Depends(get_current_user)):
@@ -27,13 +24,15 @@ async def check_product_reviews(sku: int, user: User = Depends(get_current_user)
     Нужен для настройки ползунка на фронте перед запуском анализа.
     """
     try:
-        # Используем быстрый метод получения стат данных
-        info = await product_parser.get_review_stats(sku)
-        if info.get("status") == "error":
-            raise HTTPException(404, info.get("message"))
+        # Используем async метод через parser_service
+        info = await parser_service.get_review_stats(sku)
+        if not info or info.get("status") == "error":
+            raise HTTPException(404, info.get("message", "Товар не найден"))
         return info
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Check error: {e}")
+        logger.error(f"Check error: {e}", exc_info=True)
         raise HTTPException(500, f"Ошибка проверки товара: {str(e)}")
 
 @router.post("/ai/analyze/{sku}")
