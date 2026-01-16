@@ -18,7 +18,7 @@ from services.wb_search import wb_search_service, GEO_ZONES
 from parser_service import parser_service
 
 logger = logging.getLogger("SEO-Router")
-router = APIRouter(prefix="/api", tags=["SEO"])
+router = APIRouter(prefix="/api/seo", tags=["SEO"])
 
 class SeoTrackRequest(BaseModel):
     sku: int
