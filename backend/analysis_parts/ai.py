@@ -12,8 +12,8 @@ class AIModule:
     def __init__(self):
         self.ai_api_key = os.getenv("AI_API_KEY", "") 
         self.ai_url = os.getenv("AI_API_URL", "https://api.artemox.com/v1/chat/completions")
-        # ВАЖНО: Добавлено имя модели по умолчанию
-        self.model_name = os.getenv("AI_MODEL", "gpt-3.5-turbo") 
+        # ИСПРАВЛЕНО: Сменил дефолтную модель на доступную
+        self.model_name = os.getenv("AI_MODEL", "deepseek-chat") 
         
         # Настраиваем заголовки один раз
         self.headers = {
@@ -59,11 +59,16 @@ class AIModule:
 
         for attempt in range(3):
             try:
-                logger.info(f"Запрос к AI API: {self.ai_url}")
+                logger.info(f"Запрос к AI API: {self.ai_url} (Model: {self.model_name})")
                 response = requests.post(self.ai_url, headers=self.headers, json=payload, timeout=60)
                 
                 if response.status_code != 200:
                     logger.error(f"AI API Error {response.status_code}: {response.text}")
+                    # Если 401 и модель не та - пробуем переключиться (хак на случай, если env не сработал)
+                    if response.status_code == 401 and "model" in response.text:
+                         logger.warning("Switching to deepseek-chat due to 401 error...")
+                         payload["model"] = "deepseek-chat"
+                    
                     time.sleep(2)
                     continue
 
@@ -72,9 +77,7 @@ class AIModule:
                 # --- AUTO-FIX JSON ---
                 clean_json = re.sub(r'```json\s*|\s*```', '', raw_content).strip()
                 clean_json = clean_json.strip('`').strip()
-                # Fix trailing commas
                 clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
-                # Fix weird &{ syntax from some models
                 clean_json = re.sub(r':\s*&{', ': {', clean_json)
 
                 try:
@@ -82,7 +85,6 @@ class AIModule:
                     return data
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON Parse Error: {e}. Content: {clean_json[:200]}...")
-                    # Greedy search for { ... }
                     try:
                         start = clean_json.find('{')
                         end = clean_json.rfind('}') + 1
@@ -103,9 +105,7 @@ class AIModule:
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
-        Комплексный анализ отзывов с использованием DeepSeek-V3/GPT.
-        1. ABSA (Aspect-Based Sentiment Analysis).
-        2. Психографическое профилирование.
+        Комплексный анализ отзывов (DeepSeek-Chat).
         """
         if not reviews: 
             return {
@@ -187,7 +187,6 @@ class AIModule:
             ai_response["flaws"] = [f"AI сервис недоступен: {ai_response['_error']}"]
             ai_response["strategy"] = ["Проверьте настройки AI_API_KEY в переменных окружения"]
         
-        # Post-Processing для формирования красивых списков
         aspects = ai_response.get("aspects", [])
         
         negative_aspects = sorted(
@@ -206,13 +205,10 @@ class AIModule:
 
     def generate_product_content(self, keywords: list, tone: str, title_len: int = 60, desc_len: int = 1000):
         """
-        WB-Optimized Generation.
-        Создает контент строго по правилам ранжирования Wildberries (SEO + LSI).
+        WB-Optimized Generation (DeepSeek-Chat).
         """
-        # Сортировка ключей
         main_keywords = keywords[:5]
         lsi_keywords = keywords[5:]
-        
         kw_str_main = ", ".join(main_keywords)
         kw_str_lsi = ", ".join(lsi_keywords)
 
@@ -272,7 +268,6 @@ class AIModule:
             logger.error(f"AI WB Generation failed: {result['_error']}")
             return fallback
         
-        # --- ФИНАЛЬНАЯ ЧИСТКА ---
         if "title" in result:
             clean_title = result["title"].replace('"', '').replace("'", "").strip()
             if clean_title.endswith('.'):
