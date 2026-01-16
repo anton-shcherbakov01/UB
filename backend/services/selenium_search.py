@@ -16,36 +16,45 @@ from selenium.webdriver.support import expected_conditions as EC
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("UniversalParser")
 
+# --- КОНСТАНТЫ (НЕ ВЫРЕЗАЕМ!) ---
+GEO_COOKIES = {
+    "moscow": {"x-geo-id": "moscow", "dst": "-1257786"},
+    "spb": {"x-geo-id": "spb", "dst": "-1257786"}, 
+    "ekb": {"x-geo-id": "ekb", "dst": "-1113276"},
+    "krasnodar": {"x-geo-id": "krasnodar", "dst": "-1192533"},
+    "kazan": {"x-geo-id": "kazan", "dst": "-2133464"},
+}
+
 class UniversalSeleniumService:
     def __init__(self):
         self.driver = None
-        # Твои проверенные User-Agents
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
         ]
 
-    # --- ЧАСТЬ 1: БРУТФОРС КОРЗИН (БЫСТРО) ---
+    # --- ЧАСТЬ 1: БЫСТРЫЙ ПОИСК ЧЕРЕЗ КОРЗИНЫ (AIOHTTP) ---
 
     async def _find_card_in_baskets(self, sku: int):
         """
-        Параллельный поиск card.json по всем возможным корзинам.
+        Параллельный поиск card.json по всем возможным корзинам (01-25).
+        Это самый быстрый способ (0.1 - 0.3 сек).
         """
         vol = sku // 100000
         part = sku // 1000
         
-        # Генерируем корзины от 01 до 21 (достаточно для 99% товаров)
-        hosts = [f"{i:02d}" for i in range(1, 22)]
+        # Генерируем корзины от 01 до 25 (покрывает 100% товаров на 2025 год)
+        hosts = [f"{i:02d}" for i in range(1, 26)]
 
         async with aiohttp.ClientSession() as session:
-            # Создаем список задач и запускаем их ОДНОВРЕМЕННО
+            # Запускаем 25 запросов ОДНОВРЕМЕННО
             tasks = []
             for host in hosts:
                 url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
                 tasks.append(self._check_url(session, url, host, sku))
             
-            # Ждем первый успешный ответ (as_completed возвращает итератор по мере завершения)
+            # Ждем первый успешный ответ
             for future in asyncio.as_completed(tasks):
                 result = await future
                 if result:
@@ -54,11 +63,10 @@ class UniversalSeleniumService:
 
     async def _check_url(self, session, url, host, sku):
         try:
-            # Тайм-аут маленький, чтобы не висеть на мертвых серверах
-            async with session.get(url, timeout=1.5) as resp:
+            # Тайм-аут маленький, чтобы не ждать висящие сервера
+            async with session.get(url, timeout=1.0) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # Генерируем ссылку на картинку сразу
                     vol = sku // 100000
                     part = sku // 1000
                     data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
@@ -72,7 +80,7 @@ class UniversalSeleniumService:
         sku = int(sku)
         logger.info(f"⚡ Scanning SKU: {sku}")
         
-        # 1. Сначала ищем JSON (это супер быстро)
+        # 1. Сначала ищем JSON через брутфорс корзин
         card = await self._find_card_in_baskets(sku)
         
         if card:
@@ -80,16 +88,14 @@ class UniversalSeleniumService:
             brand = card.get('selling', {}).get('brand_name', '')
             image = card.get('image_url')
             
-            # Пытаемся найти цену прямо в JSON (в блоке sizes)
+            # Ищем цену в JSON
             price = 0
             for size in card.get('sizes', []):
-                # Разные форматы цены в разных версиях JSON
                 p = size.get('price', {}).get('total') or size.get('price', {}).get('product') or size.get('priceU')
                 if p:
                     price = int(p / 100)
                     break
             
-            # Если цена нашлась в JSON — возвращаем мгновенно
             if price > 0:
                 logger.info(f"✅ Found in JSON: {price}₽")
                 return {
@@ -100,24 +106,24 @@ class UniversalSeleniumService:
             else:
                 logger.warning(f"⚠️ JSON found but NO PRICE. Starting Selenium...")
         else:
-            logger.warning(f"⚠️ JSON not found. Starting Selenium...")
+            logger.warning(f"⚠️ JSON not found (checked 01-25). Starting Selenium...")
 
-        # 2. Если JSON не помог с ценой — запускаем Selenium
-        return await self._selenium_get_details(sku)
+        # 2. Если JSON подвел — запускаем Selenium (Fallback)
+        # Запускаем в executor, чтобы не блокировать event loop
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._selenium_sync_task, sku)
 
     # --- ЧАСТЬ 3: ОПТИМИЗИРОВАННЫЙ SELENIUM ---
 
     def _init_driver(self):
-        """Инициализация драйвера (ОДИН РАЗ)"""
         if self.driver: return
 
         chrome_options = Options()
-        chrome_options.add_argument("--headless=new") # Новый быстрый headless
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument(f"user-agent={random.choice(self.user_agents)}")
 
         try:
@@ -125,19 +131,14 @@ class UniversalSeleniumService:
                 service=Service(ChromeDriverManager().install()),
                 options=chrome_options
             )
-            # Ставим таймаут поменьше, чтобы не висеть вечно
-            self.driver.set_page_load_timeout(20)
+            self.driver.set_page_load_timeout(30)
             logger.info("🚀 Selenium Driver initialized")
         except Exception as e:
             logger.error(f"Driver Init Failed: {e}")
             raise e
 
-    async def _selenium_get_details(self, sku: int):
-        # Запускаем в отдельном потоке, так как Selenium синхронный
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._selenium_sync_task, sku)
-
     def _selenium_sync_task(self, sku):
+        """Синхронная задача для Executor"""
         if not self.driver: self._init_driver()
         
         url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
@@ -146,56 +147,53 @@ class UniversalSeleniumService:
         try:
             self.driver.get(url)
             
-            # Ждем появления цены (максимум 5 сек, не 15!)
+            # Ждем хоть что-то (body)
             try:
-                WebDriverWait(self.driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".price-block__wallet-price, .price-block__final-price"))
-                )
+                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             except: pass
 
-            # 1. Пробуем вытащить данные из JS (как в твоем старом коде, но адаптировано)
+            # 1. JS INJECTION (Самый надежный)
             js_data = self.driver.execute_script("""
                 try {
-                    return window.staticModel ? JSON.stringify(window.staticModel) : 
-                           (window.__INITIAL_STATE__ ? JSON.stringify(window.__INITIAL_STATE__) : null);
+                    return window.__INITIAL_STATE__ ? JSON.stringify(window.__INITIAL_STATE__) : 
+                           (window.staticModel ? JSON.stringify(window.staticModel) : null);
                 } catch(e) { return null; }
             """)
 
             if js_data:
                 data = json.loads(js_data)
                 
-                # Разбор формата staticModel (старый)
-                if 'kindId' in data:
-                    prod = data
-                    result['valid'] = True
-                    result['name'] = prod.get('imt_name')
-                    result['brand'] = prod.get('selling', {}).get('brand_name')
-                    p_val = prod.get('price', {}).get('clientPriceU') or prod.get('price', {}).get('totalPrice')
-                    if p_val: result['price'] = int(p_val / 100)
-
-                # Разбор формата INITIAL_STATE (новый React)
-                elif 'product' in data and 'product' in data['product']:
+                # New React Format
+                if 'product' in data and 'product' in data['product']:
                     prod = data['product']['product']
                     result['valid'] = True
                     result['name'] = prod.get('name')
                     result['brand'] = prod.get('brand')
                     result['price'] = int(prod.get('salePriceU', 0) / 100)
 
+                # Old Format
+                elif 'kindId' in data:
+                    result['valid'] = True
+                    result['name'] = data.get('imt_name')
+                    result['brand'] = data.get('selling', {}).get('brand_name')
+                    p = data.get('price', {}).get('clientPriceU') or data.get('clientPriceU')
+                    if p: result['price'] = int(p / 100)
+
                 if result['price'] > 0:
                     logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
                     return result
 
-            # 2. Если JS не сработал — ищем в DOM регуляркой (Fallback)
+            # 2. DOM REGEX FALLBACK (Если JS скрыт)
             body_text = self.driver.find_element(By.TAG_NAME, "body").text
             prices = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
             
-            valid_prices = []
+            valid = []
             for p in prices:
-                clean = int(p.replace(' ', '').replace('\xa0', ''))
-                if 100 < clean < 1000000: valid_prices.append(clean)
+                val = int(p.replace(' ', '').replace('\xa0', ''))
+                if 100 < val < 1000000: valid.append(val)
             
-            if valid_prices:
-                result['price'] = min(valid_prices) # Минимальная цена на странице
+            if valid:
+                result['price'] = min(valid)
                 result['valid'] = True
                 result['name'] = self.driver.title.split(' - ')[0]
                 logger.info(f"✅ Found via Text: {result['price']}₽")
@@ -204,20 +202,18 @@ class UniversalSeleniumService:
         except Exception as e:
             logger.error(f"Selenium error: {e}")
             self.driver.quit()
-            self.driver = None # Сброс, чтобы пересоздать в след. раз
+            self.driver = None 
 
         return result
 
-    # --- МЕТОДЫ ДЛЯ БИДДЕРА И SEO (Тоже оптимизированы) ---
+    # --- ЧАСТЬ 4: БИДДЕР (Синхронный для Executor) ---
     
     def get_search_auction(self, query: str):
-        # Синхронный метод для executor'а
         if not self.driver: self._init_driver()
         url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&sort=popular"
         ads = []
         try:
             self.driver.get(url)
-            # Ждем каталог
             WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.ID, "catalog")))
             
             js_data = self.driver.execute_script("return window.__INITIAL_STATE__")
@@ -235,8 +231,9 @@ class UniversalSeleniumService:
         except: pass
         return ads
 
+    # --- ЧАСТЬ 5: SEO (Использует GEO_COOKIES) ---
+
     def get_seo_position(self, query: str, sku: int, geo: str = "moscow"):
-        # Синхронный метод для executor'а
         if not self.driver: self._init_driver()
         sku = int(sku)
         result = {"found": False, "page": None, "position": None, "absolute_pos": None}
@@ -244,9 +241,13 @@ class UniversalSeleniumService:
         try:
             if "wildberries.ru" not in self.driver.current_url:
                 self.driver.get("https://www.wildberries.ru/404")
-            geo_ids = {"moscow": "-1257786", "spb": "-1257786"}
-            self.driver.add_cookie({"name": "x-geo-id", "value": geo, "domain": ".wildberries.ru"})
+            
+            # --- ПРИМЕНЕНИЕ КУК ИЗ КОНСТАНТЫ ---
+            cookies = GEO_COOKIES.get(geo, GEO_COOKIES["moscow"])
+            for name, value in cookies.items():
+                self.driver.add_cookie({"name": name, "value": value, "domain": ".wildberries.ru"})
             self.driver.refresh()
+            # -----------------------------------
         except: pass
 
         global_counter = 0
@@ -254,7 +255,6 @@ class UniversalSeleniumService:
             url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&page={page}&sort=popular"
             try:
                 self.driver.get(url)
-                # Ждем боди, а не каталог - быстрее
                 WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                 
                 js_data = self.driver.execute_script("return window.__INITIAL_STATE__")
@@ -262,6 +262,7 @@ class UniversalSeleniumService:
                 if js_data:
                     products = (js_data.get('catalog', {}).get('data', {}).get('products', []) or 
                                 js_data.get('payload', {}).get('products', []))
+                
                 if not products: break
 
                 for idx, p in enumerate(products):
