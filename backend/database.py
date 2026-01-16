@@ -56,6 +56,7 @@ class User(Base):
     bidder_settings = relationship("BidderSettings", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    slot_monitors = relationship("SlotMonitor", back_populates="user", cascade="all, delete-orphan")
 
 class SlotMonitor(Base):
     """
