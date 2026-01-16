@@ -44,12 +44,21 @@ else:
     # Fallback if file doesn't exist - shouldn't happen
     raise ImportError("dependencies.py file not found")
 
+# Import get_db from database.py (needed for backward compatibility with routers that import from dependencies)
+# This should be imported after _deps_module is loaded to avoid circular dependencies
+try:
+    from database import get_db
+except ImportError:
+    # If database import fails, we'll handle it later
+    get_db = None
+
 # Export quota module functions (lazy import to avoid circular dependency)
 # Import quota module functions at the end after we've defined get_current_user and get_redis_client
 
 __all__ = [
     'get_current_user',
     'get_redis_client',
+    'get_db',
     'auth_manager',
     'SUPER_ADMIN_IDS',
     'r_client',
