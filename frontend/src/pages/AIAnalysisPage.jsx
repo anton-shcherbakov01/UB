@@ -1,7 +1,32 @@
 import React, { useState } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
+
+// --- Мини-компонент для раскрывающегося текста ---
+const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "border-slate-200" }) => {
+    const [expanded, setExpanded] = useState(false);
+    const isLong = text.length > 60; // Условие "длинного" текста
+
+    return (
+        <li 
+            className={`bg-white p-2.5 rounded-xl text-xs font-medium shadow-sm border ${borderClass} transition-all duration-300 ${expanded ? '' : 'hover:bg-slate-50'}`}
+            onClick={() => isLong && setExpanded(!expanded)}
+        >
+            <div className={`flex justify-between items-start gap-2 ${isLong ? 'cursor-pointer' : ''}`}>
+                <span className={`${colorClass} ${expanded ? '' : 'line-clamp-2'}`}>
+                    {text}
+                </span>
+                {isLong && (
+                    <button className="text-slate-400 mt-0.5 shrink-0">
+                        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
+                )}
+            </div>
+        </li>
+    );
+};
+// ------------------------------------------------
 
 const AIAnalysisPage = ({ user }) => {
     const [sku, setSku] = useState('');
@@ -81,7 +106,6 @@ const AIAnalysisPage = ({ user }) => {
                 const sData = await sRes.json();
                 
                 if (sData.status === 'SUCCESS') {
-                    // Проверяем наличие ошибки AI в результатах
                     if (sData.data?.ai_analysis?._error) {
                         setStatus(`⚠️ Ошибка AI: ${sData.data.ai_analysis._error}`);
                     }
@@ -183,7 +207,7 @@ const AIAnalysisPage = ({ user }) => {
 
             <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
 
-            {/* MAIN INPUT CARD - Скрываем полностью, если есть результат */}
+            {/* MAIN INPUT CARD */}
             {step !== 'result' && (
                 <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 transition-all">
                     
@@ -279,7 +303,7 @@ const AIAnalysisPage = ({ user }) => {
             {step === 'result' && result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
                     
-                    {/* Кнопки действий над результатом */}
+                    {/* Кнопки действий */}
                     <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl">
                          <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600 px-3 py-2">
                             ← Настройки
@@ -397,28 +421,36 @@ const AIAnalysisPage = ({ user }) => {
                     )}
 
                      <div className="grid grid-cols-1 gap-4">
+                        {/* Блок критических зон (с раскрытием) */}
                         <div className="bg-red-50 p-5 rounded-3xl border border-red-100">
                             <h3 className="text-red-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <ThumbsDown size={16} /> Критические зоны
                             </h3>
                             <ul className="space-y-2">
                                 {result.ai_analysis.flaws?.map((f, i) => (
-                                    <li key={i} className="bg-white p-2.5 rounded-xl text-xs font-medium text-slate-700 shadow-sm border border-red-50">
-                                        {f}
-                                    </li>
+                                    <ExpandableText 
+                                        key={i} 
+                                        text={f} 
+                                        colorClass="text-slate-700" 
+                                        borderClass="border-red-50" 
+                                    />
                                 ))}
                             </ul>
                         </div>
 
+                        {/* Блок точек роста (с раскрытием) */}
                         <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
                             <h3 className="text-emerald-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <Sparkles size={16} /> Точки роста
                             </h3>
                             <ul className="space-y-2">
                                 {result.ai_analysis.strategy?.map((s, i) => (
-                                    <li key={i} className="bg-white p-2.5 rounded-xl text-xs font-medium text-slate-700 shadow-sm border-l-4 border-emerald-400">
-                                        {s}
-                                    </li>
+                                    <ExpandableText 
+                                        key={i} 
+                                        text={s} 
+                                        colorClass="text-slate-700" 
+                                        borderClass="border-emerald-100 border-l-4 border-l-emerald-400" 
+                                    />
                                 ))}
                             </ul>
                         </div>
