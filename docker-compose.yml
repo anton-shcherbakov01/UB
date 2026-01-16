@@ -66,6 +66,9 @@ services:
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports: ["8000:8000"]
     env_file:
       - ./backend/.env
@@ -99,6 +102,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_worker
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: celery -A celery_app worker --loglevel=info --concurrency=2
     volumes: 
       - ./backend:/app
