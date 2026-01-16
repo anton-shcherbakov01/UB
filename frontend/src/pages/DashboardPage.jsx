@@ -5,12 +5,12 @@ import {
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
-import ComingSoonPage from './ComingSoonPage';
+import ComingSoonModal from '../components/ComingSoonModal';
 
 const DashboardPage = ({ onNavigate, user }) => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [showStub, setShowStub] = useState(null); 
+    const [comingSoonModal, setComingSoonModal] = useState(null); 
 
     const loadData = async () => {
         setLoading(true);
@@ -28,13 +28,6 @@ const DashboardPage = ({ onNavigate, user }) => {
 
     useEffect(() => { loadData(); }, []);
 
-    if (showStub) {
-        return <ComingSoonPage 
-            title={showStub.title} 
-            icon={showStub.icon} 
-            onBack={() => setShowStub(null)} 
-        />;
-    }
 
     if (loading && !data) {
         return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
@@ -146,29 +139,6 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* --- НОВЫЕ АКТИВНЫЕ МОДУЛИ --- */}
-
-                    {/* Bidder - В РАЗРАБОТКЕ */}
-                    {/* <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
-                        <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
-                            <Gavel size={24} />
-                        </div>
-                        <div>
-                            <span className="font-bold text-slate-800 block">Биддер</span>
-                            <span className="text-xs text-slate-400">Реклама</span>
-                        </div>
-                    </div> */}
-
-                    {/* Scanner - В РАЗРАБОТКЕ */}
-                    {/* <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
-                        <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
-                            <ScanBarcode size={24} />
-                        </div>
-                        <div>
-                            <span className="font-bold text-slate-800 block">Сканер</span>
-                            <span className="text-xs text-slate-400">Поиск товара</span>
-                        </div>
-                    </div> */}
 
                     {/* Advanced Analytics */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
@@ -186,12 +156,58 @@ const DashboardPage = ({ onNavigate, user }) => {
                 </div>
             </div>
 
-            {/* В РАЗРАБОТКЕ (Пусто, но можно оставить заголовок если планируется что-то еще) */}
-            {/* <div>
+            {/* СЕКЦИЯ "СКОРО" */}
+            <div>
                 <h3 className="font-bold text-lg mb-3 px-2 text-slate-400 flex items-center gap-2">
                     <Lock size={16} /> Скоро
                 </h3>
-            </div> */}
+                <div className="grid grid-cols-2 gap-4">
+                    {/* Bidder */}
+                    <div 
+                        onClick={() => setComingSoonModal({
+                            title: "Биддер",
+                            icon: <Gavel size={40} />,
+                            description: "Автоматическое управление ставками рекламы. AI-оптимизация бюджета, защита от переплат и максимизация ROI."
+                        })} 
+                        className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
+                    >
+                        <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
+                            <Gavel size={24} />
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">Биддер</span>
+                            <span className="text-xs text-slate-400">Реклама</span>
+                        </div>
+                    </div>
+
+                    {/* Scanner */}
+                    <div 
+                        onClick={() => setComingSoonModal({
+                            title: "Сканер цен",
+                            icon: <ScanBarcode size={40} />,
+                            description: "Быстрый поиск товаров по артикулу. Проверка цен, СПП и рейтинга перед добавлением в мониторинг."
+                        })} 
+                        className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
+                    >
+                        <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
+                            <ScanBarcode size={24} />
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">Сканер</span>
+                            <span className="text-xs text-slate-400">Поиск товара</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Модальное окно "В разработке" */}
+            <ComingSoonModal
+                isOpen={comingSoonModal !== null}
+                onClose={() => setComingSoonModal(null)}
+                title={comingSoonModal?.title}
+                icon={comingSoonModal?.icon}
+                description={comingSoonModal?.description}
+            />
         </div>
     );
 };
