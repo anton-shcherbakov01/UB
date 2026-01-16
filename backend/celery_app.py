@@ -4,17 +4,17 @@ from celery.schedules import crontab
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-# Обновляем include, указывая новые модули
+# Инициализация приложения
 celery_app = Celery(
-    "juicystat_worker",
+    "wb_tasks",  # Имя приложения
     broker=REDIS_URL,
     backend=REDIS_URL,
     include=[
         'tasks.monitoring',
         'tasks.seo',
         'tasks.finance',
-      # В РАЗРАБОТКЕ: 'tasks.bidder',
-        'tasks.supply'
+        'tasks.supply',
+        # 'tasks.bidder', # В разработке
     ] 
 )
 
@@ -24,6 +24,8 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="Europe/Moscow",
     enable_utc=True,
+    
+    # Настройки надежности соединения
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=None,
     broker_transport_options={
@@ -35,23 +37,42 @@ celery_app.conf.update(
     },
     worker_prefetch_multiplier=1, 
     task_acks_late=True,
+    
+    # --- РАСПИСАНИЕ ЗАДАЧ (BEAT) ---
     beat_schedule={
-        "update-monitored-items-hourly": {
-            "task": "update_all_monitored_items",
-            "schedule": crontab(minute=0), 
-        },
+        # 1. Мгновенные уведомления (Заказы/Выкупы)
+        # Проверяем каждые 10 минут
         "check-new-orders-every-10m": {
             "task": "check_new_orders",
-            "schedule": 600.0, 
+            "schedule": crontab(minute="*/10"), 
         },
-        # В РАЗРАБОТКЕ:
-        # "bidder-producer-every-5m": {
-        #     "task": "bidder_producer_task",
-        #     "schedule": 300.0,
-        # },
+
+        # 2. [НОВОЕ] Часовая сводка (Аналитика в Telegram)
+        # Отправляем ровно в начале каждого часа
+        "send-hourly-summary": {
+            "task": "send_hourly_summary",
+            "schedule": crontab(minute=0), 
+        },
+
+        # 3. Парсинг позиций и цен конкурентов
+        # Ставим на 15-ю минуту каждого часа, чтобы не грузить сервер одновременно со сводкой
+        "update-monitored-items-hourly": {
+            "task": "update_all_monitored_items",
+            "schedule": crontab(minute=15), 
+        },
+        
+        # 4. Синхронизация поставок (Склады)
+        # Раз в день утром (например, в 6:00)
+        "sync-supply-daily": {
+            "task": "sync_supply_data",
+            "schedule": crontab(hour=6, minute=0),
+        },
+
+        # 5. Обучение AI моделей
+        # Глубокой ночью
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
-            "schedule": crontab(hour=3, minute=0),
+            "schedule": crontab(hour=3, minute=30),
         }
     }
 )

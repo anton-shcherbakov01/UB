@@ -57,6 +57,27 @@ class User(Base):
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     slot_monitors = relationship("SlotMonitor", back_populates="user", cascade="all, delete-orphan")
+    notification_settings = relationship("NotificationSettings", uselist=False, back_populates="user", cascade="all, delete-orphan")
+
+class NotificationSettings(Base):
+    """Настройки уведомлений Telegram"""
+    __tablename__ = "notification_settings"
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    
+    # Тумблеры
+    notify_new_orders = Column(Boolean, default=True)      # О новых заказах
+    notify_buyouts = Column(Boolean, default=True)         # О выкупах (продажах)
+    notify_hourly_stats = Column(Boolean, default=False)   # Часовая сводка
+    
+    # Детализация мгновенных сообщений
+    show_daily_revenue = Column(Boolean, default=True)     # Показывать выручку за день
+    
+    # Детализация сводки
+    show_funnel = Column(Boolean, default=True)            # Воронка (посетители -> корзина -> заказ)
+    
+    user = relationship("User", back_populates="notification_settings")
 
 class SlotMonitor(Base):
     """

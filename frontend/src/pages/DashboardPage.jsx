@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
     PieChart, Truck, TrendingUp, Wand2, Lock, Microscope, 
-    Gavel, ScanBarcode, Calendar
+    Gavel, ScanBarcode, Calendar, Brain
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
@@ -146,7 +146,21 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* 4. Analytics (Full Width) */}
+                    {/* 4. AI Analysis (NEW LOCATION) */}
+                    <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                         <div className="flex justify-between items-start">
+                             <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
+                                <Brain size={24} />
+                             </div>
+                             <span className="bg-purple-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">AI</span>
+                         </div>
+                         <div>
+                             <span className="font-bold text-slate-800 block">AI Ассистент</span>
+                             <span className="text-xs text-slate-400">Анализ отзывов и продаж</span>
+                         </div>
+                    </div>
+
+                    {/* 5. Analytics (Full Width) */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
