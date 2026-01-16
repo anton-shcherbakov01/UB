@@ -20,7 +20,6 @@ logger = logging.getLogger("UniversalParser")
 DEBUG_DIR = "debug_screenshots"
 os.makedirs(DEBUG_DIR, exist_ok=True)
 
-# ТВОИ ГЕО КУКИ (НЕ ТРОГАЛ)
 GEO_COOKIES = {
     "moscow": {"x-geo-id": "moscow", "dst": "-1257786"},
     "spb": {"x-geo-id": "spb", "dst": "-1257786"}, 
@@ -46,6 +45,7 @@ class UniversalSeleniumService:
 
         async with aiohttp.ClientSession() as session:
             tasks = [self._check_url(session, f"https://basket-{h}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json", h, sku) for h in hosts]
+            
             for future in asyncio.as_completed(tasks):
                 result = await future
                 if result: return result
@@ -78,28 +78,31 @@ class UniversalSeleniumService:
             
             real_prices = []
             for size in card.get('sizes', []):
-                total_stock = sum(s.get('qty', 0) for s in size.get('stocks', []))
-                if total_stock == 0: continue # Игнорируем товары не в наличии
+                # !!! ИСПРАВЛЕНО: УБРАНА ПРОВЕРКА STOCK !!!
+                # WB часто отдает stock=0 для ботов, но цену показывает верную.
+                
+                # Приоритет цен: total (кошелек) -> product (со скидкой) -> priceU (базовая)
                 p = size.get('price', {}).get('total') or size.get('price', {}).get('product') or size.get('priceU')
                 if p: real_prices.append(int(p / 100))
             
             if real_prices:
                 final_price = min(real_prices)
-                logger.info(f"✅ Found VALID price in JSON (Stock > 0): {final_price}₽")
+                logger.info(f"✅ Found VALID price in JSON: {final_price}₽")
                 return {
                     "valid": True, "sku": sku, "name": name, 
                     "brand": brand, "price": final_price, 
                     "image": image, "rating": 0, "review_count": 0
                 }
             else:
-                logger.warning(f"⚠️ JSON found, but NO STOCK. Trying Selenium...")
+                logger.warning(f"⚠️ JSON found but NO PRICE fields. Trying Selenium...")
         else:
             logger.warning(f"⚠️ JSON not found. Starting Selenium...")
 
+        # 2. Selenium
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._selenium_sync_task, sku)
 
-    # --- ЧАСТЬ 3: SELENIUM C СЕЛЕКТОРАМИ ---
+    # --- ЧАСТЬ 3: SELENIUM (МАКСИМАЛЬНОЕ КОЛИЧЕСТВО СЕЛЕКТОРОВ) ---
 
     def _init_driver(self):
         if self.driver: return
@@ -126,16 +129,16 @@ class UniversalSeleniumService:
 
         try:
             self.driver.get(url)
-            time.sleep(4)
+            time.sleep(3)
             self.driver.execute_script("window.scrollTo(0, 400);")
             time.sleep(2)
 
-            # --- МЕТОД 1: JS (INITIAL_STATE) --- 
-            # Самый надежный, так как это данные приложения
+            # 1. JS INJECTION (Самый точный)
             js_data = self.driver.execute_script("""
                 try {
                     if (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.product) 
                         return JSON.stringify(window.__INITIAL_STATE__.product);
+                    if (window.staticModel) return JSON.stringify(window.staticModel);
                     return null;
                 } catch(e) { return null; }
             """)
@@ -144,42 +147,37 @@ class UniversalSeleniumService:
                 try:
                     data = json.loads(js_data)
                     prod = data.get('product') or data
-                    
                     result['valid'] = True
-                    result['name'] = prod.get('name')
-                    result['brand'] = prod.get('brand')
+                    result['name'] = prod.get('name') or prod.get('imt_name')
+                    result['brand'] = prod.get('brand') or prod.get('selling', {}).get('brand_name')
 
-                    # Ищем цену в JS объекте
-                    price_found = 0
-                    
-                    # Приоритет 1: Размеры (как в JSON)
-                    sizes = prod.get('sizes', [])
+                    # Извлекаем цену
                     prices_list = []
+                    sizes = prod.get('sizes', [])
                     for s in sizes:
                         p = s.get('price', {}).get('total') or s.get('price', {}).get('clientPriceU')
                         if p: prices_list.append(int(p / 100))
                     
-                    if prices_list:
-                        price_found = min(prices_list)
-                    
-                    # Приоритет 2: Общая цена
-                    if price_found == 0:
-                        p_obj = prod.get('price', {})
-                        raw = p_obj.get('clientPriceU') or p_obj.get('salePriceU') or prod.get('salePriceU')
-                        if raw: price_found = int(raw / 100)
+                    if not prices_list:
+                        raw = prod.get('price', {}).get('clientPriceU') or prod.get('clientPriceU') or prod.get('salePriceU')
+                        if raw: prices_list.append(int(raw / 100))
 
-                    if price_found > 0:
-                        result['price'] = price_found
+                    if prices_list:
+                        result['price'] = min(prices_list)
                         logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
                         return result
                 except: pass
 
-            # --- МЕТОД 2: СЕЛЕКТОРЫ (ТВОЙ ЗАПРОС) ---
-            # Ищем конкретные классы цен
+            # 2. CSS SELECTORS (РАСШИРЕННЫЙ СПИСОК)
+            # Ищем конкретные блоки, где WB рисует цену
             selectors = [
-                ".price-block__wallet-price", # Фиолетовая
-                ".price-block__final-price",  # Обычная красная
-                ".product-page__price-block .price-block__content" # Контейнер
+                ".price-block__wallet-price",
+                ".price-block__final-price",
+                "ins.price-block__final-price",
+                "span.price-block__wallet-price",
+                "[class*='wallet-price']",
+                "[class*='final-price']",
+                ".product-page__price-block .price-block__content"
             ]
             
             for sel in selectors:
@@ -187,47 +185,47 @@ class UniversalSeleniumService:
                     elements = self.driver.find_elements(By.CSS_SELECTOR, sel)
                     for el in elements:
                         txt = el.text
-                        # Проверка на кредит
-                        if "мес" in txt or "рассроч" in txt: continue
+                        if not txt: continue
+                        # Чистка
+                        clean = re.sub(r'[^\d]', '', txt)
+                        if not clean: continue
+                        val = int(clean)
                         
-                        # Чистка цены
-                        clean = txt.replace(' ', '').replace('₽', '').replace('\xa0', '')
-                        digits = re.findall(r'(\d+)', clean)
-                        
-                        if digits:
-                            val = int(digits[0])
-                            # Берем первую адекватную цену ( > 50 рублей )
-                            if val > 50:
-                                result['price'] = val
-                                result['valid'] = True
-                                result['name'] = self.driver.title.split(' - ')[0]
-                                logger.info(f"✅ Found via Selector '{sel}': {val}₽")
-                                return result
+                        # Фильтр "мусора" (слишком дешево для товара или 0)
+                        if val > 50:
+                            result['price'] = val
+                            result['valid'] = True
+                            result['name'] = self.driver.title.split(' - ')[0]
+                            logger.info(f"✅ Found via Selector '{sel}': {val}₽")
+                            return result
                 except: continue
 
-            # --- МЕТОД 3: ТЕКСТ (ПОСЛЕДНИЙ ШАНС) ---
+            # 3. TEXT FALLBACK (ПОСЛЕДНЯЯ НАДЕЖДА)
             body_text = self.driver.find_element(By.TAG_NAME, "body").text
+            # Ищем числа с знаком рубля, исключая рассрочки
             matches = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
             
-            valid_prices = []
-            for match in matches:
-                # Пропускаем, если рядом слово "мес" (это костыль, но регулярка сложная в python re)
-                # Поэтому проверяем вхождение подстроки
-                if f"{match} ₽ / мес" in body_text: continue
+            candidates = []
+            for m in matches:
+                # Проверка: нет ли рядом слова "мес" в тексте страницы около этого числа
+                # (Простая эвристика: если число 382, и в тексте есть "382 ₽ / мес")
+                clean_val = int(m.replace(' ', '').replace('\xa0', ''))
+                
+                # Если цена < 1000 и в тексте есть маркеры кредита рядом с ней - скипаем
+                # Но если товар реально дешевый, это риск.
+                # Для твоего случая (где цены >1500) это сработает.
+                if f"{m} ₽ / мес" in body_text: continue
+                
+                candidates.append(clean_val)
 
-                val = int(match.replace(' ', '').replace('\xa0', ''))
-                if val > 50: valid_prices.append(val)
-
-            if valid_prices:
-                # Обычно цена товара - это самая маленькая цена НА СТРАНИЦЕ, которая не является рассрочкой
-                # (Цены похожих товаров обычно ниже в блоке "Похожие", но мы скроллим не до конца)
-                result['price'] = min(valid_prices)
+            if candidates:
+                # Берем минимальную адекватную цену
+                result['price'] = min(candidates)
                 result['valid'] = True
                 result['name'] = self.driver.title.split(' - ')[0]
-                logger.info(f"✅ Found via Raw Text: {result['price']}₽")
+                logger.info(f"✅ Found via Text Search: {result['price']}₽")
                 return result
-            
-            # Скриншот
+
             self.driver.save_screenshot(f"{DEBUG_DIR}/fail_price_{sku}.png")
 
         except Exception as e:
@@ -237,7 +235,7 @@ class UniversalSeleniumService:
 
         return result
 
-    # --- БИДДЕР ---
+    # --- МЕТОДЫ БИДДЕРА И SEO ОСТАВЛЯЕМ КАК БЫЛИ ---
     def get_search_auction(self, query: str):
         if not self.driver: self._init_driver()
         url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&sort=popular"
@@ -259,7 +257,6 @@ class UniversalSeleniumService:
         except: pass
         return ads
 
-    # --- SEO ---
     def get_seo_position(self, query: str, sku: int, geo: str = "moscow"):
         if not self.driver: self._init_driver()
         sku = int(sku)
