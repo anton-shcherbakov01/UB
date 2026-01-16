@@ -59,23 +59,21 @@ class User(Base):
 
 class SlotMonitor(Base):
     """
-    Таблица для мониторинга слотов (Бот).
-    Пользователь подписывается на склад, и если коэффициент <= target_coefficient,
-    ему приходит уведомление в Telegram.
+    Таблица для мониторинга слотов.
     """
     __tablename__ = "slot_monitors"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     
-    warehouse_id = Column(Integer)     # ID склада WB
-    warehouse_name = Column(String)    # Имя (Кешируем для удобства)
+    warehouse_id = Column(Integer)
+    warehouse_name = Column(String)
     
-    target_coefficient = Column(Integer, default=0) # Уведомлять если <= этому значению (обычно 0 или 1)
-    box_type = Column(String, default="all") # "box", "pallet" или "all"
+    target_coefficient = Column(Integer, default=0)
+    box_type = Column(String, default="all")
     
     is_active = Column(Boolean, default=True)
-    last_notified_at = Column(DateTime, nullable=True) # Чтобы не спамить каждую минуту
+    last_notified_at = Column(DateTime, nullable=True)
     
     user = relationship("User", back_populates="slot_monitors")
 

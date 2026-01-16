@@ -1,47 +1,58 @@
 import logging
 import json
-from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException, Body
+from typing import List, Optional
 from pydantic import BaseModel, validator
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
 
-from dependencies import get_current_user, get_redis_client
-from database import User
+from dependencies import get_current_user, get_redis_client, get_db
+from database import User, SlotMonitor
 from services.slots_service import SlotsService
 
 logger = logging.getLogger("SlotsRouter")
 router = APIRouter(prefix="/api/slots", tags=["Slots"])
+
+# =======================
+# 1. MODELS (Обязательно в начале!)
+# =======================
+
+class MonitorCreate(BaseModel):
+    warehouse_id: int
+    warehouse_name: str
+    target_coefficient: int = 0  # 0 (бесплатно) или 1
+    box_type: str = "all"
+
+# Эта модель вызывала ошибку, если стояла ниже
+class MonitorResponse(MonitorCreate):
+    id: int
+    is_active: bool
+
+    class Config:
+        orm_mode = True
 
 class SlotItem(BaseModel):
     date: str
     coefficient: int
     warehouseID: int
     warehouseName: str
-    boxTypeName: str = "Короба" 
+    boxTypeName: str = "Короба"
     boxTypeID: int
-    isSortingCenter: bool = False  # <--- Добавили флаг транзита/СЦ
+    isSortingCenter: bool = False
 
     @validator("boxTypeName", pre=True, always=True)
     def set_name_from_id(cls, v, values):
-        # Если имя есть и оно не пустое/не None
-        if v and isinstance(v, str):
-            return v
-        
-        # Логика восстановления имени по ID
+        if v and isinstance(v, str): return v
         box_id = values.get("boxTypeID")
-        if box_id == 2:
-            return "Монопаллеты"
-        if box_id in [0, 1, 5, 6]:
-            return "Короба"
-        return "Прочее"
+        return "Монопаллеты" if box_id == 2 else "Короба"
+
+# =======================
+# 2. ENDPOINTS
+# =======================
 
 @router.get("/coefficients", response_model=List[SlotItem])
-async def get_slots(
-    user: User = Depends(get_current_user),
-    refresh: bool = False
-):
-    """
-    Получение коэффициентов приемки.
-    """
+async def get_slots(user: User = Depends(get_current_user), refresh: bool = False):
+    """Получение коэффициентов (логика с кешем)"""
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="WB API Token required")
 
@@ -51,18 +62,16 @@ async def get_slots(
     if not refresh and r_client:
         cached = r_client.get(cache_key)
         if cached:
-            try:
-                return json.loads(cached)
-            except json.JSONDecodeError:
-                pass
+            try: return json.loads(cached)
+            except: pass
 
     service = SlotsService(user.wb_api_token)
     data = await service.get_coefficients()
-
-    # Сортировка: Сначала бесплатные, потом дешевые, потом по имени
+    
+    # Сортировка
     data.sort(key=lambda x: (
-        0 if x.get('coefficient') == 0 else 1, # Приоритет бесплатным
-        x.get('coefficient') if x.get('coefficient') != -1 else 999, # Закрытые (-1) в конец
+        0 if x.get('coefficient') == 0 else 1,
+        x.get('coefficient') if x.get('coefficient') != -1 else 999,
         x.get('warehouseName', '')
     ))
 
@@ -80,9 +89,10 @@ async def get_monitors(
 ):
     """Список складов на отслеживании"""
     result = await db.execute(select(SlotMonitor).where(SlotMonitor.user_id == user.id))
-    return result.scalars().all()
+    monitors = result.scalars().all()
+    return monitors
 
-@router.post("/monitors")
+@router.post("/monitors", response_model=MonitorResponse)
 async def add_monitor(
     data: MonitorCreate,
     user: User = Depends(get_current_user),
@@ -102,7 +112,8 @@ async def add_monitor(
         warehouse_id=data.warehouse_id,
         warehouse_name=data.warehouse_name,
         target_coefficient=data.target_coefficient,
-        box_type=data.box_type
+        box_type=data.box_type,
+        is_active=True
     )
     db.add(monitor)
     await db.commit()
