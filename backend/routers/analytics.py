@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 from analysis_service import analysis_service
 from services.supply import supply_service
 # Импорт зависимостей БД (примерный)
-from database import get_db, User, get_current_user 
+from database import get_db, User
+from dependencies import get_current_user
 from sqlalchemy import text # Или использование ORM
 from wb_api.statistics import WBStatisticsAPI
 
