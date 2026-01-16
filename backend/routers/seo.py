@@ -18,7 +18,7 @@ from services.wb_search import wb_search_service, GEO_ZONES
 from parser_service import parser_service
 
 logger = logging.getLogger("SEO-Router")
-router = APIRouter(prefix="/api/seo", tags=["SEO"])
+router = APIRouter(prefix="/api", tags=["SEO"])
 
 class SeoTrackRequest(BaseModel):
     sku: int
@@ -42,7 +42,7 @@ class SeoPdfRequest(BaseModel):
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
 
-@router.get("/regions")
+@router.get("/seo/regions")
 @cache(expire=86400) # Кэшируем список регионов на сутки, он меняется редко
 async def get_regions():
     """
@@ -50,7 +50,7 @@ async def get_regions():
     """
     return [{"key": k, "label": k.upper()} for k in GEO_ZONES.keys()]
 
-@router.get("/position")
+@router.get("/seo/position")
 @cache(expire=300) # Кэшируем результат поиска на 5 минут
 async def check_position(
     query: str, 
