@@ -12,34 +12,32 @@ from concurrent.futures import ThreadPoolExecutor
 from database import get_db, User, MonitoredItem, PriceHistory
 from dependencies import get_current_user
 from tasks import parse_and_save_sku, get_status
-# Используем наш новый универсальный сервис
 from services.selenium_search import selenium_service
 
 logger = logging.getLogger("Monitoring")
 router = APIRouter(prefix="/api", tags=["Monitoring"])
+
+# Экзекьютор нужен ТОЛЬКО для синхронной генерации PDF
 executor = ThreadPoolExecutor(max_workers=2)
 
 @router.get("/monitoring/scan/{sku}")
 async def scan_product(sku: int):
     """
-    Мгновенный скан товара через Selenium (для страницы Сканер)
+    Мгновенный скан товара.
     """
-    loop = asyncio.get_event_loop()
     try:
-        # Запускаем в отдельном потоке, чтобы не блокировать API
-        result = await loop.run_in_executor(
-            executor, 
-            selenium_service.get_product_details, 
-            sku
-        )
+        # Прямой вызов async метода (без executor)
+        result = await selenium_service.get_product_details(sku)
         
-        if not result['valid']:
+        if not result.get('valid'):
             raise HTTPException(404, "Товар не найден или ошибка парсинга WB")
             
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Scan error: {e}")
-        raise HTTPException(500, "Ошибка сервера при сканировании")
+        raise HTTPException(500, f"Scan failed: {str(e)}")
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -56,21 +54,21 @@ async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: A
     if (await db.execute(stmt)).scalars().first(): 
         return {"status": "exists", "message": "Товар уже в списке"}
 
-    # Сразу пробуем получить имя товара через Selenium, чтобы не было "Загрузка..."
-    loop = asyncio.get_event_loop()
+    # Исправлено: убран run_in_executor, так как метод асинхронный
+    name = "Загрузка..."
+    brand = "..."
     try:
-        details = await loop.run_in_executor(executor, selenium_service.get_product_details, sku)
-        name = details.get('name', 'Товар WB') if details.get('valid') else "Товар WB"
-        brand = details.get('brand', '')
-    except:
-        name = "Загрузка..."
-        brand = "..."
+        details = await selenium_service.get_product_details(sku)
+        if details.get('valid'):
+            name = details.get('name', 'Товар WB')
+            brand = details.get('brand', '')
+    except Exception as e:
+        logger.warning(f"Name fetch failed: {e}")
 
     new_item = MonitoredItem(user_id=user.id, sku=sku, name=name, brand=brand)
     db.add(new_item)
     await db.commit()
     
-    # Запускаем фоновую задачу для сохранения истории цен
     task = parse_and_save_sku.delay(sku, user.id)
     return {"status": "accepted", "task_id": task.id, "name": name}
 
@@ -124,17 +122,27 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
 
     history = (await db.execute(select(PriceHistory).where(PriceHistory.item_id == item.id).order_by(PriceHistory.recorded_at.desc()).limit(100))).scalars().all()
 
+    # Генерацию PDF оставляем в executor, так как FPDF синхронная и тяжелая
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(executor, _create_pdf_sync, sku, history)
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes), 
+        media_type='application/pdf', 
+        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
+    )
+
+def _create_pdf_sync(sku, history):
+    """Синхронная функция создания PDF для запуска в executor"""
     pdf = FPDF()
     pdf.add_page()
     
-    # Пытаемся загрузить шрифт с поддержкой кириллицы
     font_paths = [
         '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         './fonts/DejaVuSans.ttf',
         '/usr/share/fonts/TTF/DejaVuSans.ttf'
     ]
     font_loaded = False
-    
     for path in font_paths:
         if os.path.exists(path):
             try:
@@ -144,16 +152,15 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
                 break
             except: continue
             
-    if not font_loaded:
-        pdf.set_font("Arial", size=12)
+    if not font_loaded: pdf.set_font("Arial", size=12)
 
     pdf.cell(0, 10, txt=f"Price Report: SKU {sku}", ln=1, align='C')
     pdf.ln(5)
     
     pdf.set_font_size(10)
     pdf.cell(60, 10, "Date", 1)
-    pdf.cell(40, 10, "Wallet Price", 1)
-    pdf.cell(40, 10, "Regular Price", 1)
+    pdf.cell(40, 10, "Wallet", 1)
+    pdf.cell(40, 10, "Regular", 1)
     pdf.ln()
 
     for h in history:
@@ -162,14 +169,4 @@ async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: Asy
         pdf.cell(40, 10, f"{h.standard_price}", 1)
         pdf.ln()
 
-    pdf_content = pdf.output(dest='S')
-    if isinstance(pdf_content, str):
-        pdf_bytes = pdf_content.encode('latin-1') 
-    else:
-        pdf_bytes = pdf_content
-
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes), 
-        media_type='application/pdf', 
-        headers={'Content-Disposition': f'attachment; filename="wb_report_{sku}.pdf"'}
-    )
+    return pdf.output(dest='S').encode('latin-1')
