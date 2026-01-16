@@ -46,11 +46,11 @@ class SeoPdfRequest(BaseModel):
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
 
-@router.get("/regions")
+@router.get("/seo/regions")
 async def get_regions():
     return [{"key": k, "label": k.upper()} for k in GEO_COOKIES.keys()]
 
-@router.get("/position")
+@router.get("/seo/position")
 async def check_position(
     query: str, 
     sku: int, 
