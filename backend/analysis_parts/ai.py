@@ -32,68 +32,69 @@ class AIModule:
         else:
             return data
 
-    def _call_ai(self, prompt: str, fallback_json: dict, temperature: float = 0.7):
-        # Проверка наличия API ключа
-        if not self.ai_api_key:
-            logger.error("AI_API_KEY не установлен. Пропуск AI запроса.")
-            fallback_json["_error"] = "AI_API_KEY не настроен. Проверьте переменные окружения."
-            return fallback_json
-            
-        try:
-            payload = {
-                "model": "deepseek-chat", 
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature
-            }
-            headers = {"Authorization": f"Bearer {self.ai_api_key}", "Content-Type": "application/json"}
-            
-            logger.info(f"Запрос к AI API: {self.ai_url}")
-            resp = requests.post(self.ai_url, json=payload, headers=headers, timeout=90) 
-            
-            if resp.status_code != 200:
-                error_text = resp.text[:500] if resp.text else "Нет ответа"
-                logger.error(f"AI API Error {resp.status_code}: {error_text}")
-                fallback_json["_error"] = f"AI API вернул ошибку {resp.status_code}: {error_text}"
-                return fallback_json
-            
-            result = resp.json()
-            if 'choices' not in result or not result['choices']:
-                logger.error(f"AI API вернул некорректный ответ: {result}")
-                fallback_json["_error"] = "AI API вернул некорректный формат ответа"
-                return fallback_json
-                
-            content = result['choices'][0]['message']['content']
-            try:
-                # Очистка Markdown-блоков кода
-                content = re.sub(r'^```json\s*', '', content, flags=re.MULTILINE)
-                content = re.sub(r'^```\s*', '', content, flags=re.MULTILINE)
-                content = content.strip()
+    def _call_ai(self, prompt: str, fallback_data: dict, temperature: float = 0.5):
+        """
+        Универсальный метод вызова LLM с авто-исправлением JSON.
+        """
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": "You are a precise JSON generator. Output ONLY valid JSON without Markdown blocks (```json). Do not add comments."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+            # Добавляем response_format, если API поддерживает (для OpenAI/DeepSeek это json_object)
+            # Но для универсальности оставим пока текстом и будем парсить сами.
+        }
 
-                json_match = re.search(r'\{[\s\S]*\}', content)
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    # Рекурсивная очистка
-                    return self._clean_recursive(parsed)
-                else: 
-                    logger.warning(f"No JSON found in AI response. Content preview: {content[:200]}...")
-                    fallback_json["_error"] = f"AI вернул некорректный формат. Первые 200 символов: {content[:200]}"
-                    return fallback_json
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON Parse Error: {e}. Content: {content[:300]}")
-                fallback_json["_error"] = f"Ошибка парсинга JSON от AI: {str(e)}"
-                return fallback_json
-        except requests.exceptions.Timeout:
-            logger.error(f"AI API Timeout после 90 секунд")
-            fallback_json["_error"] = "Таймаут запроса к AI API (90s)"
-            return fallback_json
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"AI API Connection Error: {e}")
-            fallback_json["_error"] = f"Ошибка соединения с AI API: {str(e)}"
-            return fallback_json
-        except Exception as e:
-            logger.error(f"AI Connection Error: {e}", exc_info=True)
-            fallback_json["_error"] = f"Неожиданная ошибка AI: {str(e)}"
-            return fallback_json
+        for attempt in range(3):
+            try:
+                logger.info(f"Запрос к AI API: {self.api_url}")
+                response = requests.post(self.api_url, headers=self.headers, json=payload, timeout=60)
+                
+                if response.status_code != 200:
+                    logger.error(f"AI API Error {response.status_code}: {response.text}")
+                    time.sleep(2)
+                    continue
+
+                raw_content = response.json()['choices'][0]['message']['content']
+                
+                # --- AUTO-FIX JSON ---
+                # 1. Убираем Markdown обертки ```json ... ```
+                clean_json = re.sub(r'```json\s*|\s*```', '', raw_content).strip()
+                
+                # 2. Убираем странные символы в начале (BOM и прочее)
+                clean_json = clean_json.strip('`').strip()
+                
+                # 3. Фикс распространенной ошибки: лишняя запятая в конце списка/объекта
+                clean_json = re.sub(r',\s*([\]}])', r'\1', clean_json)
+                
+                # 4. Фикс ошибки из лога: AI иногда вставляет "&" перед объектом
+                clean_json = re.sub(r':\s*&{', ': {', clean_json)
+
+                try:
+                    data = json.loads(clean_json)
+                    return data
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON Parse Error: {e}. Content: {clean_json[:500]}")
+                    # Если совсем плохо - попробуем найти первый { и последний }
+                    try:
+                        start = clean_json.find('{')
+                        end = clean_json.rfind('}') + 1
+                        if start != -1 and end != 0:
+                            return json.loads(clean_json[start:end])
+                    except: pass
+                    
+                    if attempt == 2:
+                        fallback_data["_error"] = f"Ошибка парсинга JSON от AI: {str(e)}"
+                        return fallback_data
+
+            except Exception as e:
+                logger.error(f"AI Connection Error: {e}")
+                time.sleep(2)
+
+        fallback_data["_error"] = "AI сервис недоступен после 3 попыток"
+        return fallback_data
 
     def analyze_reviews_with_ai(self, reviews: list, product_name: str) -> Dict[str, Any]:
         """
