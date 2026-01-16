@@ -19,6 +19,8 @@ from tasks import generate_seo_task, check_seo_position_task, cluster_keywords_t
 from services.selenium_search import selenium_service, GEO_COOKIES
 from parser_service import parser_service
 
+executor = ThreadPoolExecutor(max_workers=3)
+
 logger = logging.getLogger("SEO-Router")
 router = APIRouter(prefix="/api", tags=["SEO"])
 
