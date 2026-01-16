@@ -61,8 +61,8 @@ const AppContent = () => {
             <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} />} />
             <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
-            <Route path="/slots" element={<SlotsPage />} />
-
+            <Route path="/slots" element={<SlotsPage user={user} onNavigate={handleTabChange} />} />
+            
             {/* Редирект для несуществующих путей */}
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
