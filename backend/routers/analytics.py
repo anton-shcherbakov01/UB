@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
 from datetime import datetime, timedelta
 # Импортируем нашу функцию расчета
-from analysis_parts.economics import calculate_abc_xyz, get_return_forensics
+from analysis_service import analysis_service
 from services.supply import supply_service
 # Импорт зависимостей БД (примерный)
 from database import get_db, User, get_current_user 
@@ -50,7 +50,7 @@ async def get_abc_xyz_stats(
 
     # 3. Передаем данные в наш калькулятор
     # calculate_abc_xyz ожидает List[dict] с ключами: sku, date, revenue, qty
-    analysis_result = calculate_abc_xyz(raw_data)
+    analysis_result = analysis_service.economics.calculate_abc_xyz(raw_data)
     
     return analysis_result
 
@@ -69,7 +69,7 @@ async def get_return_forensics_endpoint(
     # Вызываем метод из EconomicsModule (через фасад analysis_service)
     # Нужно убедиться, что метод добавлен в analysis_service.py как прокси
     # Либо вызывать напрямую: analysis_service.economics.get_return_forensics
-    data = await get_return_forensics(user.id, date_from, date_to)
+    data = await analysis_service.economics.get_return_forensics(user.id, date_from, date_to)
     return data
 
 @router.get("/finance/cash-gap")

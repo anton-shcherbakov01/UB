@@ -1,12 +1,14 @@
 import logging
+import numpy as np
 from typing import List, Dict, Any
 
 logger = logging.getLogger("Analysis-Clustering")
 
-# Lazy Loading pattern to prevent crash if libs are missing
 try:
     from sentence_transformers import SentenceTransformer
-    from sklearn.cluster import KMeans
+    # Заменяем KMeans на AgglomerativeClustering для автоматического определения числа групп
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics.pairwise import cosine_similarity
     ML_AVAILABLE = True
 except ImportError:
     ML_AVAILABLE = False
@@ -16,69 +18,94 @@ class ClusteringModule:
         self._embedder = None
 
     def _get_embedder(self):
-        """Singleton pattern for heavy BERT model"""
         if not ML_AVAILABLE:
             raise ImportError("Install 'sentence-transformers' and 'scikit-learn'")
         if self._embedder is None:
             logger.info("Loading BERT model for clustering...")
-            # Using a lightweight model suitable for CPU
+            # Модель 'all-MiniLM-L6-v2' легкая и быстрая, отлично подходит для русского языка (multilingual версии)
+            # Если нужна строго русская, можно взять 'cointegrated/rubert-tiny2', но MiniLM универсальнее
             self._embedder = SentenceTransformer('all-MiniLM-L6-v2')
         return self._embedder
 
     def cluster_keywords(self, keywords: List[str]) -> Dict[str, Any]:
         """
-        Кластеризация ключевых слов по семантической близости (BERT + K-Means).
-        Позволяет группировать запросы по интенту (смыслу), а не просто по вхождению слов.
+        Умная кластеризация на основе Agglomerative Clustering.
+        Группирует фразы по смыслу, автоматически определяя количество групп.
         """
         if not keywords:
             return {"status": "error", "message": "Empty keywords list"}
         
-        if not ML_AVAILABLE:
+        # Убираем дубликаты и пустые строки, сохраняя порядок
+        unique_keywords = list(dict.fromkeys([k.strip() for k in keywords if k.strip()]))
+        
+        if len(unique_keywords) < 2:
             return {
-                "status": "error", 
-                "message": "ML libraries missing. Install sentence-transformers & scikit-learn."
+                "status": "success",
+                "clusters": [{"topic": unique_keywords[0], "keywords": unique_keywords, "count": 1}] if unique_keywords else [],
+                "total_keywords": len(unique_keywords),
+                "n_clusters": 1
             }
+
+        if not ML_AVAILABLE:
+            return {"status": "error", "message": "ML libraries missing."}
 
         try:
             model = self._get_embedder()
             
             # 1. Векторизация (Embeddings)
-            embeddings = model.encode(keywords)
+            embeddings = model.encode(unique_keywords)
             
-            # 2. Определение оптимального числа кластеров
-            # Эвристика: ~5 ключей на кластер, минимум 2 кластера (если ключей > 5)
-            n_clusters = max(2, len(keywords) // 5)
-            if len(keywords) < 5:
-                n_clusters = 1
+            # Нормализуем векторы для корректной работы косинусного расстояния
+            embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+            # 2. Иерархическая кластеризация
+            # distance_threshold=1.5 -> параметр "строгости". 
+            # Чем МЕНЬШЕ, тем более похожими должны быть фразы, чтобы попасть в одну группу.
+            # Для MiniLM значения обычно варьируются от 1.0 до 1.5 (Euclidean over normalized vectors ~ Cosine)
+            # При affinity='euclidean' и linkage='ward' на нормализованных векторах это работает как косинусная близость.
+            clustering_model = AgglomerativeClustering(
+                n_clusters=None,           # Автоматическое число кластеров
+                distance_threshold=1.2,    # Порог объединения (подбирается экспериментально, 1.2 - сбалансировано)
+                metric='euclidean',
+                linkage='ward'
+            )
             
-            # 3. Кластеризация K-Means
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-            kmeans.fit(embeddings)
-            labels = kmeans.labels_
-            
-            # 4. Группировка результатов
-            clusters = {}
-            for keyword, label in zip(keywords, labels):
+            labels = clustering_model.fit_predict(embeddings)
+
+            # 3. Группировка результатов
+            clusters_map = {}
+            for keyword, label in zip(unique_keywords, labels):
                 lbl_str = str(label)
-                if lbl_str not in clusters:
-                    clusters[lbl_str] = []
-                clusters[lbl_str].append(keyword)
-            
-            # 5. Нейминг кластеров (берем самое короткое слово как название темы)
+                if lbl_str not in clusters_map:
+                    clusters_map[lbl_str] = []
+                clusters_map[lbl_str].append(keyword)
+
+            # 4. Формирование красивого вывода
             named_clusters = []
-            for _, kw_list in clusters.items():
-                topic_name = min(kw_list, key=len) # Самое короткое слово ~ тема
+            for _, kw_list in clusters_map.items():
+                # Выбор названия темы:
+                # Берем самую короткую фразу, так как она часто является "ядром" (напр. "платье" vs "платье красное длинное")
+                # Либо, если список длинный, можно искать центроид, но min(len) работает хорошо и быстро.
+                kw_list_sorted = sorted(kw_list, key=len)
+                topic_name = kw_list_sorted[0] 
+                
+                # Делаем первую букву заглавной
+                topic_name = topic_name.capitalize()
+
                 named_clusters.append({
                     "topic": topic_name,
                     "keywords": kw_list,
                     "count": len(kw_list)
                 })
-                
+
+            # Сортируем кластеры по количеству ключевиков (самые крупные первыми)
+            named_clusters.sort(key=lambda x: x['count'], reverse=True)
+
             return {
                 "status": "success",
                 "clusters": named_clusters,
-                "total_keywords": len(keywords),
-                "n_clusters": n_clusters
+                "total_keywords": len(unique_keywords),
+                "n_clusters": len(named_clusters)
             }
 
         except Exception as e:
