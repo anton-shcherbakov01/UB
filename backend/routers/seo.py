@@ -41,37 +41,52 @@ class SeoPdfRequest(BaseModel):
     features: Optional[Dict[str, str]] = {}
     faq: Optional[List[Dict[str, str]]] = []
 
+@router.get("/regions")
+@cache(expire=86400) # Кэшируем список регионов на сутки, он меняется редко
+async def get_regions():
+    """
+    Отдает список доступных регионов для фронтенда.
+    """
+    return [{"key": k, "label": k.upper()} for k in GEO_ZONES.keys()]
+
 @router.get("/position")
+@cache(expire=300) # Кэшируем результат поиска на 5 минут
 async def check_position(
     query: str, 
     sku: int, 
-    geo: str = Query("moscow", description="Region key: moscow, spb, kazan, krasnodar, ekb, belarus...")
+    geo: str = Query("moscow", description="Region key: moscow, spb, kazan...")
 ):
     """
     Мгновенная проверка позиции через Mobile API
+    Возвращает:
+    - Точную позицию
+    - Факт авторекламы (CPM)
+    - Соседей (кто выше/ниже) для анализа конкуренции
     """
-    if geo not in GEO_ZONES:
-        geo = "moscow" # Fallback
+    if not query or not sku:
+        raise HTTPException(status_code=400, detail="Query and SKU are required")
 
-    result = await wb_search_service.get_sku_position(query, sku, geo=geo)
+    # Нормализация региона
+    if geo not in GEO_ZONES:
+        geo = "moscow"
+
+    try:
+        # Вызываем сервис
+        result = await wb_search_service.get_sku_position(query, sku, geo=geo)
+    except Exception as e:
+        # Логируем и отдаем 500, но аккуратно
+        raise HTTPException(status_code=500, detail=f"Search service error: {str(e)}")
     
-    if not result['found']:
-        return {
-            "status": "not_found", 
-            "message": f"Артикул не найден в топ-{result.get('total_products', 'N')} товаров",
-            "geo": geo
-        }
-    
-    return {
-        "status": "success",
+    # Формируем красивый ответ
+    response_data = {
+        "status": "success" if result['found'] else "not_found",
+        "geo": geo,
+        "query": query,
+        "sku": sku,
         "data": result
     }
-
-@router.get("/regions")
-async def get_regions():
-    """Отдает список доступных регионов для фронтенда"""
-    # Превращаем словарь в список для удобства фронта
-    return [{"key": k, "label": k.upper()} for k in GEO_ZONES.keys()]
+    
+    return response_data
 
 @router.post("/seo/track")
 async def track_position(req: SeoTrackRequest, user: User = Depends(get_current_user)):
