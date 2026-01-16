@@ -16,6 +16,7 @@ import SupplyPage from './pages/SupplyPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminPage from './pages/AdminPage';
 import AdvancedAnalyticsPage from './pages/AdvancedAnalyticsPage';
+import SlotsPage from './pages/SlotsPage';
 
 // Внутренний компонент, который находится ВНУТРИ Router
 const AppContent = () => {
@@ -60,6 +61,7 @@ const AppContent = () => {
             <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} />} />
             <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
+            <Route path="/slots" element={<SlotsPage />} />
 
             {/* Редирект для несуществующих путей */}
             <Route path="*" element={<Navigate to="/" replace />} />
