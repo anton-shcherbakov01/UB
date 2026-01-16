@@ -14,27 +14,51 @@ class ClickHouseService:
         self.database = os.getenv("CLICKHOUSE_DB", "wb_analytics")
         self.client = None
 
-    def connect(self):
+    def connect(self, retry_count=3, retry_delay=5):
         """Establishes connection to ClickHouse and ensures DB exists."""
-        try:
-            self.client = clickhouse_connect.get_client(
-                host=self.host,
-                port=self.port,
-                username=self.user,
-                password=self.password,
-                connect_timeout=10
-            )
-            # Create DB if not exists
-            self.client.command(f"CREATE DATABASE IF NOT EXISTS {self.database}")
-            self.init_schema()
-            logger.info("✅ ClickHouse connected and schema initialized.")
-        except Exception as e:
-            logger.error(f"❌ ClickHouse connection failed: {e}")
-            raise e
+        import time
+        
+        last_error = None
+        for attempt in range(1, retry_count + 1):
+            try:
+                self.client = clickhouse_connect.get_client(
+                    host=self.host,
+                    port=self.port,
+                    username=self.user,
+                    password=self.password,
+                    connect_timeout=10
+                )
+                # Test connection with a simple query
+                self.client.command("SELECT 1")
+                # Create DB if not exists
+                self.client.command(f"CREATE DATABASE IF NOT EXISTS {self.database}")
+                self.init_schema()
+                logger.info("✅ ClickHouse connected and schema initialized.")
+                return
+            except Exception as e:
+                last_error = e
+                if attempt < retry_count:
+                    logger.warning(f"⚠️ ClickHouse connection attempt {attempt}/{retry_count} failed: {e}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"❌ ClickHouse connection failed after {retry_count} attempts: {e}")
+                    # Don't raise - allow retry on next call
+                    self.client = None
+        
+        # If all retries failed, raise the last error
+        if last_error:
+            raise last_error
 
     def get_client(self):
+        """Get ClickHouse client, connecting if necessary."""
         if not self.client:
-            self.connect()
+            try:
+                self.connect()
+            except Exception as e:
+                logger.warning(f"ClickHouse connection failed (will retry on next use): {e}")
+                # Return None to indicate connection is not available
+                # This allows graceful degradation
+                return None
         return self.client
 
     def init_schema(self):
@@ -116,6 +140,9 @@ class ClickHouseService:
         
         # Ensure we use the connected client
         client = self.get_client()
+        if not client:
+            logger.warning("ClickHouse client not available, skipping insert")
+            return
         
         # Columns must match the Create Table order/structure
         # In production, use Pandas DataFrame for faster inserts, but here we use native list
@@ -128,6 +155,8 @@ class ClickHouseService:
             )
         except Exception as e:
             logger.error(f"ClickHouse Insert Error: {e}")
+            # Reset client to force reconnection on next use
+            self.client = None
             raise e
 
 # Singleton instance

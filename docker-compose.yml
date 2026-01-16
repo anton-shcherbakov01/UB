@@ -199,6 +199,8 @@ services:
     depends_on: 
       redis:
         condition: service_started
+      clickhouse:
+        condition: service_started
     logging:
       driver: "json-file"
       options:

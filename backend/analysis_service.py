@@ -22,11 +22,10 @@ class AnalysisService:
         self.ai = AIModule()
         self.economics = EconomicsModule()
         self.clustering = ClusteringModule()
+        self._ch_initialized = False
         
-        try:
-            ch_service.connect()
-        except Exception as e:
-            logger.warning(f"ClickHouse init failed (will retry on usage): {e}")
+        # Don't connect immediately - use lazy initialization
+        # Connection will be established on first use
 
     # --- Delegations to ClusteringModule ---
     def cluster_keywords(self, keywords: List[str]) -> Dict[str, Any]:
@@ -47,7 +46,19 @@ class AnalysisService:
             lead_time_days, lead_time_sigma, service_level_z
         )
 
+    def _ensure_ch_connection(self):
+        """Lazy initialization of ClickHouse connection."""
+        if not self._ch_initialized:
+            try:
+                ch_service.connect()
+                self._ch_initialized = True
+                logger.info("✅ ClickHouse connection established (lazy init)")
+            except Exception as e:
+                logger.warning(f"ClickHouse connection failed (will retry on usage): {e}")
+                # Don't raise - allow retry on next use
+    
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
+        self._ensure_ch_connection()
         return await self.economics.get_pnl_data(user_id, date_from, date_to, db)
 
     def calculate_metrics(self, raw_data: dict):
