@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
     ArrowLeft, TrendingDown, Warehouse, Calendar, 
-    DollarSign, AlertCircle, Search, Loader2, Info
+    DollarSign, AlertCircle, Search, Loader2, Info, X
 } from 'lucide-react';
 import { 
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell 
@@ -12,6 +12,7 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
     const [activeTab, setActiveTab] = useState('forensics'); // forensics | cashgap
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState(null);
+    const [showInfo, setShowInfo] = useState(false); // Состояние для показа подсказки
 
     useEffect(() => {
         fetchData();
@@ -24,24 +25,6 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
                 ? `${API_URL}/api/analytics/forensics/returns?days=30`
                 : `${API_URL}/api/analytics/finance/cash-gap`;
             
-            // Заглушка для демонстрации, если бэкенд еще не отвечает
-            // УДАЛИТЕ этот блок try-catch, когда бэкенд будет готов
-            /* if (activeTab === 'forensics') {
-                 setData({
-                    size_analysis: [
-                        { size: 'M', buyout_rate: 22, sales: 10, returns: 35, loss_on_returns: 1500, verdict: 'Критически низкий выкуп' },
-                        { size: 'L', buyout_rate: 45, sales: 50, returns: 50, loss_on_returns: 2100, verdict: 'Низкий выкуп' },
-                        { size: 'S', buyout_rate: 90, sales: 100, returns: 10, loss_on_returns: 500, verdict: 'Норма' },
-                    ],
-                    warehouse_analysis: [
-                        { warehouse: 'Коледино', return_rate: 15, returns_count: 120, cost: 5000 },
-                        { warehouse: 'Казань', return_rate: 40, returns_count: 80, cost: 3200 },
-                    ]
-                 });
-                 setLoading(false); return;
-            }
-            */
-
             const res = await fetch(endpoint, { headers: getTgHeaders() });
             if (res.ok) {
                 setData(await res.json());
@@ -53,18 +36,59 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
         }
     };
 
+    // Тексты подсказок
+    const getInfoContent = () => {
+        if (activeTab === 'forensics') {
+            return {
+                title: "Зачем нужна Форензика?",
+                text: "Этот инструмент ищет скрытые убытки. Если у размера низкий выкуп — возможно, проблема в лекалах. Если на складе высокий % возвратов — возможен брак партии или подмена товара. Исправив это, вы сохраните чистую прибыль."
+            };
+        }
+        return {
+            title: "Как работает прогноз разрывов?",
+            text: "Мы анализируем скорость продаж и текущие остатки. Система рассчитывает точную дату, когда товар закончится (Out-of-Stock), и подсказывает сумму, которую нужно подготовить для закупки, чтобы не потерять позиции в выдаче."
+        };
+    };
+
+    const info = getInfoContent();
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-right-4">
-            {/* Header */}
-            <div className="flex items-center gap-4">
-                <button onClick={onBack} className="p-3 bg-white rounded-xl shadow-sm border border-slate-100 text-slate-500 hover:text-slate-800 active:scale-95 transition-transform">
-                    <ArrowLeft size={20} />
-                </button>
-                <div>
-                    <h2 className="text-xl font-black text-slate-800">Глубокая аналитика</h2>
-                    <p className="text-xs text-slate-400">Поиск аномалий и планирование</p>
+            {/* Header с кнопкой Инфо */}
+            <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <button onClick={onBack} className="p-3 bg-white rounded-xl shadow-sm border border-slate-100 text-slate-500 hover:text-slate-800 active:scale-95 transition-transform">
+                        <ArrowLeft size={20} />
+                    </button>
+                    <div>
+                        <h2 className="text-xl font-black text-slate-800">Глубокая аналитика</h2>
+                        <p className="text-xs text-slate-400">Поиск аномалий и планирование</p>
+                    </div>
                 </div>
+                {/* Кнопка вызова подсказки */}
+                <button 
+                    onClick={() => setShowInfo(!showInfo)}
+                    className={`p-3 rounded-xl transition-all ${showInfo ? 'bg-indigo-100 text-indigo-600' : 'bg-white text-slate-400 shadow-sm border border-slate-100'}`}
+                >
+                    <Info size={20} />
+                </button>
             </div>
+
+            {/* Блок с подсказкой (появляется при клике) */}
+            {showInfo && (
+                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 relative animate-in fade-in zoom-in-95 shadow-sm">
+                    <button onClick={() => setShowInfo(false)} className="absolute top-3 right-3 text-indigo-400 hover:text-indigo-700">
+                        <X size={16} />
+                    </button>
+                    <h4 className="font-bold text-indigo-900 text-sm mb-2 flex items-center gap-2">
+                        <Info size={16} className="text-indigo-600"/> 
+                        {info.title}
+                    </h4>
+                    <p className="text-xs text-indigo-800 leading-relaxed opacity-90">
+                        {info.text}
+                    </p>
+                </div>
+            )}
 
             {/* Tabs */}
             <div className="bg-slate-100 p-1 rounded-xl flex">
@@ -124,7 +148,11 @@ const ForensicsView = ({ data }) => {
                             </div>
                         </div>
                     ))}
-                    {data.size_analysis?.length === 0 && <div className="text-center text-xs text-slate-400">Проблем с размерами не выявлено</div>}
+                    {(!data.size_analysis || data.size_analysis.length === 0) && 
+                        <div className="text-center text-xs text-slate-400 py-4">
+                            Проблем с размерами не выявлено 🎉
+                        </div>
+                    }
                 </div>
             </div>
 
@@ -137,7 +165,7 @@ const ForensicsView = ({ data }) => {
                 <div className="grid grid-cols-2 gap-3">
                     {data.warehouse_analysis?.map((wh, i) => (
                         <div key={i} className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
-                            <div className="text-xs font-bold text-slate-500 uppercase mb-1">{wh.warehouse}</div>
+                            <div className="text-xs font-bold text-slate-500 uppercase mb-1 truncate">{wh.warehouse}</div>
                             <div className="flex justify-between items-end">
                                 <div className="text-lg font-black text-slate-800">{wh.return_rate}%</div>
                                 <div className="text-[10px] text-slate-400 mb-1">{wh.returns_count} шт</div>
@@ -147,6 +175,11 @@ const ForensicsView = ({ data }) => {
                             </div>
                         </div>
                     ))}
+                    {(!data.warehouse_analysis || data.warehouse_analysis.length === 0) && 
+                         <div className="col-span-2 text-center text-xs text-slate-400 py-4">
+                             Данных по складам пока нет
+                         </div>
+                    }
                 </div>
             </div>
         </div>
