@@ -47,8 +47,8 @@ const AppContent = () => {
             <Route path="/" element={<DashboardPage user={user} onNavigate={handleTabChange} />} />
             
             {/* Основные модули */}
-            <Route path="/bidder" element={<BidderPage />} />
-            <Route path="/scanner" element={<ScannerPage />} />
+            {/* В РАЗРАБОТКЕ: <Route path="/bidder" element={<BidderPage />} /> */}
+            {/* В РАЗРАБОТКЕ: <Route path="/scanner" element={<ScannerPage />} /> */}
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/seo" element={<SeoGeneratorPage />} />
             

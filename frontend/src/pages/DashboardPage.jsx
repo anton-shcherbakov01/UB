@@ -148,8 +148,8 @@ const DashboardPage = ({ onNavigate, user }) => {
 
                     {/* --- НОВЫЕ АКТИВНЫЕ МОДУЛИ --- */}
 
-                    {/* Bidder */}
-                    <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    {/* Bidder - В РАЗРАБОТКЕ */}
+                    {/* <div onClick={() => onNavigate('bidder')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
                             <Gavel size={24} />
                         </div>
@@ -157,10 +157,10 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <span className="font-bold text-slate-800 block">Биддер</span>
                             <span className="text-xs text-slate-400">Реклама</span>
                         </div>
-                    </div>
+                    </div> */}
 
-                    {/* Scanner */}
-                    <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
+                    {/* Scanner - В РАЗРАБОТКЕ */}
+                    {/* <div onClick={() => onNavigate('scanner')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-slate-100 w-12 h-12 rounded-2xl flex items-center justify-center text-slate-600">
                             <ScanBarcode size={24} />
                         </div>
@@ -168,7 +168,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <span className="font-bold text-slate-800 block">Сканер</span>
                             <span className="text-xs text-slate-400">Поиск товара</span>
                         </div>
-                    </div>
+                    </div> */}
 
                     {/* Advanced Analytics */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">

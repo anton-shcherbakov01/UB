@@ -163,9 +163,11 @@ const MonitorPage = () => {
                         </div>
                         <h3 className="font-bold text-slate-800 mb-2">Список пуст</h3>
                         <p className="text-xs text-slate-400 mb-6 max-w-[200px]">Добавьте товары конкурентов через сканер, чтобы следить за ценами.</p>
-                        <button onClick={() => navigate('/scanner')} className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 active:scale-95 transition-transform">
+                        {/* Сканер в разработке */}
+                        {/* Сканер в разработке */}
+                        {/* <button onClick={() => navigate('/scanner')} className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 active:scale-95 transition-transform">
                             В сканер <ArrowRight size={16}/>
-                        </button>
+                        </button> */}
                     </div>
                 ) : filteredList.length === 0 ? (
                     <div className="text-center py-10 text-slate-400 text-sm">Ничего не найдено</div>

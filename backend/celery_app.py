@@ -13,7 +13,7 @@ celery_app = Celery(
         'tasks.monitoring',
         'tasks.seo',
         'tasks.finance',
-      #  'tasks.bidder',
+      # В РАЗРАБОТКЕ: 'tasks.bidder',
         'tasks.supply'
     ] 
 )
@@ -44,10 +44,11 @@ celery_app.conf.update(
             "task": "check_new_orders",
             "schedule": 600.0, 
         },
-        "bidder-producer-every-5m": {
-            "task": "bidder_producer_task",
-            "schedule": 300.0,
-        },
+        # В РАЗРАБОТКЕ:
+        # "bidder-producer-every-5m": {
+        #     "task": "bidder_producer_task",
+        #     "schedule": 300.0,
+        # },
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
             "schedule": crontab(hour=3, minute=0),
