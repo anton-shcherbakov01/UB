@@ -78,21 +78,12 @@ class UniversalSeleniumService:
             
             # --- ИЩЕМ ЦЕНУ С УЧЕТОМ НАЛИЧИЯ ---
             real_prices = []
-            
-            # Перебираем размеры
             for size in card.get('sizes', []):
-                # Проверяем сток (есть ли товар в наличии)
                 total_stock = sum(s.get('qty', 0) for s in size.get('stocks', []))
-                
-                # Если сток 0, цену игнорируем (она может быть старой)
                 if total_stock == 0: continue
-
-                # Извлекаем цену
                 p = size.get('price', {}).get('total') or size.get('price', {}).get('product') or size.get('priceU')
-                if p:
-                    real_prices.append(int(p / 100))
+                if p: real_prices.append(int(p / 100))
             
-            # Если нашли цены среди товаров В НАЛИЧИИ
             if real_prices:
                 final_price = min(real_prices)
                 logger.info(f"✅ Found VALID price in JSON (Stock > 0): {final_price}₽")
@@ -102,15 +93,15 @@ class UniversalSeleniumService:
                     "image": image, "rating": 0, "review_count": 0
                 }
             else:
-                logger.warning(f"⚠️ JSON found, but NO STOCK available. Trying Selenium for visual price...")
+                logger.warning(f"⚠️ JSON found, but NO STOCK. Trying Selenium...")
         else:
-            logger.warning(f"⚠️ JSON not found (checked 01-50). Starting Selenium...")
+            logger.warning(f"⚠️ JSON not found. Starting Selenium...")
 
         # 2. Selenium
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._selenium_sync_task, sku)
 
-    # --- ЧАСТЬ 3: SELENIUM (ЗАЩИТА ОТ КРЕДИТОВ) ---
+    # --- ЧАСТЬ 3: SELENIUM (С JS V3) ---
 
     def _init_driver(self):
         if self.driver: return
@@ -137,94 +128,89 @@ class UniversalSeleniumService:
 
         try:
             self.driver.get(url)
-            time.sleep(3)
+            time.sleep(4) # Чуть дольше ждем
             self.driver.execute_script("window.scrollTo(0, 400);")
             time.sleep(2)
 
-            # 1. JS PARSING (Приоритет)
+            # 1. НОВЫЙ МЕТОД JS (SSR Data)
+            # WB хранит данные в скрытом скрипте с ID "ssr-state" или "product-data"
             js_data = self.driver.execute_script("""
                 try {
-                    // Пробуем разные места, куда WB прячет данные
+                    // Метод 1: Initial State
                     if (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.product) 
                         return JSON.stringify(window.__INITIAL_STATE__.product);
-                    if (window.staticModel) 
-                        return JSON.stringify(window.staticModel);
+                    
+                    // Метод 2: Static Model
+                    if (window.staticModel) return JSON.stringify(window.staticModel);
+                    
+                    // Метод 3: Поиск в DOM скриптах
+                    var scripts = document.querySelectorAll('script');
+                    for(var i=0; i<scripts.length; i++) {
+                        if(scripts[i].innerText.includes('"clientPriceU"')) {
+                            return scripts[i].innerText;
+                        }
+                    }
                     return null;
                 } catch(e) { return null; }
             """)
 
             if js_data:
-                data = json.loads(js_data)
-                
-                # Логика извлечения из product (React)
-                prod = data.get('product') or data
-                
-                # Имя/Бренд
-                result['valid'] = True
-                result['name'] = prod.get('name') or prod.get('imt_name')
-                result['brand'] = prod.get('brand') or prod.get('selling', {}).get('brand_name')
+                # Пытаемся найти цены в JSON
+                try:
+                    # Чистим JSON если он грязный (из скрипта)
+                    if "window.__INITIAL_STATE__=" in js_data:
+                        js_data = js_data.split("window.__INITIAL_STATE__=")[1].split(";")[0]
+                    
+                    # Ищем все вхождения "clientPriceU": 155500
+                    prices = re.findall(r'"clientPriceU":\s*(\d+)', js_data)
+                    prices_rub = [int(int(p)/100) for p in prices]
+                    
+                    # Фильтруем (1000 - 500000)
+                    valid_p = [p for p in prices_rub if 1000 <= p <= 500000]
+                    
+                    if valid_p:
+                        result['price'] = min(valid_p)
+                        result['valid'] = True
+                        result['name'] = self.driver.title.split(' - ')[0]
+                        logger.info(f"✅ Found via Deep JS Scan: {result['price']}₽")
+                        return result
+                except: pass
 
-                # Цена (приоритет - clientPriceU, затем salePriceU)
-                # Смотрим массив sizes, если есть
-                price_found = 0
-                sizes = prod.get('sizes', [])
-                if sizes:
-                    # Ищем мин цену среди размеров
-                    prices = []
-                    for s in sizes:
-                        p = s.get('price', {}).get('total') or s.get('price', {}).get('clientPriceU') or s.get('salePriceU')
-                        if p: prices.append(int(p / 100))
-                    if prices: price_found = min(prices)
-                
-                # Если в размерах пусто, смотрим общую цену
-                if price_found == 0:
-                    p_obj = prod.get('price', {})
-                    raw_price = p_obj.get('clientPriceU') or p_obj.get('salePriceU') or prod.get('salePriceU') or prod.get('clientPriceU')
-                    if raw_price: price_found = int(raw_price / 100)
-
-                if price_found > 0:
-                    result['price'] = price_found
-                    logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
+            # 2. DOM SEARCH (ПО БЛОКУ ЦЕНЫ)
+            # Ищем конкретно блок цены, а не весь текст
+            try:
+                # Селектор цены кошелька (обычно фиолетовая)
+                price_el = self.driver.find_element(By.CSS_SELECTOR, ".price-block__wallet-price")
+                price_text = price_el.text.replace(' ', '').replace('₽', '').replace('\xa0', '')
+                if price_text.isdigit():
+                    result['price'] = int(price_text)
+                    result['valid'] = True
+                    result['name'] = self.driver.title.split(' - ')[0]
+                    logger.info(f"✅ Found via CSS Selector: {result['price']}₽")
                     return result
+            except: pass
 
-            # 2. TEXT SEARCH (С ЗАЩИТОЙ ОТ СПЛИТА)
-            # Если JS не сработал, читаем текст, но фильтруем мусор
+            # 3. TEXT FALLBACK (С ФИЛЬТРОМ)
+            # Если ничего не помогло, ищем в тексте, но фильтруем < 1000р (так как у тебя товар дорогой)
             body_text = self.driver.find_element(By.TAG_NAME, "body").text
-            
-            # Регулярка: ищет число + символ рубля, но проверяет, нет ли рядом слова "мес"
-            # (\d[\d\s]*) - число
-            # \s?₽ - знак рубля
-            # (?!.*мес) - негативный просмотр (не работает в findall напрямую так просто, делаем циклом)
-            
-            raw_matches = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
+            matches = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
             
             valid_prices = []
-            for match in raw_matches:
-                # Очищаем от пробелов
-                clean_str = match.replace(' ', '').replace('\xa0', '')
-                if not clean_str.isdigit(): continue
-                val = int(clean_str)
-                
-                # Фильтр 1: Слишком дешево (скорее всего кредит) или слишком дорого
-                if val < 500 or val > 500000: continue
-                
-                # Фильтр 2: Проверка контекста (есть ли эта цена в тексте рядом со словом "мес")
-                # Это грубая проверка, но работает.
-                # Если число 492, и в тексте есть "492 ₽ / мес", мы его игнорируем
-                if f"{match} ₽ / мес" in body_text or f"{match}₽ / мес" in body_text:
-                    continue
-                
-                valid_prices.append(val)
+            for match in matches:
+                val = int(match.replace(' ', '').replace('\xa0', ''))
+                # ФИЛЬТР: Цена должна быть больше 1000р (защита от рассрочки 492р)
+                # Если товар реально стоит 500р, можно уменьшить порог, но для твоего кейса это спасет.
+                if 1000 <= val <= 500000: 
+                    valid_prices.append(val)
 
             if valid_prices:
-                # Обычно цена продажи - это минимальная адекватная цена на экране (не считая кредитов)
                 result['price'] = min(valid_prices)
                 result['valid'] = True
                 result['name'] = self.driver.title.split(' - ')[0]
-                logger.info(f"✅ Found via Smart Text Search: {result['price']}₽")
+                logger.info(f"✅ Found via Text (Filtered >1000): {result['price']}₽")
                 return result
             
-            # Скриншот, если все сломалось
+            # Скриншот
             self.driver.save_screenshot(f"{DEBUG_DIR}/fail_price_{sku}.png")
 
         except Exception as e:
@@ -234,7 +220,7 @@ class UniversalSeleniumService:
 
         return result
 
-    # --- МЕТОДЫ ДЛЯ БИДДЕРА И SEO (ОСТАВЛЯЕМ КАК ЕСТЬ) ---
+    # --- МЕТОДЫ ДЛЯ БИДДЕРА И SEO ---
     def get_search_auction(self, query: str):
         if not self.driver: self._init_driver()
         url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&sort=popular"
