@@ -5,6 +5,7 @@ import json
 import random
 import os
 import re
+import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -16,7 +17,11 @@ from selenium.webdriver.support import expected_conditions as EC
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("UniversalParser")
 
-# --- КОНСТАНТЫ (НЕ ВЫРЕЗАЕМ!) ---
+# Папка для отладки, если Selenium увидит капчу или белый экран
+DEBUG_DIR = "debug_screenshots"
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
+# Твои куки для SEO
 GEO_COOKIES = {
     "moscow": {"x-geo-id": "moscow", "dst": "-1257786"},
     "spb": {"x-geo-id": "spb", "dst": "-1257786"}, 
@@ -34,21 +39,19 @@ class UniversalSeleniumService:
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
         ]
 
-    # --- ЧАСТЬ 1: БЫСТРЫЙ ПОИСК ЧЕРЕЗ КОРЗИНЫ (AIOHTTP) ---
+    # --- ЧАСТЬ 1: АГРЕССИВНЫЙ ПОИСК ЧЕРЕЗ КОРЗИНЫ (AIOHTTP) ---
 
     async def _find_card_in_baskets(self, sku: int):
         """
-        Параллельный поиск card.json по всем возможным корзинам (01-25).
-        Это самый быстрый способ (0.1 - 0.3 сек).
+        Параллельный поиск card.json по 50 корзинам.
         """
         vol = sku // 100000
         part = sku // 1000
         
-        # Генерируем корзины от 01 до 25 (покрывает 100% товаров на 2025 год)
-        hosts = [f"{i:02d}" for i in range(1, 26)]
+        # Генерируем корзины от 01 до 50 (чтобы наверняка)
+        hosts = [f"{i:02d}" for i in range(1, 51)]
 
         async with aiohttp.ClientSession() as session:
-            # Запускаем 25 запросов ОДНОВРЕМЕННО
             tasks = []
             for host in hosts:
                 url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
@@ -63,8 +66,8 @@ class UniversalSeleniumService:
 
     async def _check_url(self, session, url, host, sku):
         try:
-            # Тайм-аут маленький, чтобы не ждать висящие сервера
-            async with session.get(url, timeout=1.0) as resp:
+            # Увеличил таймаут до 3 сек, чтобы не отбрасывать медленные, но живые сервера
+            async with session.get(url, timeout=3.0) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     vol = sku // 100000
@@ -80,7 +83,7 @@ class UniversalSeleniumService:
         sku = int(sku)
         logger.info(f"⚡ Scanning SKU: {sku}")
         
-        # 1. Сначала ищем JSON через брутфорс корзин
+        # 1. Сначала ищем JSON
         card = await self._find_card_in_baskets(sku)
         
         if card:
@@ -88,7 +91,6 @@ class UniversalSeleniumService:
             brand = card.get('selling', {}).get('brand_name', '')
             image = card.get('image_url')
             
-            # Ищем цену в JSON
             price = 0
             for size in card.get('sizes', []):
                 p = size.get('price', {}).get('total') or size.get('price', {}).get('product') or size.get('priceU')
@@ -106,14 +108,13 @@ class UniversalSeleniumService:
             else:
                 logger.warning(f"⚠️ JSON found but NO PRICE. Starting Selenium...")
         else:
-            logger.warning(f"⚠️ JSON not found (checked 01-25). Starting Selenium...")
+            logger.warning(f"⚠️ JSON not found (checked 01-50). Starting Selenium...")
 
-        # 2. Если JSON подвел — запускаем Selenium (Fallback)
-        # Запускаем в executor, чтобы не блокировать event loop
+        # 2. Selenium Fallback
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._selenium_sync_task, sku)
 
-    # --- ЧАСТЬ 3: ОПТИМИЗИРОВАННЫЙ SELENIUM ---
+    # --- ЧАСТЬ 3: SELENIUM (КАК В ТВОЕМ СТАРОМ КОДЕ) ---
 
     def _init_driver(self):
         if self.driver: return
@@ -122,8 +123,9 @@ class UniversalSeleniumService:
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument(f"user-agent={random.choice(self.user_agents)}")
 
         try:
@@ -131,14 +133,15 @@ class UniversalSeleniumService:
                 service=Service(ChromeDriverManager().install()),
                 options=chrome_options
             )
-            self.driver.set_page_load_timeout(30)
+            # Большой таймаут, чтобы точно прогрузилось
+            self.driver.set_page_load_timeout(60)
             logger.info("🚀 Selenium Driver initialized")
         except Exception as e:
             logger.error(f"Driver Init Failed: {e}")
             raise e
 
     def _selenium_sync_task(self, sku):
-        """Синхронная задача для Executor"""
+        """Синхронная задача для Executor (Блокирующая, но надежная)"""
         if not self.driver: self._init_driver()
         
         url = f"https://www.wildberries.ru/catalog/{sku}/detail.aspx"
@@ -147,12 +150,17 @@ class UniversalSeleniumService:
         try:
             self.driver.get(url)
             
-            # Ждем хоть что-то (body)
+            # --- ВЕРНУЛ ТВОЙ СКРОЛЛ И SLEEP ---
+            time.sleep(3) 
+            self.driver.execute_script("window.scrollTo(0, 400);")
+            time.sleep(2) # Ждем прогрузки после скролла
+            
+            # Ждем хоть что-то
             try:
-                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             except: pass
 
-            # 1. JS INJECTION (Самый надежный)
+            # 1. JS INJECTION (Приоритет)
             js_data = self.driver.execute_script("""
                 try {
                     return window.__INITIAL_STATE__ ? JSON.stringify(window.__INITIAL_STATE__) : 
@@ -163,7 +171,7 @@ class UniversalSeleniumService:
             if js_data:
                 data = json.loads(js_data)
                 
-                # New React Format
+                # Формат INITIAL_STATE
                 if 'product' in data and 'product' in data['product']:
                     prod = data['product']['product']
                     result['valid'] = True
@@ -171,7 +179,7 @@ class UniversalSeleniumService:
                     result['brand'] = prod.get('brand')
                     result['price'] = int(prod.get('salePriceU', 0) / 100)
 
-                # Old Format
+                # Формат staticModel
                 elif 'kindId' in data:
                     result['valid'] = True
                     result['name'] = data.get('imt_name')
@@ -183,7 +191,7 @@ class UniversalSeleniumService:
                     logger.info(f"✅ Found via Selenium JS: {result['price']}₽")
                     return result
 
-            # 2. DOM REGEX FALLBACK (Если JS скрыт)
+            # 2. DOM REGEX FALLBACK
             body_text = self.driver.find_element(By.TAG_NAME, "body").text
             prices = re.findall(r'(\d[\d\s]*)\s?₽', body_text)
             
@@ -198,16 +206,20 @@ class UniversalSeleniumService:
                 result['name'] = self.driver.title.split(' - ')[0]
                 logger.info(f"✅ Found via Text: {result['price']}₽")
                 return result
+            
+            # Если ничего не нашли - делаем скриншот для отладки
+            self.driver.save_screenshot(f"{DEBUG_DIR}/fail_{sku}.png")
+            logger.warning(f"📸 Failed to parse. Screenshot saved to {DEBUG_DIR}/fail_{sku}.png")
 
         except Exception as e:
             logger.error(f"Selenium error: {e}")
+            # При фатальной ошибке рестартим драйвер
             self.driver.quit()
             self.driver = None 
 
         return result
 
-    # --- ЧАСТЬ 4: БИДДЕР (Синхронный для Executor) ---
-    
+    # --- БИДДЕР ---
     def get_search_auction(self, query: str):
         if not self.driver: self._init_driver()
         url = f"https://www.wildberries.ru/catalog/0/search.aspx?search={query}&sort=popular"
@@ -231,8 +243,7 @@ class UniversalSeleniumService:
         except: pass
         return ads
 
-    # --- ЧАСТЬ 5: SEO (Использует GEO_COOKIES) ---
-
+    # --- SEO ---
     def get_seo_position(self, query: str, sku: int, geo: str = "moscow"):
         if not self.driver: self._init_driver()
         sku = int(sku)
@@ -242,12 +253,10 @@ class UniversalSeleniumService:
             if "wildberries.ru" not in self.driver.current_url:
                 self.driver.get("https://www.wildberries.ru/404")
             
-            # --- ПРИМЕНЕНИЕ КУК ИЗ КОНСТАНТЫ ---
             cookies = GEO_COOKIES.get(geo, GEO_COOKIES["moscow"])
             for name, value in cookies.items():
                 self.driver.add_cookie({"name": name, "value": value, "domain": ".wildberries.ru"})
             self.driver.refresh()
-            # -----------------------------------
         except: pass
 
         global_counter = 0
@@ -262,7 +271,6 @@ class UniversalSeleniumService:
                 if js_data:
                     products = (js_data.get('catalog', {}).get('data', {}).get('products', []) or 
                                 js_data.get('payload', {}).get('products', []))
-                
                 if not products: break
 
                 for idx, p in enumerate(products):
