@@ -3,13 +3,19 @@ import logging
 import random
 import json
 from urllib.parse import quote
-from typing import Dict, Any
+from typing import Dict, Any, List
 
-# Импортируем магию, которая лечит TLS Fingerprint
+# Используем curl_cffi для обхода TLS Fingerprinting
 from curl_cffi.requests import AsyncSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("WBSearch")
+
+# --- НАСТРОЙКИ ---
+# Вставьте сюда ваш прокси, если запускаете с сервера!
+# Формат: "http://user:pass@ip:port"
+# Если пусто - работает напрямую (сработает только с локального ПК, с сервера вряд ли)
+PROXY_URL = None 
 
 GEO_ZONES = {
     "moscow": "-1257786",      
@@ -23,17 +29,21 @@ GEO_ZONES = {
     "kazakhstan": "-1227092"
 }
 
-class WBSearchService:
-    # Используем API каталога, оно реже банит, чем search.wb.ru
-    # Но для поиска V9 тоже подойдет, если притвориться хромом
-    BASE_URL = "https://search.wb.ru/exactmatch/ru/common/v9/search"
+# Ротация версий API (если одна забанена или пустая, пробуем другую)
+API_VERSIONS = [
+    "https://search.wb.ru/exactmatch/ru/common/v9/search",
+    "https://search.wb.ru/exactmatch/ru/common/v7/search", 
+    "https://search.wb.ru/exactmatch/ru/common/v5/search",
+    "https://search.wb.ru/exactmatch/ru/common/v4/search",
+]
 
+class WBSearchService:
     async def get_sku_position(self, query: str, target_sku: int, geo: str = "moscow", depth_pages: int = 5) -> Dict[str, Any]:
         dest_id = GEO_ZONES.get(geo, GEO_ZONES["moscow"])
         encoded_query = quote(query)
         target_sku = int(target_sku)
         
-        logger.info(f"🛡️ [TLS-Bypass] Ищу SKU {target_sku} по '{query}' (Geo: {geo})")
+        logger.info(f"🐢 [HUMAN-SEARCH] Ищу SKU {target_sku} по '{query}' (Geo: {geo})")
 
         result = {
             "sku": target_sku,
@@ -46,72 +56,99 @@ class WBSearchService:
             "is_advertising": False,
             "cpm": None,
             "total_products": 0,
+            "used_api": None,
             "debug_logs": []
         }
 
-        # impersonate="chrome120" — Ключевой момент!
-        # Мы говорим серверу: "Я реальный Chrome 120", и подделываем TLS-хендшейк.
-        async with AsyncSession(impersonate="chrome120") as session:
-            tasks = []
-            for page in range(1, depth_pages + 1):
-                # appType=1 (Desktop), так как мы притворяемся десктопным хромом
-                url = (
-                    f"{self.BASE_URL}?"
-                    f"ab_testing=false&appType=1&curr=rub&dest={dest_id}"
-                    f"&query={encoded_query}&resultset=catalog&sort=popular"
-                    f"&spp=30&suppressSpellcheck=false&page={page}"
-                )
-                tasks.append(self._fetch_page(session, url, page))
+        proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+
+        # Пробуем разные версии API, пока не получим непустой ответ
+        for base_url in API_VERSIONS:
+            if result['found']: break # Уже нашли
             
-            pages_data = await asyncio.gather(*tasks)
+            logger.info(f"🔄 Пробую API endpoint: {base_url}")
+            
+            # Эмуляция Chrome 120
+            async with AsyncSession(impersonate="chrome120", proxies=proxies) as session:
+                global_counter = 0
+                
+                # ВАЖНО: Последовательный перебор страниц, а не параллельный!
+                for page in range(1, depth_pages + 1):
+                    
+                    # 1. Задержка как у человека (0.5 - 1.5 сек между страницами)
+                    if page > 1:
+                        sleep_time = random.uniform(0.5, 1.5)
+                        await asyncio.sleep(sleep_time)
 
-        global_counter = 0
-        sorted_pages = sorted(pages_data, key=lambda x: x['page'])
-        
-        for p_data in sorted_pages:
-            status_line = f"Page {p_data['page']}: {len(p_data['products'])} items. (HTTP {p_data['status']})"
-            logger.info(status_line)
-            result['debug_logs'].append(status_line)
+                    url = (
+                        f"{base_url}?"
+                        f"ab_testing=false&appType=1&curr=rub&dest={dest_id}"
+                        f"&query={encoded_query}&resultset=catalog&sort=popular"
+                        f"&spp=30&suppressSpellcheck=false&page={page}"
+                    )
 
-            if p_data['page'] == 1:
-                result['total_products'] = p_data['total']
+                    try:
+                        resp = await session.get(url, timeout=10)
+                        
+                        if resp.status_code == 200:
+                            try:
+                                data = resp.json()
+                                products = data.get('data', {}).get('products', [])
+                                total = data.get('data', {}).get('total', 0)
+                                
+                                if page == 1 and total > 0:
+                                    result['total_products'] = total
+                                    result['used_api'] = base_url
 
-            for idx, prod in enumerate(p_data['products']):
-                global_counter += 1
-                if prod.get('id') == target_sku:
-                    logger.info(f"🎯 FOUND! Abs Pos: {global_counter}")
-                    result['found'] = True
-                    result['page'] = p_data['page']
-                    result['position'] = idx + 1
-                    result['absolute_pos'] = global_counter
-                    if prod.get('log'):
-                        result['is_advertising'] = True
-                        result['cpm'] = prod.get('log', {}).get('cpm')
-                    return result
+                                # Если API вернул пустой список товаров, значит этот endpoint нам не подходит
+                                # или нас мягко заблокировали. Прерываем этот цикл, идем к следующему API.
+                                if not products:
+                                    logger.warning(f"⚠️ API {base_url} вернул 200 OK, но 0 товаров на стр {page}.")
+                                    if page == 1: 
+                                        break # Смысла листать дальше нет, меняем версию API
+                                    else:
+                                        continue # Может просто страница пустая
+
+                                # Ищем товар
+                                for idx, prod in enumerate(products):
+                                    global_counter += 1
+                                    if prod.get('id') == target_sku:
+                                        logger.info(f"🎯 НАЙДЕНО! Позиция: {global_counter} (Стр {page})")
+                                        result['found'] = True
+                                        result['page'] = page
+                                        result['position'] = idx + 1
+                                        result['absolute_pos'] = global_counter
+                                        if prod.get('log'):
+                                            result['is_advertising'] = True
+                                            result['cpm'] = prod.get('log', {}).get('cpm')
+                                        return result
+                                
+                                # Если нашли товары, но не наш артикул - идем на след. страницу
+                                logger.info(f"✅ Стр {page}: {len(products)} товаров. Ищем дальше...")
+                                
+                            except json.JSONDecodeError:
+                                logger.error(f"❌ Ошибка JSON на {base_url}")
+                                break
+                        
+                        elif resp.status_code == 429:
+                            logger.warning(f"⛔ 429 Too Many Requests на {base_url}. Меняю стратегию.")
+                            await asyncio.sleep(2)
+                            break # Меняем версию API
+                        
+                        else:
+                            logger.warning(f"⚠️ HTTP {resp.status_code} на {base_url}")
+                            break
+
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка сети: {e}")
+                        break
+            
+            # Если после прохода по всем страницам одной версии API мы нашли хоть какие-то товары (total > 0),
+            # но не нашли наш артикул - значит его реально нет в топе. Не нужно менять API.
+            if result['total_products'] > 0:
+                logger.info("📦 Товары были найдены, но целевого артикула среди них нет.")
+                break
 
         return result
-
-    async def _fetch_page(self, session, url, page_num):
-        try:
-            # curl_cffi не требует заголовков User-Agent вручную, он ставит их сам из пресета
-            resp = await session.get(url, timeout=10)
-            
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    products = data.get('data', {}).get('products', [])
-                    total = data.get('data', {}).get('total', 0)
-                    return {'page': page_num, 'products': products, 'total': total, 'status': 200}
-                except Exception:
-                    return {'page': page_num, 'products': [], 'total': 0, 'status': 'JSON_ERR'}
-            
-            elif resp.status_code == 429:
-                logger.warning(f"⚠️ Page {page_num}: 429 Blocked (Try Proxy)")
-            
-            return {'page': page_num, 'products': [], 'total': 0, 'status': resp.status_code}
-            
-        except Exception as e:
-            logger.error(f"❌ Page {page_num} Error: {e}")
-            return {'page': page_num, 'products': [], 'total': 0, 'status': 'CONN_ERR'}
 
 wb_search_service = WBSearchService()
