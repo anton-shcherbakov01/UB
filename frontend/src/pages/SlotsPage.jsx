@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Calendar, Package, Search, Info, Filter, 
     ArrowDown, TrendingUp, AlertTriangle, CheckCircle2,
-    Loader2, MapPin
+    Loader2, MapPin, DollarSign, X, ArrowLeft
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -41,7 +41,7 @@ const SlotsPage = ({ user, onNavigate }) => {
     // Filters
     const [search, setSearch] = useState('');
     const [onlyFree, setOnlyFree] = useState(false);
-    const [boxType, setBoxType] = useState('all'); // all, Koroba, Monopallet
+    const [boxType, setBoxType] = useState('all'); // all, box, pallet
 
     // Load Data
     const loadSlots = async (force = false) => {
@@ -52,15 +52,18 @@ const SlotsPage = ({ user, onNavigate }) => {
             if (force) url.searchParams.append('refresh', 'true');
             
             const res = await fetch(url, { headers: getTgHeaders() });
+            
             if (res.status === 401 || res.status === 403) {
-                // If token invalid, we might handle it
+                // Token error handling if needed
             }
             if (!res.ok) throw new Error("Не удалось загрузить данные");
             
             const json = await res.json();
-            setData(json);
+            setData(Array.isArray(json) ? json : []);
         } catch (e) {
             setError(e.message);
+            // Fallback mock data for demo if API fails
+            // setData([]); 
         } finally {
             setLoading(false);
         }
@@ -77,31 +80,37 @@ const SlotsPage = ({ user, onNavigate }) => {
         if (!data) return [];
 
         let filtered = data.filter(item => {
-            const matchSearch = item.warehouseName.toLowerCase().includes(search.toLowerCase());
+            // Безопасная проверка имени склада
+            const matchSearch = item.warehouseName?.toLowerCase().includes(search.toLowerCase()) || false;
             const matchFree = onlyFree ? item.coefficient === 0 : true;
-            const matchType = boxType === 'all' ? true : 
-                              boxType === 'pallet' ? item.boxTypeName.toLowerCase().includes('моно') :
-                              !item.boxTypeName.toLowerCase().includes('моно');
+            
+            // Безопасная проверка типа короба (с дефолтом)
+            const typeName = item.boxTypeName?.toLowerCase() || "короба";
+            
+            let matchType = true;
+            if (boxType === 'pallet') matchType = typeName.includes('моно');
+            if (boxType === 'box') matchType = !typeName.includes('моно');
+
             return matchSearch && matchFree && matchType;
         });
 
-        // Group by Warehouse to show timeline? 
-        // Or simple list? Simple list is often better for "Find me a slot NOW".
-        // Let's grouping by Warehouse makes sense to see upcoming days.
-        
+        // Group by Warehouse
         const grouped = {};
         filtered.forEach(item => {
-            if (!grouped[item.warehouseName]) {
-                grouped[item.warehouseName] = {
-                    name: item.warehouseName,
+            // Группируем, если есть имя склада
+            const wName = item.warehouseName || "Неизвестный склад";
+            
+            if (!grouped[wName]) {
+                grouped[wName] = {
+                    name: wName,
                     id: item.warehouseID,
                     slots: []
                 };
             }
-            grouped[item.warehouseName].slots.push(item);
+            grouped[wName].slots.push(item);
         });
 
-        // Convert back to array and sort by "Best Coefficient Available"
+        // Convert to array and sort by best coefficient
         return Object.values(grouped).sort((a, b) => {
             const minA = Math.min(...a.slots.map(s => s.coefficient));
             const minB = Math.min(...b.slots.map(s => s.coefficient));
@@ -126,11 +135,20 @@ const SlotsPage = ({ user, onNavigate }) => {
         <div className="p-4 pb-32 space-y-6 animate-in slide-in-from-right-4 fade-in duration-300">
             
             {/* Header Area */}
-            <div>
-                <h1 className="text-2xl font-black text-slate-900">Слоты</h1>
-                <p className="text-slate-500 text-xs font-medium mt-1">
-                    Планирование поставок по выгодным тарифам
-                </p>
+            <div className="flex items-center gap-3">
+                 {onNavigate && (
+                    <button onClick={() => onNavigate('home')} className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm active:scale-95">
+                        <ArrowLeft size={20} className="text-slate-500"/>
+                    </button>
+                 )}
+                <div>
+                    <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
+                        <Calendar className="text-cyan-500"/> Слоты
+                    </h1>
+                    <p className="text-slate-500 text-xs font-medium">
+                        Лимиты и коэффициенты приемки
+                    </p>
+                </div>
             </div>
 
             {/* Educational / Hint Area */}
@@ -159,7 +177,7 @@ const SlotsPage = ({ user, onNavigate }) => {
                         placeholder="Название склада (например: Тула)" 
                         value={search}
                         onChange={e => setSearch(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-cyan-500 transition-all"
                     />
                 </div>
 
@@ -179,7 +197,7 @@ const SlotsPage = ({ user, onNavigate }) => {
 
                     <button 
                         onClick={() => setBoxType(boxType === 'all' ? 'pallet' : boxType === 'pallet' ? 'box' : 'all')}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap bg-white text-slate-600 border border-slate-200"
+                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap bg-white text-slate-600 border border-slate-200 active:scale-95"
                     >
                         <Package size={14}/>
                         {boxType === 'all' ? 'Все типы' : boxType === 'pallet' ? 'Монопаллеты' : 'Короба'}
@@ -190,13 +208,14 @@ const SlotsPage = ({ user, onNavigate }) => {
             {/* Results List */}
             {loading && !data.length ? (
                 <div className="py-20 flex flex-col items-center text-slate-400">
-                    <Loader2 className="animate-spin mb-3" size={32}/>
+                    <Loader2 className="animate-spin mb-3 text-cyan-500" size={32}/>
                     <span className="text-xs font-bold">Получаем данные от Wildberries...</span>
                 </div>
             ) : error ? (
-                <div className="bg-rose-50 text-rose-600 p-4 rounded-xl text-sm font-bold text-center">
-                    {error}
-                    <button onClick={() => loadSlots(true)} className="block mx-auto mt-2 text-rose-700 underline">Повторить</button>
+                <div className="bg-rose-50 text-rose-600 p-4 rounded-xl text-sm font-bold text-center border border-rose-100">
+                    <p className="mb-2">{error}</p>
+                    <p className="text-xs opacity-75">Проверьте API токен в профиле.</p>
+                    <button onClick={() => loadSlots(true)} className="mt-3 px-4 py-2 bg-white rounded-lg shadow-sm text-xs font-bold border border-rose-200 text-rose-700">Повторить</button>
                 </div>
             ) : processedData.length === 0 ? (
                 <div className="py-20 text-center text-slate-400">
@@ -213,24 +232,24 @@ const SlotsPage = ({ user, onNavigate }) => {
                             {/* Warehouse Header */}
                             <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex justify-between items-center">
                                 <div className="flex items-center gap-2">
-                                    <MapPin size={16} className="text-indigo-500" />
+                                    <MapPin size={16} className="text-cyan-500" />
                                     <span className="font-bold text-slate-800">{wh.name}</span>
                                 </div>
                                 <div className="text-[10px] font-bold text-slate-400 uppercase bg-slate-100 px-2 py-1 rounded">
-                                    {wh.slots[0].boxTypeName}
+                                    {wh.slots[0]?.boxTypeName || "Слот"}
                                 </div>
                             </div>
 
                             {/* Dates Grid */}
                             <div className="p-3">
                                 <div className="grid grid-cols-4 gap-2">
-                                    {wh.slots.slice(0, 8).map((slot, idx) => {
+                                    {wh.slots.slice(0, 12).map((slot, idx) => {
                                         const d = new Date(slot.date);
                                         const isToday = d.toDateString() === new Date().toDateString();
                                         
                                         return (
-                                            <div key={idx} className="flex flex-col items-center p-2 rounded-xl bg-slate-50 border border-slate-100">
-                                                <div className={`text-[10px] font-bold mb-1 ${isToday ? 'text-indigo-600' : 'text-slate-400'}`}>
+                                            <div key={idx} className={`flex flex-col items-center p-2 rounded-xl border ${isToday ? 'bg-cyan-50 border-cyan-100' : 'bg-slate-50 border-slate-100'}`}>
+                                                <div className={`text-[10px] font-bold mb-1 ${isToday ? 'text-cyan-600' : 'text-slate-400'}`}>
                                                     {d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
                                                 </div>
                                                 <CoefficientBadge value={slot.coefficient} />
@@ -238,11 +257,6 @@ const SlotsPage = ({ user, onNavigate }) => {
                                         );
                                     })}
                                 </div>
-                                {wh.slots.length > 8 && (
-                                    <div className="mt-2 text-center">
-                                        <button className="text-xs font-bold text-indigo-600">Показать еще даты...</button>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     ))}

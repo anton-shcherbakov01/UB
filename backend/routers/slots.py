@@ -1,8 +1,8 @@
 import logging
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
-from pydantic import BaseModel
+from typing import List, Optional, Any
+from pydantic import BaseModel, validator
 from datetime import datetime
 
 from dependencies import get_current_user, get_redis_client
@@ -17,8 +17,24 @@ class SlotItem(BaseModel):
     coefficient: int
     warehouseID: int
     warehouseName: str
-    boxTypeName: str
+    boxTypeName: str = "Короба" # Дефолтное значение
     boxTypeID: int
+
+    # Валидатор для заполнения пропущенных имен на основе ID
+    @validator("boxTypeName", pre=True, always=True)
+    def set_name_from_id(cls, v, values):
+        if v is not None:
+            return v
+        
+        # Если имя не пришло, пробуем определить по ID
+        box_id = values.get("boxTypeID")
+        
+        # ID 2 - это обычно Монопаллеты
+        if box_id == 2:
+            return "Монопаллеты"
+        
+        # Остальные (0, 1, 5, 6) чаще всего относятся к Коробам или смешанным типам
+        return "Короба"
 
 @router.get("/coefficients", response_model=List[SlotItem])
 async def get_slots(
@@ -50,6 +66,7 @@ async def get_slots(
 
     # 3. Sort by 'Free' (0) then 'Base' (1), then by Warehouse Name
     # Priority: Free slots first!
+    # Используем .get() для безопасности, если структура API изменится
     data.sort(key=lambda x: (x.get('coefficient', 99), x.get('warehouseName', '')))
 
     # 4. Cache
