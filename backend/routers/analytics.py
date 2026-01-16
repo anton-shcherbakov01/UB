@@ -13,7 +13,7 @@ from sqlalchemy import text # Или использование ORM
 from sqlalchemy.ext.asyncio import AsyncSession
 from wb_api.statistics import WBStatisticsAPI
 from sqlalchemy import select
-from database import ProductCost, SupplySettings
+from database import ProductCost
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
