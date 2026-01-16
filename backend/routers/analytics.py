@@ -9,10 +9,9 @@ from services.supply import supply_service
 # Импорт зависимостей БД (примерный)
 from database import get_db, User
 from dependencies import get_current_user
-from sqlalchemy import text # Или использование ORM
+from sqlalchemy import text, select # Или использование ORM
 from sqlalchemy.ext.asyncio import AsyncSession
 from wb_api.statistics import WBStatisticsAPI
-from sqlalchemy import select
 from database import ProductCost
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
