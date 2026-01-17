@@ -7,7 +7,7 @@ from redis import asyncio as aioredis
 from dotenv import load_dotenv
 
 from celery_app import REDIS_URL
-from routers import users, finance, monitoring, seo, ai, payments, admin, supply, dashboard, analytics, slots, notifications, bidder
+from routers import users, finance, monitoring, seo, ai, payments, admin, supply, dashboard, analytics, slots, notifications, bidder, support
 
 load_dotenv()
 logger = logging.getLogger("API")
@@ -37,6 +37,7 @@ app.include_router(dashboard.router)
 app.include_router(analytics.router)
 app.include_router(slots.router)
 app.include_router(notifications.router)
+app.include_router(support.router)
 
 @app.on_event("startup")
 async def on_startup(): 

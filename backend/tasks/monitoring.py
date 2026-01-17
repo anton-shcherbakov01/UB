@@ -121,7 +121,8 @@ def send_hourly_summary():
                 try:
                     stats = loop.run_until_complete(wb_api_service.get_statistics_today(user.wb_api_token))
                     msg = f"📊 <b>Сводка за сегодня</b> ({datetime.now().strftime('%H:%M')})\n➖➖➖➖➖➖➖➖\n💰 Заказы: <b>{stats['orders_sum']:,.0f} ₽</b> ({stats['orders_count']} шт)\n💵 Выкупы: <b>{stats['sales_sum']:,.0f} ₽</b> ({stats['sales_count']} шт)\n"
-                    if settings.show_funnel and stats.get('visitors', 0) > 0:
+                    # Воронка показывается только если включена в настройках И есть данные (не заглушка)
+                    if settings.show_funnel and stats.get('visitors', 0) > 0 and stats.get('addToCart', 0) > 0:
                         msg += f"\n<b>Воронка:</b>\n👁 Просмотры: {stats['visitors']}\n🛒 Корзины: {stats['addToCart']}\n"
                     
                     loop.run_until_complete(bot_service.send_message(user.telegram_id, msg))

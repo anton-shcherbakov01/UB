@@ -130,7 +130,9 @@ class WBStatisticsMixin(WBApiBase):
             for order in orders_data["items"]:
                 try:
                     order_date = datetime.strptime(order["date"][:19], "%Y-%m-%dT%H:%M:%S")
-                    if order_date > last_check_dt.replace(tzinfo=None):
+                    # Remove timezone info if present for comparison
+                    last_check_normalized = last_check.replace(tzinfo=None) if last_check.tzinfo else last_check
+                    if order_date > last_check_normalized:
                         new_orders.append(order)
                 except: continue
                 

@@ -371,6 +371,19 @@ async def get_pnl_data(
         else:
             date_to_dt = now
     
+    # Проверяем лимит history_days для analyst+ планов
+    if user.subscription_plan != "start":
+        from config.plans import get_limit
+        history_limit = get_limit(user.subscription_plan, "history_days")
+        days_requested = (date_to_dt - date_from_dt).days
+        if days_requested > history_limit:
+            from config.plans import get_plan_config
+            plan_config = get_plan_config(user.subscription_plan)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Период {days_requested} дней недоступен на вашем тарифе. Доступно: {history_limit} дней. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+            )
+    
     # Get P&L data from analysis service
     pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
     

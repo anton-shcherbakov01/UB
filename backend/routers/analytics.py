@@ -10,6 +10,7 @@ from services.supply import supply_service
 from database import get_db, User, ProductCost, SupplySettings
 from dependencies import get_current_user
 from wb_api.statistics import WBStatisticsAPI
+from config.plans import get_limit
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
@@ -21,7 +22,18 @@ async def get_abc_xyz_stats(
 ):
     """
     Эндпоинт для получения матрицы ABC/XYZ.
+    Проверяет лимит history_days по тарифу.
     """
+    # Получаем лимит истории для текущего тарифа
+    history_limit = get_limit(user.subscription_plan, "history_days")
+    if days > history_limit:
+        from config.plans import get_plan_config
+        plan_config = get_plan_config(user.subscription_plan)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Период {days} дней недоступен на вашем тарифе. Доступно: {history_limit} дней. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+        )
+    
     date_from = datetime.now() - timedelta(days=days)
     
     # SQL для получения агрегированных данных
@@ -58,7 +70,25 @@ async def get_return_forensics_endpoint(
 ):
     """
     4.3 Получение данных по проблемным возвратам (размеры, склады).
+    Требует feature 'forensics' (analyst, strategist планы).
     """
+    from config.plans import has_feature, get_plan_config
+    
+    if not has_feature(user.subscription_plan, "forensics"):
+        plan_config = get_plan_config(user.subscription_plan)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Форензика возвратов доступна только на тарифе Аналитик или выше. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+        )
+    
+    # Проверяем лимит истории
+    history_limit = get_limit(user.subscription_plan, "history_days")
+    if days > history_limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Период {days} дней недоступен на вашем тарифе. Доступно: {history_limit} дней."
+        )
+    
     date_to = datetime.now()
     date_from = date_to - timedelta(days=days)
     
@@ -74,7 +104,17 @@ async def get_cash_gap_forecast(
 ):
     """
     4.4 Прогноз кассовых разрывов на основе Supply Chain.
+    Требует feature 'forensics_cashgap' (только strategist план).
     """
+    from config.plans import has_feature, get_plan_config
+    
+    if not has_feature(user.subscription_plan, "forensics_cashgap"):
+        plan_config = get_plan_config(user.subscription_plan)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cash Gap анализ доступен только на тарифе Стратег. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+        )
+    
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="WB API Token required")
 

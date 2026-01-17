@@ -279,7 +279,15 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
             </div>
 
             {/* TARIFFS */}
-            <h2 className="font-bold text-lg px-2 mt-2">Тарифные планы</h2>
+            <div className="flex justify-between items-center px-2 mt-2 mb-2">
+                <h2 className="font-bold text-lg">Тарифные планы</h2>
+                <button 
+                    onClick={() => navigate('/tariffs')}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                >
+                    Смотреть все →
+                </button>
+            </div>
             <div className="space-y-4">
                 {tariffs.map(plan => (
                     <TariffCard 
@@ -308,7 +316,7 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                 <div className="flex justify-center gap-4 text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-2">
                     <button onClick={() => navigate('/offer')} className="hover:text-slate-600">Оферта</button> • 
                     <button onClick={() => navigate('/privacy')} className="hover:text-slate-600">Конфиденциальность</button> • 
-                    <a href="mailto:anton.sherbakov.01@gmail.com" className="hover:text-slate-600">Поддержка</a>
+                    <button onClick={() => navigate('/support')} className="hover:text-slate-600">Поддержка</button>
                 </div>
                 <p className="text-[10px] text-slate-300">ИП Щербаков Антон Алексеевич</p>
                 <p className="text-[10px] text-slate-300">ИНН: 712807221159 • ОГРНИП: 325710000062103</p>
