@@ -17,8 +17,12 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     Анализ отзывов товара с использованием AI.
     Обрабатывает все возможные ошибки, чтобы не падать.
     """
+    task_id = self.request.id
+    logger.info(f"🚀 [TASK START] analyze_reviews_task | task_id={task_id} | sku={sku} | limit={limit} | user_id={user_id}")
+    
     try:
         self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
+        logger.info(f"📊 [PROGRESS] Parsing product info for SKU {sku} (task_id={task_id})")
         
         # Wrap parsing in try-except to catch any exceptions
         product_info = None
@@ -156,9 +160,19 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
         except Exception as queue_e:
             logger.warning(f"Error removing task from queue: {queue_e}")
 
+        logger.info(f"✅ [TASK SUCCESS] analyze_reviews_task | task_id={task_id} | sku={sku} | reviews_count={len(reviews)} | user_id={user_id}")
+        
+        # Убеждаемся, что результат сериализуем в JSON
+        try:
+            json_result = json.dumps(final_result)
+            logger.debug(f"Result serialization check passed for task_id={task_id} (size={len(json_result)} bytes)")
+        except (TypeError, ValueError) as ser_err:
+            logger.error(f"❌ [SERIALIZATION ERROR] task_id={task_id}: {ser_err}", exc_info=True)
+            return {"status": "error", "error": f"Ошибка сериализации результата: {str(ser_err)}"}
+        
         return final_result
     except Exception as e:
-        logger.error(f"Analyze reviews task error for SKU {sku}: {e}", exc_info=True)
+        logger.error(f"❌ [TASK ERROR] analyze_reviews_task | task_id={task_id} | sku={sku} | error={str(e)}", exc_info=True)
         # Try to remove from queue on final error
         try:
             queue_service.remove_task_from_queue(self.request.id)

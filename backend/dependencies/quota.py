@@ -192,16 +192,59 @@ async def increment_usage(
         
         # Update database
         if db:
-            db.add(user)
+            # Use merge to ensure user is in session (works whether user is tracked or not)
+            # This is safer than add() which would fail if user is already in session
+            merged_user = await db.merge(user)
+            
+            # Flush to ensure changes are written to the database (but don't commit yet)
+            await db.flush()
+            # Commit the transaction
             await db.commit()
-            await db.refresh(user)  # Refresh to get latest values
+            # Refresh specific attributes to get latest values from database
+            await db.refresh(merged_user, attribute_names=["ai_requests_used", "extra_ai_balance", "usage_reset_date"])
+            
+            # Update original user object with merged values
+            user.ai_requests_used = merged_user.ai_requests_used
+            user.extra_ai_balance = merged_user.extra_ai_balance
+            user.usage_reset_date = merged_user.usage_reset_date
+            
+            logger.info(f"Updated usage for user {user.id}: ai_requests_used={user.ai_requests_used}, extra_ai_balance={user.extra_ai_balance}")
         else:
-            # If no db session provided, we need to create one
+            # If no db session provided, we need to create one and fetch user fresh
             from database import AsyncSessionLocal
+            from sqlalchemy import select
             async with AsyncSessionLocal() as session:
-                session.add(user)
+                # Fetch user fresh from database to ensure we have the latest state
+                result = await session.execute(select(User).where(User.id == user.id))
+                fresh_user = result.scalar_one()
+                
+                # Update the fresh user object
+                if resource_key == "ai_requests":
+                    if fresh_user.ai_requests_used is None:
+                        fresh_user.ai_requests_used = 0
+                    if fresh_user.extra_ai_balance is None:
+                        fresh_user.extra_ai_balance = 0
+                    
+                    monthly_limit = get_limit(fresh_user.subscription_plan, resource_key)
+                    remaining_monthly = monthly_limit - fresh_user.ai_requests_used
+                    
+                    if remaining_monthly >= amount:
+                        fresh_user.ai_requests_used += amount
+                    else:
+                        consumed_from_monthly = remaining_monthly
+                        consumed_from_balance = amount - consumed_from_monthly
+                        fresh_user.ai_requests_used = monthly_limit
+                        fresh_user.extra_ai_balance = max(0, fresh_user.extra_ai_balance - consumed_from_balance)
+                
+                session.add(fresh_user)
+                await session.flush()
                 await session.commit()
-                await session.refresh(user)  # Refresh to get latest values
+                await session.refresh(fresh_user, attribute_names=["ai_requests_used", "extra_ai_balance", "usage_reset_date"])
+                
+                # Update the original user object with fresh values
+                user.ai_requests_used = fresh_user.ai_requests_used
+                user.extra_ai_balance = fresh_user.extra_ai_balance
+                user.usage_reset_date = fresh_user.usage_reset_date
     
     # Add other resource types here as needed
 

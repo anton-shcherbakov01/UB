@@ -32,22 +32,35 @@ const AdminPage = ({ onBack }) => {
       
       if (res.ok) {
         const data = await res.json();
-        // Обновляем информацию о пользователе с небольшой задержкой, чтобы БД успела обновиться
+        
+        // Сразу обновляем локальное состояние из ответа сервера
+        if (data.plan) {
+          setUser(prev => prev ? { ...prev, plan: data.plan } : null);
+        }
+        
+        // Затем обновляем полную информацию о пользователе с небольшой задержкой
         setTimeout(async () => {
-          const userRes = await fetch(`${API_URL}/api/user/me`, {
-            headers: getTgHeaders()
-          });
-          if (userRes.ok) {
-            const updatedUser = await userRes.json();
-            setUser(updatedUser);
+          try {
+            const userRes = await fetch(`${API_URL}/api/user/me`, {
+              headers: getTgHeaders(),
+              cache: 'no-cache' // Принудительно обновляем из БД, не из кэша
+            });
+            if (userRes.ok) {
+              const updatedUser = await userRes.json();
+              setUser(updatedUser);
+            }
+          } catch (e) {
+            console.error('Failed to refresh user data:', e);
           }
         }, 500);
-        alert(`✅ Тариф изменен на: ${data.plan_name}`);
+        
+        alert(`✅ Тариф изменен на: ${data.plan_name || planId}`);
       } else {
         const error = await res.json().catch(() => ({ detail: 'Ошибка изменения тарифа' }));
         alert(`❌ ${error.detail || 'Ошибка изменения тарифа'}`);
       }
     } catch (e) {
+      console.error('Plan change error:', e);
       alert(`❌ Ошибка: ${e.message}`);
     } finally {
       setPlanChanging(false);

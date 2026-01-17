@@ -26,6 +26,10 @@ celery_app = Celery(
 
 # Детальная конфигурация параметров Celery
 celery_app.conf.update(
+    # Явное указание result backend (Redis)
+    result_backend=REDIS_URL,
+    result_expires=3600,  # Результаты хранятся 1 час
+    
     # Настройки сериализации данных
     task_serializer="json",
     accept_content=["json"],
@@ -60,6 +64,32 @@ celery_app.conf.update(
     task_default_queue='normal',
     task_default_exchange='tasks',
     task_default_routing_key='normal',
+    
+    # Таймауты для тяжелых задач (в секундах)
+    # soft_time_limit - мягкий таймаут (задача может обработать SoftTimeLimitExceeded)
+    # time_limit - жесткий таймаут (задача убивается принудительно)
+    task_time_limit=600,          # 10 минут жесткий таймаут по умолчанию
+    task_soft_time_limit=300,     # 5 минут мягкий таймаут по умолчанию
+    
+    # Специфичные таймауты для тяжелых задач
+    task_annotations={
+        'tasks.seo.analyze_reviews_task': {
+            'time_limit': 600,      # 10 минут для AI анализа (парсинг + AI)
+            'soft_time_limit': 480, # 8 минут мягкий таймаут
+        },
+        'tasks.seo.check_seo_position_task': {
+            'time_limit': 300,      # 5 минут для проверки позиций (Selenium)
+            'soft_time_limit': 240, # 4 минуты
+        },
+        'tasks.monitoring.parse_and_save_sku': {
+            'time_limit': 300,      # 5 минут для парсинга Selenium
+            'soft_time_limit': 240,
+        },
+        'tasks.finance.sync_financial_reports': {
+            'time_limit': 600,      # 10 минут для синхронизации финансов
+            'soft_time_limit': 480,
+        },
+    },
     
     # --- РАСПИСАНИЕ ПЕРИОДИЧЕСКИХ ЗАДАЧ (CELERY BEAT) ---
     beat_schedule={

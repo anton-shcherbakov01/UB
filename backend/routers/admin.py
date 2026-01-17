@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -8,6 +9,7 @@ from database import get_db, User, MonitoredItem
 from dependencies import get_current_user
 from config.plans import TIERS
 
+logger = logging.getLogger("Admin")
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 class PlanChangeRequest(BaseModel):
@@ -41,23 +43,39 @@ async def set_user_plan(
     
     # Если план не бесплатный, устанавливаем срок действия подписки на 30 дней
     plan_config = TIERS[request.plan_id]
+    now = datetime.utcnow()
     if plan_config.get("price", 0) > 0:
-        user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+        user.subscription_expires_at = now + timedelta(days=30)
     else:
         user.subscription_expires_at = None
     
     # Сбрасываем использование квот
     user.ai_requests_used = 0
     user.extra_ai_balance = 0
-    user.usage_reset_date = datetime.utcnow() + timedelta(days=30)
+    user.usage_reset_date = now + timedelta(days=30)
     
-    # Сохраняем изменения
-    db.add(user)
+    # Сохраняем изменения - используем merge для безопасности
+    # Это гарантирует, что объект будет правильно обновлен в сессии
+    merged_user = await db.merge(user)
+    
+    # Flush перед commit для гарантии записи изменений
+    await db.flush()
+    
+    # Commit транзакции
     await db.commit()
-    await db.refresh(user)
     
-    # Убеждаемся, что изменения применены
-    await db.refresh(user, ["subscription_plan", "subscription_expires_at", "ai_requests_used", "usage_reset_date"])
+    # Обновляем объект из БД, чтобы получить актуальные значения
+    await db.refresh(merged_user, attribute_names=["subscription_plan", "subscription_expires_at", "ai_requests_used", "extra_ai_balance", "usage_reset_date"])
+    
+    # Обновляем оригинальный объект значениями из merged объекта
+    user.subscription_plan = merged_user.subscription_plan
+    user.subscription_expires_at = merged_user.subscription_expires_at
+    user.ai_requests_used = merged_user.ai_requests_used
+    user.extra_ai_balance = merged_user.extra_ai_balance
+    user.usage_reset_date = merged_user.usage_reset_date
+    
+    # Логируем успешное изменение для отладки
+    logger.info(f"User {user.id} (telegram_id={user.telegram_id}) plan changed to {request.plan_id}")
     
     return {
         "status": "success",
