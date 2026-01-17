@@ -41,6 +41,12 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -92,7 +98,7 @@ services:
       redis:
         condition: service_started
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -131,7 +137,7 @@ services:
       redis:
         condition: service_started
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -170,7 +176,7 @@ services:
       redis:
         condition: service_started
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -200,7 +206,7 @@ services:
       redis:
         condition: service_started
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:

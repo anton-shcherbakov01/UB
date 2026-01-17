@@ -15,13 +15,66 @@ class ClickHouseService:
         self.client = None
         self._last_connect_attempt = None
         self._connect_backoff_seconds = 60  # Don't retry connection more often than once per minute
+        
+        # #region agent log
+        import json
+        try:
+            with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "clickhouse_models.py:18",
+                    "message": "ClickHouseService __init__",
+                    "data": {
+                        "host": self.host,
+                        "port": self.port,
+                        "user": self.user,
+                        "database": self.database,
+                        "password_set": bool(self.password)
+                    },
+                    "timestamp": int(__import__('time').time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
 
     def connect(self, retry_count=3, retry_delay=5):
         """Establishes connection to ClickHouse and ensures DB exists."""
         import time
+        import json
+        
+        # #region agent log
+        try:
+            with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "B",
+                    "location": "clickhouse_models.py:19",
+                    "message": "connect() called",
+                    "data": {"host": self.host, "port": self.port, "retry_count": retry_count},
+                    "timestamp": int(time.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
         
         last_error = None
         for attempt in range(1, retry_count + 1):
+            # #region agent log
+            try:
+                with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "B",
+                        "location": "clickhouse_models.py:26",
+                        "message": f"Connection attempt {attempt}/{retry_count}",
+                        "data": {"attempt": attempt, "host": self.host, "port": self.port},
+                        "timestamp": int(time.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
             try:
                 self.client = clickhouse_connect.get_client(
                     host=self.host,
@@ -36,9 +89,41 @@ class ClickHouseService:
                 self.client.command(f"CREATE DATABASE IF NOT EXISTS {self.database}")
                 self.init_schema()
                 logger.info("✅ ClickHouse connected and schema initialized.")
+                
+                # #region agent log
+                try:
+                    with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "B",
+                            "location": "clickhouse_models.py:38",
+                            "message": "Connection successful",
+                            "data": {"attempt": attempt},
+                            "timestamp": int(time.time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                
                 return
             except Exception as e:
                 last_error = e
+                
+                # #region agent log
+                try:
+                    with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "A",
+                            "location": "clickhouse_models.py:40",
+                            "message": f"Connection attempt {attempt} failed",
+                            "data": {"attempt": attempt, "error": str(e), "error_type": type(e).__name__},
+                            "timestamp": int(time.time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                
                 if attempt < retry_count:
                     logger.warning(f"⚠️ ClickHouse connection attempt {attempt}/{retry_count} failed: {e}. Retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
