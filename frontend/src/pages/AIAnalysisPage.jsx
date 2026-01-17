@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
@@ -29,6 +30,7 @@ const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "bo
 // ------------------------------------------------
 
 const AIAnalysisPage = ({ user, onUserUpdate }) => {
+    const navigate = useNavigate();
     const [sku, setSku] = useState('');
     const [step, setStep] = useState('input'); // input | config | analyzing | result
     
@@ -263,6 +265,14 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 </div>
                 
                 <div className="flex flex-col gap-2 h-full">
+                    <button 
+                        onClick={() => navigate('/')} 
+                        className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                        title="Назад на главную"
+                    >
+                        <ArrowLeft size={20}/>
+                    </button>
+                    
                     <button 
                         onClick={() => setHistoryOpen(true)} 
                         className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"

@@ -12,6 +12,10 @@ logger = logging.getLogger("Tasks-SEO")
 
 @celery_app.task(bind=True, name="analyze_reviews_task")
 def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
+    """
+    Анализ отзывов товара с использованием AI.
+    Обрабатывает все возможные ошибки, чтобы не падать.
+    """
     try:
         self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
         
@@ -21,30 +25,66 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
             product_info = parser_service.get_full_product_info(sku, limit)
         except Exception as parse_error:
             logger.error(f"Product parsing exception for SKU {sku}: {parse_error}", exc_info=True)
+            # Remove from queue on error
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
             return {"status": "error", "error": f"Ошибка парсинга товара: {str(parse_error)}"}
         
         # Check if product_info is None or empty
         if product_info is None:
             logger.error(f"Product info is None for SKU {sku}")
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
             return {"status": "error", "error": "Не удалось получить данные о товаре"}
         
         # Check if product_info has error status
         if isinstance(product_info, dict) and product_info.get("status") == "error":
             error_msg = product_info.get("message", "Ошибка парсинга товара")
             logger.error(f"Product parsing error for SKU {sku}: {error_msg}")
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
             return {"status": "error", "error": error_msg}
+        
+        # Validate product_info structure
+        if not isinstance(product_info, dict):
+            logger.error(f"Product info is not a dict for SKU {sku}, got {type(product_info)}")
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
+            return {"status": "error", "error": "Некорректная структура данных о товаре"}
         
         self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
         
+        # Safely extract reviews
         reviews = product_info.get('reviews', [])
         if not isinstance(reviews, list):
             logger.warning(f"Reviews is not a list for SKU {sku}, got {type(reviews)}")
             reviews = []
         
-        product_name = product_info.get('name', f"Товар {sku}")
+        # Safely extract product name
+        product_name = product_info.get('name') or product_info.get('product_name') or f"Товар {sku}"
+        if not isinstance(product_name, str):
+            product_name = str(product_name) if product_name else f"Товар {sku}"
         
+        # AI Analysis with error handling
         try:
             ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
+            if not isinstance(ai_result, dict):
+                logger.warning(f"AI result is not a dict for SKU {sku}, got {type(ai_result)}")
+                ai_result = {
+                    "_error": "Некорректный формат ответа AI",
+                    "aspects": [],
+                    "audience_stats": {"rational_percent": 0, "emotional_percent": 0, "skeptic_percent": 0},
+                    "global_summary": "Ошибка при анализе отзывов",
+                    "strategy": []
+                }
         except Exception as ai_error:
             logger.error(f"AI analysis exception for SKU {sku}: {ai_error}", exc_info=True)
             ai_result = {
@@ -60,16 +100,26 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
             logger.error(f"AI analysis error for SKU {sku}: {ai_result['_error']}")
             # Не прерываем выполнение, но пометим в результате
 
-        final_result = {
-            "status": "success",
-            "sku": sku,
-            "product_name": product_name,
-            "image": product_info.get('image'),
-            "rating": product_info.get('rating'),
-            "reviews_count": len(reviews),
-            "ai_analysis": ai_result
-        }
+        # Build final result safely
+        try:
+            final_result = {
+                "status": "success",
+                "sku": sku,
+                "product_name": product_name,
+                "image": product_info.get('image') or product_info.get('image_url'),
+                "rating": product_info.get('rating', 0.0),
+                "reviews_count": len(reviews),
+                "ai_analysis": ai_result
+            }
+        except Exception as result_error:
+            logger.error(f"Error building final result for SKU {sku}: {result_error}", exc_info=True)
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
+            return {"status": "error", "error": f"Ошибка формирования результата: {str(result_error)}"}
 
+        # Save history with error handling
         if user_id:
             try:
                 title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
@@ -87,6 +137,11 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
         return final_result
     except Exception as e:
         logger.error(f"Analyze reviews task error for SKU {sku}: {e}", exc_info=True)
+        # Try to remove from queue on final error
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except:
+            pass
         return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="generate_seo_task")

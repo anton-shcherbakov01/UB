@@ -319,16 +319,24 @@ class ProductParser:
                     reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
                 if len(reviews) >= limit: break
             
+            # Safely convert rating to float
+            try:
+                rating_value = float(valuation) if valuation else 0.0
+            except (ValueError, TypeError):
+                rating_value = 0.0
+            
             return {
                 "sku": sku,
-                "image": static_data.get('image_url'),
-                "rating": float(valuation),
+                "name": static_data.get('imt_name') or static_data.get('subj_name') or f"Товар {sku}",
+                "image": static_data.get('image_url') or "",
+                "rating": rating_value,
                 "reviews": reviews,
                 "reviews_count": len(reviews),
                 "status": "success"
             }
 
         except Exception as e:
+            logger.error(f"get_full_product_info error for SKU {sku}: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):
