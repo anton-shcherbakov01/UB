@@ -2,7 +2,7 @@ from .base import WBApiBase
 from .statistics import WBStatisticsMixin
 from .promotion import WBPromotionMixin
 # Добавляем импорт Content Mixin, которого не хватало
-from .content import WBContentMixin 
+from .content import WBContentMixin
 
 class WBApiService(
     WBStatisticsMixin, 

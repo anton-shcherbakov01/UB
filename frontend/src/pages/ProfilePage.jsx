@@ -261,21 +261,39 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                 </div>
 
                 {(user?.has_wb_token || scopes) && (
-                    <div className="mb-5">
-                         <div className="flex justify-between items-center mb-2 px-1">
-                            <span className="text-[10px] uppercase font-bold text-slate-400">Доступные разделы</span>
-                            {scopesLoading && <Loader2 size={12} className="animate-spin text-indigo-600"/>}
+                    <>
+                        {/* API Mode Display */}
+                        {scopes?.api_mode && (
+                            <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-slate-600 uppercase">Режим API</span>
+                                    <span className={`text-xs font-black px-2 py-1 rounded-lg ${
+                                        scopes.api_mode === 'read_write' 
+                                            ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                    }`}>
+                                        {scopes.api_mode === 'read_write' ? 'Чтение и запись' : 'Только чтение'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className="mb-5">
+                             <div className="flex justify-between items-center mb-2 px-1">
+                                <span className="text-[10px] uppercase font-bold text-slate-400">Доступные разделы</span>
+                                {scopesLoading && <Loader2 size={12} className="animate-spin text-indigo-600"/>}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                {SCOPE_CONFIG.map(cfg => (
+                                    <ScopeCard 
+                                        key={cfg.key} 
+                                        config={cfg} 
+                                        active={scopes ? scopes[cfg.key] : false} 
+                                    />
+                                ))}
+                            </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-2">
-                            {SCOPE_CONFIG.map(cfg => (
-                                <ScopeCard 
-                                    key={cfg.key} 
-                                    config={cfg} 
-                                    active={scopes ? scopes[cfg.key] : false} 
-                                />
-                            ))}
-                        </div>
-                    </div>
+                    </>
                 )}
 
                 <button

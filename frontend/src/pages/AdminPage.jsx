@@ -32,13 +32,16 @@ const AdminPage = ({ onBack }) => {
       
       if (res.ok) {
         const data = await res.json();
-        // Обновляем информацию о пользователе
-        const userRes = await fetch(`${API_URL}/api/user/me`, {
-          headers: getTgHeaders()
-        });
-        if (userRes.ok) {
-          setUser(await userRes.json());
-        }
+        // Обновляем информацию о пользователе с небольшой задержкой, чтобы БД успела обновиться
+        setTimeout(async () => {
+          const userRes = await fetch(`${API_URL}/api/user/me`, {
+            headers: getTgHeaders()
+          });
+          if (userRes.ok) {
+            const updatedUser = await userRes.json();
+            setUser(updatedUser);
+          }
+        }, 500);
         alert(`✅ Тариф изменен на: ${data.plan_name}`);
       } else {
         const error = await res.json().catch(() => ({ detail: 'Ошибка изменения тарифа' }));

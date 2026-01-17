@@ -120,9 +120,19 @@ async def get_token_scopes(user: User = Depends(get_current_user)):
         # Обновляем дефолтные значения теми, что пришли (если пришли)
         # Логика: если в real_scopes есть ключ - берем его значение, иначе False
         result = {key: real_scopes.get(key, False) for key in default_scopes}
+        
+        # Определяем режим API (чтение/запись)
+        try:
+            api_mode = await wb_api_service.get_api_mode(user.wb_api_token)
+            result["api_mode"] = api_mode
+        except Exception:
+            # Если не удалось определить режим, по умолчанию считаем read_only
+            result["api_mode"] = "read_only"
+        
         return result
     except Exception:
         # Если ошибка связи с WB, возвращаем все False
+        default_scopes["api_mode"] = "read_only"
         return default_scopes
 
 @router.delete("/token")

@@ -204,8 +204,24 @@ async def generate_seo_pdf_report(req: SeoPdfRequest, user: User = Depends(get_c
     else: 
         pdf_bytes = pdf_content
 
+    # Prepare filename with proper encoding for mobile devices
+    filename = f"seo_report_{req.sku}.pdf"
+    # Use URL-safe filename encoding for better mobile compatibility
+    from urllib.parse import quote
+    filename_encoded = quote(filename.encode('utf-8'))
+    
+    # Headers optimized for mobile devices
+    headers = {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': f'attachment; filename="{filename}"; filename*=UTF-8\'\'{filename_encoded}',
+        'Content-Length': str(len(pdf_bytes)),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
+
     return StreamingResponse(
         io.BytesIO(pdf_bytes), 
-        media_type='application/pdf', 
-        headers={'Content-Disposition': f'attachment; filename="seo_report_{req.sku}.pdf"'}
+        media_type='application/pdf',
+        headers=headers
     )

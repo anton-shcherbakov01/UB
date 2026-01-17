@@ -76,8 +76,10 @@ class WBStatisticsMixin(WBApiBase):
         # Маппинг для UI (13 категорий)
         # promotion проверяется через advert API
         promotion_scope = raw_res.get("advert", False)
-        # users проверяется через marketplace API (управление пользователями доступно через marketplace)
-        users_scope = raw_res.get("marketplace", False)
+        # users - это административная функция, не связанная с WB API
+        # Управление пользователями требует специальных прав, которые не проверяются через стандартные API
+        # Поэтому всегда возвращаем False, так как это административная функция платформы
+        users_scope = False
         
         return {
             "content": raw_res.get("content", False),
@@ -92,7 +94,7 @@ class WBStatisticsMixin(WBApiBase):
             "chat": raw_res.get("feedbacks", False),
             "questions": raw_res.get("feedbacks", False),
             "prices": raw_res.get("prices", False) or raw_res.get("content", False),
-            "users": users_scope  # Исправлено: проверяем через marketplace, а не всегда True
+            "users": users_scope  # Исправлено: всегда False, так как это административная функция платформы
         }
 
     async def _probe(self, session, method, url, headers, params=None) -> bool:
@@ -103,6 +105,62 @@ class WBStatisticsMixin(WBApiBase):
                 return True
         except:
             return False
+    
+    async def get_api_mode(self, token: str) -> str:
+        """
+        Определяет режим работы API токена: только чтение или чтение и запись.
+        
+        Returns:
+            "read_only" - только чтение
+            "read_write" - чтение и запись
+        """
+        if not token:
+            return "read_only"
+        
+        headers = {"Authorization": token}
+        
+        # Пробуем выполнить безопасную операцию записи для определения режима
+        # Используем endpoint для проверки прав на запись (например, проверка лимитов карточек)
+        # Если можем получить информацию о лимитах через POST или можем выполнить операцию записи - режим read_write
+        # Если только GET работает - режим read_only
+        
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            # Пробуем выполнить операцию, которая требует прав записи
+            # Используем безопасный endpoint для проверки (например, проверка лимитов через POST)
+            test_urls = [
+                f"{self.URLS['content']}/content/v2/cards/limits",  # Проверка лимитов (требует прав записи для некоторых операций)
+                f"{self.URLS['marketplace']}/api/v3/warehouses",  # Проверка складов
+            ]
+            
+            # Сначала проверяем, работает ли GET (чтение)
+            read_works = False
+            for url in test_urls:
+                try:
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status not in [401, 403]:
+                            read_works = True
+                            break
+                except:
+                    continue
+            
+            if not read_works:
+                return "read_only"
+            
+            # Теперь проверяем, работает ли запись (пробуем безопасный POST запрос)
+            # Используем endpoint, который не изменяет данные, но требует прав записи
+            write_test_url = f"{self.URLS['content']}/content/v2/cards/limits"
+            try:
+                # Пробуем POST запрос (даже если он вернет ошибку, главное - не 403/401)
+                async with session.post(write_test_url, headers=headers, json={}) as resp:
+                    # Если получили 403/401 - только чтение
+                    # Если получили другую ошибку (400, 422 и т.д.) - значит запись возможна, но данные неверные
+                    if resp.status in [401, 403]:
+                        return "read_only"
+                    # Если получили 400, 422 или другой код ошибки (не 401/403) - значит запись возможна
+                    return "read_write"
+            except:
+                # Если запрос упал, но GET работает - вероятно только чтение
+                return "read_only"
 
     async def get_dashboard_stats(self, token: str):
         """Сводка: Заказы сегодня и остатки"""

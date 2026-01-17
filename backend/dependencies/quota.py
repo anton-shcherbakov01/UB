@@ -194,12 +194,14 @@ async def increment_usage(
         if db:
             db.add(user)
             await db.commit()
+            await db.refresh(user)  # Refresh to get latest values
         else:
             # If no db session provided, we need to create one
             from database import AsyncSessionLocal
             async with AsyncSessionLocal() as session:
                 session.add(user)
                 await session.commit()
+                await session.refresh(user)  # Refresh to get latest values
     
     # Add other resource types here as needed
 

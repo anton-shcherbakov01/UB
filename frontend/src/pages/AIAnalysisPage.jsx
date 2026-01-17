@@ -181,6 +181,10 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                     setResult(sData.data);
                     setStep('result');
                     setLoading(false);
+                    // Update user info after successful analysis completion (to reflect updated limits)
+                    if (onUserUpdate) {
+                        onUserUpdate();
+                    }
                     break;
                 }
                 if (sData.status === 'FAILURE') {

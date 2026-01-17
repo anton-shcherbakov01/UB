@@ -48,14 +48,21 @@ async def set_user_plan(
     
     # Сбрасываем использование квот
     user.ai_requests_used = 0
+    user.extra_ai_balance = 0
     user.usage_reset_date = datetime.utcnow() + timedelta(days=30)
     
+    # Сохраняем изменения
+    db.add(user)
     await db.commit()
     await db.refresh(user)
+    
+    # Убеждаемся, что изменения применены
+    await db.refresh(user, ["subscription_plan", "subscription_expires_at", "ai_requests_used", "usage_reset_date"])
     
     return {
         "status": "success",
         "message": f"Тариф изменен на {plan_config.get('name', request.plan_id)}",
         "plan": user.subscription_plan,
-        "plan_name": plan_config.get("name", request.plan_id)
+        "plan_name": plan_config.get("name", request.plan_id),
+        "expires_at": user.subscription_expires_at.isoformat() if user.subscription_expires_at else None
     }
