@@ -290,25 +290,58 @@ const AIAnalysisPage = ({ user }) => {
                             </div>
 
                             <div className="mb-6 px-2">
-                                {/* Quota Display */}
+                                {/* Quota Display with Plan Info */}
                                 {user?.ai_requests_limit > 0 && (
-                                    <div className="mb-4 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
-                                        <div className="flex justify-between items-center text-xs mb-2">
-                                            <span className="font-bold text-indigo-700">AI запросы:</span>
-                                            <span className="font-black text-indigo-900">
+                                    <div className="mb-4 p-4 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-xl border-2 border-indigo-100">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="flex items-center gap-2">
+                                                <BrainCircuit className="text-indigo-600" size={18} />
+                                                <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">AI запросы</span>
+                                            </div>
+                                            <span className="text-xs font-black bg-white px-2 py-1 rounded-lg text-indigo-900 border border-indigo-200">
                                                 {user.ai_requests_used || 0} / {user.ai_requests_limit}
                                                 {user?.extra_ai_balance > 0 && (
                                                     <span className="text-emerald-600 ml-1">+{user.extra_ai_balance}</span>
                                                 )}
                                             </span>
                                         </div>
-                                        <div className="h-2 bg-indigo-100 rounded-full overflow-hidden">
+                                        <div className="h-2.5 bg-indigo-100 rounded-full overflow-hidden mb-2">
                                             <div 
-                                                className="h-full bg-indigo-600 transition-all"
+                                                className="h-full bg-gradient-to-r from-indigo-600 to-violet-600 transition-all"
                                                 style={{ 
                                                     width: `${Math.min(100, ((user.ai_requests_used || 0) / user.ai_requests_limit) * 100)}%` 
                                                 }}
                                             />
+                                        </div>
+                                        {user?.extra_ai_balance > 0 && (
+                                            <p className="text-xs text-indigo-600 font-medium">Дополнительный баланс: {user.extra_ai_balance} запросов</p>
+                                        )}
+                                        {((user.ai_requests_used || 0) / user.ai_requests_limit) >= 0.8 && (
+                                            <p className="text-xs text-amber-600 font-medium mt-1">⚠️ Осталось мало запросов. Рассмотрите обновление тарифа.</p>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {/* Available Features Info */}
+                                {user && (
+                                    <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Доступные функции</div>
+                                        <div className="space-y-1.5">
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <Check size={12} className="text-emerald-600" />
+                                                <span className="text-slate-600">Анализ отзывов AI</span>
+                                            </div>
+                                            {user?.plan === 'start' ? (
+                                                <div className="flex items-center gap-2 text-xs">
+                                                    <Lock size={12} className="text-amber-500" />
+                                                    <span className="text-slate-500">PDF экспорт (доступен на тарифе <strong>Аналитик</strong>+)</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-2 text-xs">
+                                                    <Check size={12} className="text-emerald-600" />
+                                                    <span className="text-slate-600">PDF экспорт доступен</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}

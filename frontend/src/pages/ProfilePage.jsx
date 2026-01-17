@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
     User, Key, X, Loader2, Shield, ArrowUpRight, 
-    AlertTriangle, Check, Lock, 
+    AlertTriangle, Check, Lock, TrendingUp,
     Package, Store, PieChart, Megaphone, RotateCcw, FileText, 
     BarChart3, Wallet, Truck, MessageSquare, MessageCircle, 
     Tag, Users
@@ -276,6 +276,110 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                 >
                     {tokenLoading ? <Loader2 className="animate-spin" size={18} /> : (user?.has_wb_token ? 'Обновить токен' : 'Сохранить токен')}
                 </button>
+            </div>
+
+            {/* MY LIMITS SECTION */}
+            <div className="bg-white p-5 rounded-[28px] shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-4 px-1">
+                    <div className="bg-violet-100 p-1.5 rounded-lg text-violet-600"><TrendingUp size={18} /></div>
+                    <h2 className="font-bold text-lg">Мои лимиты</h2>
+                </div>
+
+                {/* Plan Info */}
+                <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Текущий тариф</span>
+                        <span className="font-black text-slate-900">{getPlanDisplayName(user?.plan)}</span>
+                    </div>
+                    {user?.days_left > 0 && (
+                        <div className="text-xs text-slate-500">
+                            Действует еще {user.days_left} {user.days_left === 1 ? 'день' : user.days_left < 5 ? 'дня' : 'дней'}
+                        </div>
+                    )}
+                </div>
+
+                {/* AI Requests Limit */}
+                {user?.ai_requests_limit > 0 && (
+                    <div className="mb-4 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">AI-запросы</span>
+                            <span className="font-black text-indigo-900">
+                                {user.ai_requests_used || 0} / {user.ai_requests_limit}
+                                {user?.extra_ai_balance > 0 && <span className="text-emerald-600 ml-1">+{user.extra_ai_balance}</span>}
+                            </span>
+                        </div>
+                        <div className="w-full bg-indigo-100 rounded-full h-2.5">
+                            <div
+                                className="bg-indigo-600 h-2.5 rounded-full transition-all"
+                                style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / user.ai_requests_limit) * 100)}%` }}
+                            ></div>
+                        </div>
+                        {user?.extra_ai_balance > 0 && (
+                            <p className="text-xs text-indigo-600 mt-2">Дополнительный баланс: {user.extra_ai_balance} запросов</p>
+                        )}
+                    </div>
+                )}
+
+                {/* History Days Limit */}
+                <div className="mb-4 p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                    <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-emerald-700 uppercase tracking-wide">История продаж</span>
+                        <span className="font-black text-emerald-900">
+                            {user?.plan === 'start' ? '7 дней' : user?.plan === 'analyst' ? '60 дней' : user?.plan === 'strategist' ? '365 дней' : 'Не определено'}
+                        </span>
+                    </div>
+                    <p className="text-xs text-emerald-600 mt-1">Период доступной аналитики</p>
+                </div>
+
+                {/* Features List */}
+                <div className="mb-2">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 block">Доступные функции</span>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                            <Check size={14} className="text-emerald-600" />
+                            <span className="text-xs font-medium text-slate-700">Слоты товаров</span>
+                        </div>
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                            <Check size={14} className="text-emerald-600" />
+                            <span className="text-xs font-medium text-slate-700">Уведомления</span>
+                        </div>
+                        {user?.plan === 'start' ? (
+                            <div className="flex items-center gap-2 p-2 bg-amber-50 rounded-lg border border-amber-100">
+                                <Check size={14} className="text-amber-600" />
+                                <span className="text-xs font-medium text-amber-700">P&L (демо: вчера)</span>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                    <Check size={14} className="text-emerald-600" />
+                                    <span className="text-xs font-medium text-slate-700">P&L (полный)</span>
+                                </div>
+                                {(user?.plan === 'analyst' || user?.plan === 'strategist') && (
+                                    <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                        <Check size={14} className="text-emerald-600" />
+                                        <span className="text-xs font-medium text-slate-700">Форензика возвратов</span>
+                                    </div>
+                                )}
+                                {user?.plan === 'strategist' && (
+                                    <>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">Cash Gap анализ</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">Приоритетный опрос</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">P&L экспорт</span>
+                                        </div>
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* TARIFFS */}

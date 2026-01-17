@@ -340,10 +340,14 @@ async def get_pnl_data(
     
     now = datetime.utcnow()
     
+    import logging
+    logger = logging.getLogger("FinanceRouter")
+    
     # Check feature access based on plan
     if user.subscription_plan == "start":
         # Start plan has pnl_demo feature - only yesterday
         if not has_feature(user.subscription_plan, "pnl_demo"):
+            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) lacks pnl_demo feature")
             raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
         yesterday = now - timedelta(days=1)
         date_from_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -351,6 +355,7 @@ async def get_pnl_data(
     else:
         # Analyst+ plans have pnl_full feature - full date range
         if not has_feature(user.subscription_plan, "pnl_full"):
+            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) lacks pnl_full feature")
             raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
         
         # For analyst+ plans, allow full date range
@@ -379,6 +384,7 @@ async def get_pnl_data(
         if days_requested > history_limit:
             from config.plans import get_plan_config
             plan_config = get_plan_config(user.subscription_plan)
+            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) requested {days_requested} days, limit={history_limit}")
             raise HTTPException(
                 status_code=403,
                 detail=f"Период {days_requested} дней недоступен на вашем тарифе. Доступно: {history_limit} дней. Текущий план: {plan_config.get('name', user.subscription_plan)}"

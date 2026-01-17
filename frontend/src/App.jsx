@@ -63,7 +63,7 @@ const AppContent = () => {
             <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} refreshUser={fetchUser} />} />
             
             <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
-            <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
+            <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} user={user} />} />
             <Route path="/notifications" element={<NotificationsPage onNavigate={handleTabChange} />} />
             <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
             <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />

@@ -16,6 +16,7 @@ const FinancePage = ({ user }) => {
     const [viewMode, setViewMode] = useState('unit'); // 'unit' | 'pnl'
     const [pnlData, setPnlData] = useState(null);
     const [pnlLoading, setPnlLoading] = useState(false);
+    const [pnlError, setPnlError] = useState(null);
 
     const fetchProducts = async () => {
         setLoading(true);
@@ -38,6 +39,7 @@ const FinancePage = ({ user }) => {
     
     const fetchPnlData = async () => {
         setPnlLoading(true);
+        setPnlError(null);
         try {
             const res = await fetch(`${API_URL}/api/finance/pnl`, {
                 headers: getTgHeaders()
@@ -46,11 +48,17 @@ const FinancePage = ({ user }) => {
                 const data = await res.json();
                 setPnlData(data);
             } else {
-                // Fallback to local calculation if API fails
+                const errorData = await res.json().catch(() => ({ detail: 'Неизвестная ошибка' }));
+                if (res.status === 403) {
+                    setPnlError(errorData.detail || 'P&L недоступен на вашем тарифе. Обновите тариф для полного доступа.');
+                } else {
+                    setPnlError(errorData.detail || 'Ошибка загрузки данных P&L');
+                }
                 setPnlData(null);
             }
         } catch(e) { 
             console.error(e);
+            setPnlError('Ошибка соединения с сервером');
             setPnlData(null);
         } finally {
             setPnlLoading(false);
@@ -187,6 +195,16 @@ const FinancePage = ({ user }) => {
                         </div>
                         {pnlLoading ? (
                             <div className="flex justify-center p-10"><Loader2 className="animate-spin text-emerald-600" size={24}/></div>
+                        ) : pnlError ? (
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
+                                <div className="font-bold text-amber-900 mb-2">⚠️ {pnlError}</div>
+                                {user?.plan === 'start' && (
+                                    <div className="text-amber-700 mt-2">
+                                        <p className="mb-2">На тарифе <strong>Старт</strong> доступен демо-режим P&L (только данные за вчера).</p>
+                                        <p>Для полного доступа к P&L обновите тариф на <strong>Аналитик</strong> или <strong>Стратег</strong>.</p>
+                                    </div>
+                                )}
+                            </div>
                         ) : (pnlData?.data && pnlData.data.length > 0) ? (
                             <>
                                 <div className="h-64 w-full">

@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { 
     ArrowLeft, TrendingDown, Warehouse, Calendar, 
-    DollarSign, AlertCircle, Search, Loader2, Info, X
+    DollarSign, AlertCircle, Search, Loader2, Info, X, Lock, Check
 } from 'lucide-react';
 import { 
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
 import { API_URL, getTgHeaders } from '../config';
 
-const AdvancedAnalyticsPage = ({ onBack }) => {
+const AdvancedAnalyticsPage = ({ onBack, user }) => {
     const [activeTab, setActiveTab] = useState('forensics'); // forensics | cashgap
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState(null);
+    const [error, setError] = useState(null);
     const [showInfo, setShowInfo] = useState(false); // Состояние для показа подсказки
 
     useEffect(() => {
@@ -20,6 +21,7 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
 
     const fetchData = async () => {
         setLoading(true);
+        setError(null);
         try {
             const endpoint = activeTab === 'forensics' 
                 ? `${API_URL}/api/analytics/forensics/returns?days=30`
@@ -27,10 +29,21 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
             
             const res = await fetch(endpoint, { headers: getTgHeaders() });
             if (res.ok) {
-                setData(await res.json());
+                const result = await res.json();
+                setData(result);
+            } else {
+                const errorData = await res.json().catch(() => ({ detail: 'Ошибка загрузки данных' }));
+                if (res.status === 403) {
+                    setError(errorData.detail || 'Эта функция недоступна на вашем тарифе');
+                } else {
+                    setError(errorData.detail || 'Ошибка загрузки данных');
+                }
+                setData(null);
             }
         } catch (e) {
             console.error(e);
+            setError('Ошибка соединения с сервером');
+            setData(null);
         } finally {
             setLoading(false);
         }
@@ -90,26 +103,95 @@ const AdvancedAnalyticsPage = ({ onBack }) => {
                 </div>
             )}
 
+            {/* Plan Info Banner */}
+            {user && (
+                <div className={`p-4 rounded-2xl border-2 ${
+                    activeTab === 'forensics' 
+                        ? (user?.plan === 'analyst' || user?.plan === 'strategist' 
+                            ? 'bg-indigo-50 border-indigo-200' 
+                            : 'bg-amber-50 border-amber-200')
+                        : (user?.plan === 'strategist' 
+                            ? 'bg-indigo-50 border-indigo-200' 
+                            : 'bg-amber-50 border-amber-200')
+                }`}>
+                    <div className="flex items-start gap-3">
+                        {activeTab === 'forensics' ? (
+                            (user?.plan === 'analyst' || user?.plan === 'strategist') ? (
+                                <>
+                                    <Check className="text-indigo-600" size={20} />
+                                    <div className="flex-1 text-sm">
+                                        <div className="font-bold text-indigo-900 mb-1">Форензика возвратов доступна</div>
+                                        <div className="text-indigo-700">
+                                            Доступен анализ проблемных размеров и складов. История: {user?.plan === 'analyst' ? '60 дней' : '365 дней'}.
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <Lock className="text-amber-600" size={20} />
+                                    <div className="flex-1 text-sm">
+                                        <div className="font-bold text-amber-900 mb-1">Форензика доступна на тарифе Аналитик+</div>
+                                        <div className="text-amber-700">
+                                            Обновите тариф для доступа к анализу проблемных возвратов и аномалий складов.
+                                        </div>
+                                    </div>
+                                </>
+                            )
+                        ) : (
+                            user?.plan === 'strategist' ? (
+                                <>
+                                    <Check className="text-indigo-600" size={20} />
+                                    <div className="flex-1 text-sm">
+                                        <div className="font-bold text-indigo-900 mb-1">Cash Gap анализ доступен</div>
+                                        <div className="text-indigo-700">
+                                            Доступен прогноз кассовых разрывов на основе Supply Chain.
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <Lock className="text-amber-600" size={20} />
+                                    <div className="flex-1 text-sm">
+                                        <div className="font-bold text-amber-900 mb-1">Cash Gap доступен на тарифе Стратег</div>
+                                        <div className="text-amber-700">
+                                            Обновите тариф для доступа к прогнозу кассовых разрывов и планированию закупок.
+                                        </div>
+                                    </div>
+                                </>
+                            )
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Tabs */}
             <div className="bg-slate-100 p-1 rounded-xl flex">
                 <button 
-                    onClick={() => { setActiveTab('forensics'); setData(null); }}
+                    onClick={() => { setActiveTab('forensics'); setData(null); setError(null); }}
                     className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'forensics' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
                 >
                     🕵️ Форензика
                 </button>
                 <button 
-                    onClick={() => { setActiveTab('cashgap'); setData(null); }}
+                    onClick={() => { setActiveTab('cashgap'); setData(null); setError(null); }}
                     className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'cashgap' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
                 >
                     💰 Кассовые разрывы
                 </button>
             </div>
 
+            {error && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
+                    <div className="font-bold text-amber-900 mb-2">⚠️ {error}</div>
+                </div>
+            )}
+
             {loading ? (
                 <div className="flex justify-center py-20"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>
             ) : !data ? (
-                <div className="text-center p-10 text-slate-400">Нет данных</div>
+                <div className="text-center p-10 text-slate-400">
+                    {error ? 'Функция недоступна на вашем тарифе' : 'Нет данных'}
+                </div>
             ) : (
                 <>
                     {activeTab === 'forensics' && <ForensicsView data={data} />}
