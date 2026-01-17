@@ -13,13 +13,13 @@ TIERS = {
         "name": "Analyst (Pro)",
         "price": 1490,
         "limits": {"ai_requests": 100, "history_days": 60},
-        "features": ["slots", "notifications", "pnl_full", "forensics"]
+        "features": ["slots", "notifications", "pnl_full", "forensics", "seo_semantics"]
     },
     "strategist": {
         "name": "Strategist (Business)",
         "price": 4990,
         "limits": {"ai_requests": 1000, "history_days": 365},
-        "features": ["slots", "notifications", "pnl_full", "pnl_export", "forensics", "forensics_cashgap", "priority_poll"]
+        "features": ["slots", "notifications", "pnl_full", "pnl_export", "forensics", "forensics_cashgap", "priority_poll", "seo_semantics"]
     }
 }
 

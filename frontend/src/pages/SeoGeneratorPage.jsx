@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download } from 'lucide-react';
+import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download, Lock } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
-const SeoGeneratorPage = ({ user }) => {
+const SeoGeneratorPage = ({ user, onUserUpdate }) => {
     const [step, setStep] = useState(1);
     const [sku, setSku] = useState('');
     const [loading, setLoading] = useState(false);
@@ -44,31 +44,51 @@ const SeoGeneratorPage = ({ user }) => {
         setLoading(true);
         setStatus('Загрузка BERT модели...');
         try {
-            const res = await fetch(`${API_URL}/api/seo/cluster`, { 
+            const res = await fetch(`${API_URL}/api/seo/cluster`, {
                 method: 'POST',
-                headers: getTgHeaders(),
+                headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sku: Number(sku), keywords })
             });
             const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.message || 'Ошибка запуска кластеризации');
             const taskId = data.task_id;
-            
+            if (!taskId) throw new Error('Не получен task_id');
+
+            const queueInfo = { position: data.position ?? 0, is_priority: data.is_priority ?? false };
             let attempts = 0;
-            while(attempts < 30) {
+            while (attempts < 40) {
                 await new Promise(r => setTimeout(r, 2000));
-                const sRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
-                const sData = await sRes.json();
-                
-                if (sData.status === 'SUCCESS') {
-                    setClusters(sData.data.clusters);
-                    setLoading(false);
+                try {
+                    const qRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
+                    if (qRes.ok) {
+                        const q = await qRes.json();
+                        if (q.position != null) queueInfo.position = q.position;
+                        queueInfo.is_priority = q.is_priority ?? queueInfo.is_priority;
+                    }
+                } catch (_) {}
+                const pos = queueInfo.position;
+                setStatus(queueInfo.is_priority
+                    ? `Приоритет: поз. ${pos}… (${attempts * 2}с)`
+                    : pos > 0 ? `Очередь: поз. ${pos}… (${attempts * 2}с)` : `Кластеризация… (${attempts * 2}с)`);
+
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
+                if (!sRes.ok) { attempts++; continue; }
+                const sData = await sRes.json().catch(() => ({}));
+                if ((sData.status || '').toUpperCase() === 'SUCCESS') {
+                    const raw = sData.data || {};
+                    if (raw.error) setError('Кластеризация: ' + raw.error);
+                    const clustersData = raw.clusters ?? (Array.isArray(raw) ? raw : []);
+                    setClusters(Array.isArray(clustersData) ? clustersData : (clustersData?.clusters || []));
+                    onUserUpdate?.();
                     return;
                 }
-                if (sData.status === 'FAILURE') throw new Error(sData.error);
+                if ((sData.status || '').toUpperCase() === 'FAILURE') throw new Error(sData.error || 'Ошибка кластеризации');
                 if (sData.info) setStatus(sData.info);
                 attempts++;
             }
+            throw new Error('Превышено время ожидания');
         } catch (e) {
-            setError('Ошибка кластеризации: ' + e.message);
+            setError('Ошибка кластеризации: ' + (e.message || ''));
         } finally {
             setLoading(false);
             setStatus('');
@@ -90,71 +110,66 @@ const SeoGeneratorPage = ({ user }) => {
         setLoading(true);
         setStatus('Генерация GEO контента...');
         try {
-            const res = await fetch(`${API_URL}/api/seo/generate`, { method: 'POST', headers: getTgHeaders(), body: JSON.stringify({ sku: Number(sku), keywords, tone, title_len: titleLen, desc_len: descLen }) });
+            const res = await fetch(`${API_URL}/api/seo/generate`, {
+                method: 'POST',
+                headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sku: Number(sku), keywords, tone, title_len: titleLen, desc_len: descLen })
+            });
             const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.message || 'Не удалось запустить генерацию');
             const taskId = data.task_id;
+            if (!taskId) throw new Error('Не получен task_id');
+
+            const queueInfo = { position: data.position ?? 0, is_priority: data.is_priority ?? false };
             let attempts = 0;
-            while(attempts < 60) {
+            while (attempts < 60) {
                 await new Promise(r => setTimeout(r, 3000));
-                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
-                const sData = await sRes.json();
-                if (sData.status === 'SUCCESS') {
-                    // Проверяем наличие ошибки AI в результатах
-                    if (sData.data?.generated_content?._error) {
-                        setError(`⚠️ Ошибка AI: ${sData.data.generated_content._error}`);
+                try {
+                    const qRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
+                    if (qRes.ok) {
+                        const q = await qRes.json();
+                        if (q.position != null) queueInfo.position = q.position;
+                        queueInfo.is_priority = q.is_priority ?? queueInfo.is_priority;
                     }
-                    setResult(sData.data.generated_content); 
-                    setStep(3); 
-                    break;
+                } catch (_) {}
+                const pos = queueInfo.position;
+                setStatus(queueInfo.is_priority
+                    ? `Приоритет: поз. ${pos}… (${attempts * 3}с)`
+                    : pos > 0 ? `Очередь: поз. ${pos}… (${attempts * 3}с)` : `Генерация GEO… (${attempts * 3}с)`);
+
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
+                if (!sRes.ok) { attempts++; continue; }
+                const sData = await sRes.json().catch(() => ({}));
+                if ((sData.status || '').toUpperCase() === 'SUCCESS') {
+                    const payload = sData.data || sData.result;
+                    if (payload?.generated_content?._error) setError(`⚠️ Ошибка AI: ${payload.generated_content._error}`);
+                    setResult(payload?.generated_content || payload);
+                    setStep(3);
+                    onUserUpdate?.();
+                    return;
                 }
-                if (sData.status === 'FAILURE') {
-                    const errorMsg = sData.error || sData.data?.error || "Ошибка генерации";
-                    throw new Error(errorMsg);
-                }
+                if ((sData.status || '').toUpperCase() === 'FAILURE') throw new Error(sData.error || sData.data?.error || 'Ошибка генерации');
+                if (sData.info) setStatus(sData.info);
                 attempts++;
             }
-        } catch (e) { setError(e.message); } finally { setLoading(false); setStatus(''); }
+            throw new Error('Превышено время ожидания');
+        } catch (e) { setError(e.message || ''); } finally { setLoading(false); setStatus(''); }
     };
 
     const downloadPdf = async () => {
-        if (!result) return;
+        if (!result || !sku) return;
+        if (user?.plan === 'start') {
+            alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
+            return;
+        }
         setPdfLoading(true);
         try {
-            const payload = {
-                sku: String(sku),
-                title: result.title || "",
-                description: result.description || "",
-                features: result.structured_features || {},
-                faq: result.faq || []
-            };
-
-            if (user?.plan === 'start') {
-                alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
-                return;
-            }
-
-            const response = await fetch(`${API_URL}/api/report/seo-pdf/generate`, {
-                method: 'POST',
-                headers: {
-                    ...getTgHeaders(),
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) throw new Error("Ошибка генерации PDF");
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `SEO_Report_${sku}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            // Как в AIAnalysisPage: window.open для мобильных (blob+click часто не срабатывает)
+            const token = window.Telegram?.WebApp?.initData || '';
+            const url = `${API_URL}/api/report/seo-pdf/${sku}?x_tg_data=${encodeURIComponent(token)}`;
+            window.open(url, '_blank');
         } catch (e) {
-            alert("Не удалось скачать PDF: " + e.message);
+            alert("Не удалось скачать PDF: " + (e.message || ''));
         } finally {
             setPdfLoading(false);
         }
@@ -206,13 +221,26 @@ const SeoGeneratorPage = ({ user }) => {
                             <h3 className="font-bold text-lg">Шаг 2. Семантика</h3>
                             <button 
                                 onClick={handleClusterKeywords} 
-                                disabled={loading || clusters}
-                                className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-2 transition-all ${clusters ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'}`}
+                                disabled={loading || clusters || user?.plan === 'start'}
+                                title={user?.plan === 'start' ? 'Доступно на тарифе Аналитик и выше' : ''}
+                                className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-2 transition-all ${user?.plan === 'start' ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : clusters ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'}`}
                             >
-                                {loading ? <Loader2 size={14} className="animate-spin"/> : <BrainCircuit size={14}/>}
-                                {clusters ? 'Сгруппировано' : 'AI Кластеризация'}
+                                {user?.plan === 'start' ? <Lock size={14}/> : loading ? <Loader2 size={14} className="animate-spin"/> : <BrainCircuit size={14}/>}
+                                {clusters ? 'Сгруппировано' : user?.plan === 'start' ? 'AI Кластеризация (Аналитик+)' : 'AI Кластеризация'}
                             </button>
                         </div>
+
+                        {user && (
+                            <div className="p-3 bg-gradient-to-br from-orange-50 to-pink-50 rounded-xl border border-orange-100">
+                                <div className="flex justify-between items-center text-xs">
+                                    <span className="font-bold text-orange-800">AI запросы</span>
+                                    <span className="font-black text-orange-900">{user.ai_requests_used ?? 0} / {user.ai_requests_limit ?? 0}</span>
+                                </div>
+                                <div className="h-1.5 bg-orange-100 rounded-full mt-1 overflow-hidden">
+                                    <div className="h-full bg-orange-500 rounded-full" style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / (user.ai_requests_limit || 1)) * 100)}%` }} />
+                                </div>
+                            </div>
+                        )}
 
                         {status && <div className="text-xs text-indigo-600 font-medium bg-indigo-50 p-2 rounded-lg text-center">{status}</div>}
                         
@@ -265,17 +293,24 @@ const SeoGeneratorPage = ({ user }) => {
                                 <input type="range" min="500" max="3000" step="100" value={descLen} onChange={e=>setDescLen(Number(e.target.value))} className="w-full accent-indigo-600 h-1 bg-slate-100 rounded-lg appearance-none cursor-pointer"/>
                             </div>
 
-                            <h3 className="font-bold text-sm mb-3">Tone of Voice</h3>
+                            <div className="flex items-center justify-between mb-2">
+                                <h3 className="font-bold text-sm">Tone of Voice</h3>
+                                {user?.plan === 'start' && <span className="text-[10px] text-amber-600 flex items-center gap-1"><Lock size={10}/> Выбор тона на Аналитик+</span>}
+                            </div>
                             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                                {toneOptions.map(t => (
-                                    <button 
-                                        key={t}
-                                        onClick={() => setTone(t)}
-                                        className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all ${tone === t ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-100 bg-white text-slate-500'}`}
-                                    >
-                                        {t}
-                                    </button>
-                                ))}
+                                {toneOptions.map(t => {
+                                    const locked = user?.plan === 'start' && t !== 'Продающий';
+                                    return (
+                                        <button 
+                                            key={t}
+                                            onClick={() => !locked && setTone(t)}
+                                            disabled={locked}
+                                            className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all ${locked ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed' : tone === t ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-100 bg-white text-slate-500'}`}
+                                        >
+                                            {t}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
 

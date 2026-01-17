@@ -189,10 +189,8 @@ def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: in
         
         content = analysis_service.generate_product_content(keywords, tone, title_len, desc_len)
         
-        # Проверяем наличие ошибки в AI ответе
         if content.get("_error"):
             logger.error(f"AI generation error: {content['_error']}")
-            # Не прерываем выполнение, но информация об ошибке будет в результате
         
         final_result = {
             "status": "success",
@@ -205,23 +203,40 @@ def generate_seo_task(self, keywords: list, tone: str, sku: int = 0, user_id: in
         if user_id and sku > 0:
             title = f"GEO: {content.get('title', 'Без заголовка')[:20]}..."
             save_history_sync(user_id, sku, 'seo', title, final_result)
-            
+        
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except Exception:
+            pass
         return final_result
     except Exception as e:
         logger.error(f"Generate SEO task error: {e}", exc_info=True)
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except Exception:
+            pass
         return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="cluster_keywords_task")
 def cluster_keywords_task(self, keywords: List[str], user_id: int = None, sku: int = 0):
-    self.update_state(state='PROGRESS', meta={'status': 'Загрузка BERT модели...'})
-    
-    result = analysis_service.cluster_keywords(keywords)
-    
-    if user_id and sku > 0:
-        title = f"Clusters: {len(keywords)} keys ({result.get('n_clusters', 0)} groups)"
-        save_history_sync(user_id, sku, 'clusters', title, result)
-        
-    return result
+    try:
+        self.update_state(state='PROGRESS', meta={'status': 'Загрузка BERT модели...'})
+        result = analysis_service.cluster_keywords(keywords)
+        if user_id and sku > 0:
+            title = f"Clusters: {len(keywords)} keys ({result.get('n_clusters', 0)} groups)"
+            save_history_sync(user_id, sku, 'clusters', title, result)
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        logger.error(f"Cluster keywords task error: {e}", exc_info=True)
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except Exception:
+            pass
+        return {"clusters": [], "error": str(e)}
 
 @celery_app.task(bind=True, name="check_seo_position_task")
 def check_seo_position_task(self, sku: int, keyword: str, user_id: int, regions: List[str] = None):

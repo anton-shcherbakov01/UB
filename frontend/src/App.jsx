@@ -50,7 +50,7 @@ const AppContent = () => {
         <Routes>
             <Route path="/" element={<DashboardPage user={user} onNavigate={handleTabChange} />} />
             <Route path="/monitor" element={<MonitorPage />} />
-            <Route path="/seo" element={<SeoGeneratorPage user={user} />} />
+            <Route path="/seo" element={<SeoGeneratorPage user={user} onUserUpdate={fetchUser} />} />
             <Route path="/seo_tracker" element={<SeoTrackerPage />} />
             <Route path="/finance" element={<FinancePage user={user} onNavigate={handleTabChange} />} />
             <Route path="/ai" element={<AIAnalysisPage user={user} onUserUpdate={fetchUser} />} />
