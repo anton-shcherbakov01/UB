@@ -28,7 +28,7 @@ const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "bo
 };
 // ------------------------------------------------
 
-const AIAnalysisPage = ({ user }) => {
+const AIAnalysisPage = ({ user, onUserUpdate }) => {
     const [sku, setSku] = useState('');
     const [step, setStep] = useState('input'); // input | config | analyzing | result
     
@@ -115,6 +115,18 @@ const AIAnalysisPage = ({ user }) => {
                 alert('Не получен task_id от сервера');
                 return; // Exit immediately
             }
+            
+            // Update user info after successful task creation (to reflect updated limits)
+            if (onUserUpdate) {
+                onUserUpdate();
+            }
+            
+            // Get queue information
+            const queueInfo = {
+                queue: data.queue || "normal",
+                position: data.position || 0,
+                is_priority: data.is_priority || false
+            };
 
             // Only start polling if we have a valid taskId and no cancel flag
             let attempts = 0;
@@ -125,7 +137,30 @@ const AIAnalysisPage = ({ user }) => {
                     return;
                 }
                 
-                setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
+                // Check queue position
+                try {
+                    const queueRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
+                    if (queueRes.ok) {
+                        const queueData = await queueRes.json();
+                        if (queueData.position !== null && queueData.position !== undefined) {
+                            queueInfo.position = queueData.position;
+                            queueInfo.queue = queueData.queue || queueInfo.queue;
+                            queueInfo.is_priority = queueData.is_priority || queueInfo.is_priority;
+                        }
+                    }
+                } catch (e) {
+                    // Ignore queue check errors
+                }
+                
+                // Update status with queue info
+                if (queueInfo.is_priority) {
+                    setStatus(`⚡ Приоритетная очередь: позиция ${queueInfo.position}... (${attempts*2}s)`);
+                } else if (queueInfo.position > 0) {
+                    setStatus(`⏳ Ваше место в очереди: ${queueInfo.position}... (${attempts*2}s)`);
+                } else {
+                    setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
+                }
+                
                 await new Promise(r => setTimeout(r, 2000));
                 
                 // Double-check cancel flag after delay

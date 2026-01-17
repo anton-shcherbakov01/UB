@@ -142,7 +142,7 @@ async def get_tariffs(user: User = Depends(get_current_user)):
     """
     tariffs = []
     
-    # Map plan IDs to display info
+    # Map plan IDs to display info - все сервисы приложения
     plan_mapping = {
         "start": {
             "id": "start",
@@ -150,7 +150,12 @@ async def get_tariffs(user: User = Depends(get_current_user)):
                 "История: 7 дней",
                 "5 AI-запросов / мес",
                 "Слоты и уведомления",
-                "P&L (демо: вчера)"
+                "P&L (демо: вчера)",
+                "Анализ поставок",
+                "SEO генератор",
+                "SEO трекер",
+                "AI анализ отзывов",
+                "Мониторинг цен"
             ]
         },
         "analyst": {
@@ -160,7 +165,12 @@ async def get_tariffs(user: User = Depends(get_current_user)):
                 "100 AI-запросов / мес",
                 "Слоты и уведомления",
                 "P&L (полный доступ)",
-                "Форензика возвратов"
+                "Анализ поставок + PDF",
+                "SEO генератор + PDF",
+                "SEO трекер + PDF",
+                "AI анализ отзывов + PDF",
+                "Форензика возвратов + PDF",
+                "Мониторинг цен + PDF"
             ],
             "is_best": True
         },
@@ -170,8 +180,13 @@ async def get_tariffs(user: User = Depends(get_current_user)):
                 "История: 365 дней",
                 "1000 AI-запросов / мес",
                 "Слоты и уведомления",
-                "P&L экспорт",
-                "Форензика + Cash Gap",
+                "P&L экспорт + PDF",
+                "Анализ поставок + PDF",
+                "SEO генератор + PDF",
+                "SEO трекер + PDF",
+                "AI анализ отзывов + PDF",
+                "Форензика + Cash Gap + PDF",
+                "Мониторинг цен + PDF",
                 "Приоритетный опрос"
             ]
         }

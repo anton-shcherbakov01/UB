@@ -19,7 +19,7 @@ TIERS = {
         "name": "Strategist (Business)",
         "price": 4990,
         "limits": {"ai_requests": 1000, "history_days": 365},
-        "features": ["slots", "notifications", "pnl_export", "forensics_cashgap", "priority_poll"]
+        "features": ["slots", "notifications", "pnl_full", "pnl_export", "forensics", "forensics_cashgap", "priority_poll"]
     }
 }
 

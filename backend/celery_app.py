@@ -53,6 +53,14 @@ celery_app.conf.update(
     task_acks_late=True,                 # Подтверждение после выполнения (защита от падения воркера)
     task_reject_on_worker_lost=True,     # Возврат в очередь, если воркер "упал"
     
+    # Настройки очередей с приоритетами
+    task_routes={
+        'tasks.seo.analyze_reviews_task': {'queue': 'normal'},  # Будет перенаправлено в priority/normal через queue_service
+    },
+    task_default_queue='normal',
+    task_default_exchange='tasks',
+    task_default_routing_key='normal',
+    
     # --- РАСПИСАНИЕ ПЕРИОДИЧЕСКИХ ЗАДАЧ (CELERY BEAT) ---
     beat_schedule={
         # 1. Мгновенные уведомления о заказах и выкупах

@@ -1,0 +1,280 @@
+"""
+PDF Generator Service with Cyrillic support
+"""
+import os
+import logging
+from fpdf import FPDF
+from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger("PDFGenerator")
+
+
+class PDFGenerator:
+    """Helper class for generating PDF reports with Cyrillic support"""
+    
+    def __init__(self):
+        self.font_paths = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            './fonts/DejaVuSans.ttf',
+            '/usr/share/fonts/TTF/DejaVuSans.ttf',
+            '/System/Library/Fonts/Supplemental/Arial.ttf',  # macOS fallback
+        ]
+        self.font_bold_paths = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            './fonts/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
+        ]
+    
+    def _setup_fonts(self, pdf: FPDF) -> str:
+        """Setup Cyrillic fonts for PDF. Returns font family name."""
+        font_family = 'Arial'  # Fallback
+        
+        # Try to load DejaVu font
+        for font_path in self.font_paths:
+            if os.path.exists(font_path):
+                try:
+                    pdf.add_font('DejaVu', '', font_path, uni=True)
+                    font_family = 'DejaVu'
+                    
+                    # Try to load bold font
+                    for bold_path in self.font_bold_paths:
+                        if os.path.exists(bold_path):
+                            try:
+                                pdf.add_font('DejaVu', 'B', bold_path, uni=True)
+                                break
+                            except:
+                                continue
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to load font from {font_path}: {e}")
+                    continue
+        
+        pdf.set_font(font_family, '', 12)
+        return font_family
+    
+    def create_pnl_pdf(self, pnl_data: List[Dict[str, Any]], date_from: str, date_to: str) -> bytes:
+        """Create P&L PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        font_family = self._setup_fonts(pdf)
+        
+        # Title
+        pdf.set_font(font_family, 'B', 16)
+        pdf.cell(0, 10, txt="Отчет P&L (Прибыль и Убытки)", ln=1, align='C')
+        pdf.ln(5)
+        
+        # Date range
+        pdf.set_font(font_family, '', 10)
+        pdf.cell(0, 8, txt=f"Период: {date_from[:10]} - {date_to[:10]}", ln=1, align='C')
+        pdf.ln(5)
+        
+        if not pnl_data:
+            pdf.set_font(font_family, '', 12)
+            pdf.cell(0, 10, txt="Нет данных за выбранный период", ln=1, align='C')
+            return pdf.output(dest='S').encode('latin-1')
+        
+        # Summary
+        total_revenue = sum(item.get('revenue', 0) for item in pnl_data)
+        total_cost = sum(item.get('cost', 0) for item in pnl_data)
+        total_profit = total_revenue - total_cost
+        total_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0
+        
+        pdf.set_font(font_family, 'B', 12)
+        pdf.cell(0, 8, txt="Сводка:", ln=1)
+        pdf.set_font(font_family, '', 10)
+        pdf.cell(0, 6, txt=f"Выручка: {total_revenue:,.0f} ₽", ln=1)
+        pdf.cell(0, 6, txt=f"Себестоимость: {total_cost:,.0f} ₽", ln=1)
+        pdf.cell(0, 6, txt=f"Прибыль: {total_profit:,.0f} ₽", ln=1)
+        pdf.cell(0, 6, txt=f"Маржа: {total_margin:.1f}%", ln=1)
+        pdf.ln(5)
+        
+        # Table header
+        pdf.set_font(font_family, 'B', 10)
+        pdf.cell(40, 8, "Дата", 1)
+        pdf.cell(50, 8, "Выручка", 1)
+        pdf.cell(50, 8, "Себестоимость", 1)
+        pdf.cell(50, 8, "Прибыль", 1)
+        pdf.ln()
+        
+        # Table rows
+        pdf.set_font(font_family, '', 9)
+        for item in pnl_data[:50]:  # Limit to 50 rows
+            date = item.get('date', '')[:10] if item.get('date') else ''
+            revenue = item.get('revenue', 0)
+            cost = item.get('cost', 0)
+            profit = revenue - cost
+            
+            pdf.cell(40, 6, date, 1)
+            pdf.cell(50, 6, f"{revenue:,.0f} ₽", 1)
+            pdf.cell(50, 6, f"{cost:,.0f} ₽", 1)
+            pdf.cell(50, 6, f"{profit:,.0f} ₽", 1)
+            pdf.ln()
+        
+        return pdf.output(dest='S').encode('latin-1')
+    
+    def create_supply_pdf(self, supply_data: List[Dict[str, Any]]) -> bytes:
+        """Create Supply analysis PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        font_family = self._setup_fonts(pdf)
+        
+        # Title
+        pdf.set_font(font_family, 'B', 16)
+        pdf.cell(0, 10, txt="Анализ поставок", ln=1, align='C')
+        pdf.ln(5)
+        
+        if not supply_data:
+            pdf.set_font(font_family, '', 12)
+            pdf.cell(0, 10, txt="Нет данных для анализа", ln=1, align='C')
+            return pdf.output(dest='S').encode('latin-1')
+        
+        # Table header
+        pdf.set_font(font_family, 'B', 10)
+        pdf.cell(40, 8, "Артикул", 1)
+        pdf.cell(60, 8, "Название", 1)
+        pdf.cell(40, 8, "Остаток", 1)
+        pdf.cell(50, 8, "Рекомендация", 1)
+        pdf.ln()
+        
+        # Table rows
+        pdf.set_font(font_family, '', 9)
+        for item in supply_data[:50]:  # Limit to 50 rows
+            sku = str(item.get('sku', ''))
+            name = str(item.get('name', ''))[:40]
+            stock = item.get('stock', 0)
+            recommendation = str(item.get('recommendation', ''))[:30]
+            
+            pdf.cell(40, 6, sku, 1)
+            pdf.cell(60, 6, name, 1)
+            pdf.cell(40, 6, str(stock), 1)
+            pdf.cell(50, 6, recommendation, 1)
+            pdf.ln()
+        
+        return pdf.output(dest='S').encode('latin-1')
+    
+    def create_forensics_pdf(self, forensics_data: Dict[str, Any]) -> bytes:
+        """Create Forensics PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        font_family = self._setup_fonts(pdf)
+        
+        # Title
+        pdf.set_font(font_family, 'B', 16)
+        pdf.cell(0, 10, txt="Форензика возвратов", ln=1, align='C')
+        pdf.ln(5)
+        
+        if forensics_data.get('status') == 'error':
+            pdf.set_font(font_family, '', 12)
+            pdf.cell(0, 10, txt=f"Ошибка: {forensics_data.get('message', 'Неизвестная ошибка')}", ln=1, align='C')
+            return pdf.output(dest='S').encode('latin-1')
+        
+        # Summary
+        pdf.set_font(font_family, 'B', 12)
+        pdf.cell(0, 8, txt="Сводка:", ln=1)
+        pdf.set_font(font_family, '', 10)
+        
+        total_returns = forensics_data.get('total_returns', 0)
+        problem_sizes = forensics_data.get('problem_sizes', {})
+        problem_warehouses = forensics_data.get('problem_warehouses', {})
+        
+        pdf.cell(0, 6, txt=f"Всего возвратов: {total_returns}", ln=1)
+        pdf.ln(5)
+        
+        # Problem sizes
+        if problem_sizes:
+            pdf.set_font(font_family, 'B', 11)
+            pdf.cell(0, 8, txt="Проблемные размеры:", ln=1)
+            pdf.set_font(font_family, '', 9)
+            for size, count in list(problem_sizes.items())[:20]:
+                pdf.cell(0, 6, txt=f"  {size}: {count} возвратов", ln=1)
+            pdf.ln(3)
+        
+        # Problem warehouses
+        if problem_warehouses:
+            pdf.set_font(font_family, 'B', 11)
+            pdf.cell(0, 8, txt="Проблемные склады:", ln=1)
+            pdf.set_font(font_family, '', 9)
+            for warehouse, count in list(problem_warehouses.items())[:20]:
+                pdf.cell(0, 6, txt=f"  {warehouse}: {count} возвратов", ln=1)
+        
+        return pdf.output(dest='S').encode('latin-1')
+    
+    def create_cashgap_pdf(self, cashgap_data: Dict[str, Any]) -> bytes:
+        """Create Cash Gap PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        font_family = self._setup_fonts(pdf)
+        
+        # Title
+        pdf.set_font(font_family, 'B', 16)
+        pdf.cell(0, 10, txt="Прогноз кассовых разрывов", ln=1, align='C')
+        pdf.ln(5)
+        
+        if cashgap_data.get('status') == 'error':
+            pdf.set_font(font_family, '', 12)
+            pdf.cell(0, 10, txt=f"Ошибка: {cashgap_data.get('message', 'Неизвестная ошибка')}", ln=1, align='C')
+            return pdf.output(dest='S').encode('latin-1')
+        
+        # Summary
+        pdf.set_font(font_family, 'B', 12)
+        pdf.cell(0, 8, txt="Прогноз:", ln=1)
+        pdf.set_font(font_family, '', 10)
+        
+        gaps = cashgap_data.get('gaps', [])
+        if gaps:
+            pdf.cell(0, 6, txt=f"Найдено потенциальных разрывов: {len(gaps)}", ln=1)
+            pdf.ln(3)
+            
+            for gap in gaps[:20]:
+                date = gap.get('date', '')
+                amount = gap.get('amount', 0)
+                pdf.cell(0, 6, txt=f"  {date}: {amount:,.0f} ₽", ln=1)
+        else:
+            pdf.cell(0, 6, txt="Кассовых разрывов не прогнозируется", ln=1)
+        
+        return pdf.output(dest='S').encode('latin-1')
+    
+    def create_slots_pdf(self, slots_data: List[Dict[str, Any]]) -> bytes:
+        """Create Slots analysis PDF report"""
+        pdf = FPDF()
+        pdf.add_page()
+        font_family = self._setup_fonts(pdf)
+        
+        # Title
+        pdf.set_font(font_family, 'B', 16)
+        pdf.cell(0, 10, txt="Анализ слотов и коэффициентов", ln=1, align='C')
+        pdf.ln(5)
+        
+        if not slots_data:
+            pdf.set_font(font_family, '', 12)
+            pdf.cell(0, 10, txt="Нет данных для анализа", ln=1, align='C')
+            return pdf.output(dest='S').encode('latin-1')
+        
+        # Table header
+        pdf.set_font(font_family, 'B', 10)
+        pdf.cell(40, 8, "Артикул", 1)
+        pdf.cell(60, 8, "Название", 1)
+        pdf.cell(40, 8, "Свободно", 1)
+        pdf.cell(50, 8, "Коэффициент", 1)
+        pdf.ln()
+        
+        # Table rows
+        pdf.set_font(font_family, '', 9)
+        for item in slots_data[:50]:  # Limit to 50 rows
+            sku = str(item.get('sku', ''))
+            name = str(item.get('name', ''))[:40]
+            free = item.get('free_slots', 0)
+            coefficient = item.get('coefficient', 0)
+            
+            pdf.cell(40, 6, sku, 1)
+            pdf.cell(60, 6, name, 1)
+            pdf.cell(40, 6, str(free), 1)
+            pdf.cell(50, 6, f"{coefficient:.2f}", 1)
+            pdf.ln()
+        
+        return pdf.output(dest='S').encode('latin-1')
+
+
+# Singleton instance
+pdf_generator = PDFGenerator()
+

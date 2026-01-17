@@ -5,6 +5,7 @@ from typing import List
 from celery_app import celery_app
 from parser_service import parser_service, GEO_ZONES
 from analysis_service import analysis_service
+from services.queue_service import queue_service
 from .utils import save_history_sync, save_seo_position_sync
 
 logger = logging.getLogger("Tasks-SEO")
@@ -72,6 +73,12 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
             except Exception as save_error:
                 logger.error(f"Failed to save history for SKU {sku}, user {user_id}: {save_error}", exc_info=True)
                 # Не прерываем выполнение, результат все равно возвращаем
+        
+        # Remove task from queue after successful completion
+        try:
+            queue_service.remove_task_from_queue(self.request.id)
+        except Exception as queue_e:
+            logger.warning(f"Error removing task from queue: {queue_e}")
 
         return final_result
     except Exception as e:

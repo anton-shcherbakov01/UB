@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
+import io
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # Импортируем сервис и модели
 from analysis_service import analysis_service
@@ -164,3 +168,115 @@ async def get_cash_gap_forecast(
     # 5. Считаем разрывы
     result = supply_service.calculate_cash_gap(supply_analysis, costs_map)
     return result
+
+executor = ThreadPoolExecutor(max_workers=2)
+
+@router.get("/report/forensics-pdf")
+async def generate_forensics_pdf(
+    days: int = Query(30, ge=7, le=90),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate Forensics PDF report"""
+    from config.plans import has_feature, get_plan_config
+    
+    if not has_feature(user.subscription_plan, "forensics"):
+        plan_config = get_plan_config(user.subscription_plan)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Форензика возвратов доступна только на тарифе Аналитик или выше. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+        )
+    
+    date_to = datetime.now()
+    date_from = date_to - timedelta(days=days)
+    
+    # Get forensics data
+    forensics_data = await analysis_service.economics.get_return_forensics(user.id, date_from, date_to)
+    
+    # Generate PDF in executor
+    from services.pdf_generator import pdf_generator
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_forensics_pdf,
+        forensics_data
+    )
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="forensics_report_{days}days.pdf"'}
+    )
+
+@router.get("/report/cashgap-pdf")
+async def generate_cashgap_pdf(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate Cash Gap PDF report"""
+    from config.plans import has_feature, get_plan_config
+    
+    if not has_feature(user.subscription_plan, "forensics_cashgap"):
+        plan_config = get_plan_config(user.subscription_plan)
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cash Gap анализ доступен только на тарифе Стратег. Текущий план: {plan_config.get('name', user.subscription_plan)}"
+        )
+    
+    # Get cash gap data (same logic as get_cash_gap_forecast)
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+    
+    # Reuse the logic from get_cash_gap_forecast
+    from database import SupplySettings, ProductCost
+    from wb_api.statistics import WBStatisticsAPI
+    from services.supply import supply_service
+    
+    stmt = select(SupplySettings).where(SupplySettings.user_id == user.id)
+    settings_res = await db.execute(stmt)
+    settings = settings_res.scalars().first()
+    
+    config = {
+        "lead_time": settings.lead_time if settings else 7,
+        "min_stock_days": settings.min_stock_days if settings else 14,
+        "abc_a_share": settings.abc_a_share if settings else 80
+    }
+    
+    wb_api = WBStatisticsAPI(user.wb_api_token)
+    try:
+        turnover_data = await wb_api.get_turnover_data()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+    stocks = turnover_data.get("stocks", [])
+    orders = turnover_data.get("orders", [])
+    supply_analysis = supply_service.analyze_supply(stocks, orders, config)
+    
+    if not supply_analysis:
+        return {"status": "error", "message": "Нет данных для анализа"}
+    
+    skus = [i['sku'] for i in supply_analysis]
+    costs_stmt = select(ProductCost).where(
+        ProductCost.user_id == user.id, 
+        ProductCost.sku.in_(skus)
+    )
+    costs_res = await db.execute(costs_stmt)
+    costs = costs_res.scalars().all()
+    costs_map = {c.sku: c.cost_price for c in costs}
+    
+    cashgap_data = supply_service.calculate_cash_gap(supply_analysis, costs_map)
+    
+    # Generate PDF in executor
+    from services.pdf_generator import pdf_generator
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_cashgap_pdf,
+        cashgap_data
+    )
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'attachment; filename="cashgap_forecast.pdf"'}
+    )

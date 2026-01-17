@@ -11,6 +11,7 @@ from fpdf import FPDF
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
 from dependencies.quota import QuotaCheck, increment_usage
+from services.queue_service import queue_service
 from tasks import analyze_reviews_task, get_status
 # Используем parser_service, который правильно работает с async
 from parser_service import parser_service
@@ -27,14 +28,20 @@ async def check_product_reviews(sku: int, user: User = Depends(get_current_user)
     try:
         # Используем async метод через parser_service
         info = await parser_service.get_review_stats(sku)
-        if not info or info.get("status") == "error":
-            raise HTTPException(404, info.get("message", "Товар не найден"))
+        if not info:
+            raise HTTPException(status_code=404, detail="Товар не найден или данные недоступны")
+        if info.get("status") == "error":
+            error_msg = info.get("message", "Ошибка при получении данных о товаре")
+            logger.warning(f"Product check error for SKU {sku}: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
         return info
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Check error: {e}", exc_info=True)
-        raise HTTPException(500, f"Ошибка проверки товара: {str(e)}")
+        logger.error(f"Check error for SKU {sku}: {e}", exc_info=True)
+        # Возвращаем более понятное сообщение об ошибке
+        error_message = "Не удалось проверить товар. Попробуйте позже или проверьте правильность артикула."
+        raise HTTPException(status_code=500, detail=error_message)
 
 @router.post("/ai/analyze/{sku}")
 async def start_ai_analysis(
@@ -51,13 +58,38 @@ async def start_ai_analysis(
         # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
         task = analyze_reviews_task.delay(sku, limit, user.id)
         
+        # Add task to queue and get position
+        queue_info = queue_service.add_task_to_queue(
+            task_id=task.id,
+            user_id=user.id,
+            user_plan=user.subscription_plan,
+            task_type="ai_analysis"
+        )
+        
         # Increment usage after task is accepted
         await increment_usage(user, "ai_requests", amount=1, db=db)
         
-        return {"status": "accepted", "task_id": task.id}
+        return {
+            "status": "accepted", 
+            "task_id": task.id,
+            "queue": queue_info.get("queue", "normal"),
+            "position": queue_info.get("position", 0),
+            "is_priority": queue_info.get("is_priority", False)
+        }
     except Exception as e:
         logger.error(f"Error starting AI analysis: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(e)}")
+
+@router.get("/ai/queue/{task_id}")
+async def get_queue_position(
+    task_id: str,
+    user: User = Depends(get_current_user)
+):
+    """Get current position of task in queue"""
+    position_info = queue_service.get_task_position(task_id, user.id)
+    if position_info:
+        return position_info
+    return {"position": None, "status": "processing_or_completed"}
 
 @router.get("/ai/result/{task_id}")
 def get_ai_result(task_id: str):

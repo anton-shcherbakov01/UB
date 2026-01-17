@@ -46,15 +46,20 @@ const TariffsPage = ({ onBack }) => {
         }
     };
 
-    // Определение функций для сравнения
+    // Определение функций для сравнения - все сервисы приложения
     const features = [
         { key: 'history_days', label: 'История продаж', start: '7 дней', analyst: '60 дней', strategist: '365 дней' },
         { key: 'ai_requests', label: 'AI-запросы в месяц', start: '5', analyst: '100', strategist: '1000' },
         { key: 'slots', label: 'Слоты товаров', start: '✓', analyst: '✓', strategist: '✓' },
         { key: 'notifications', label: 'Уведомления', start: '✓', analyst: '✓', strategist: '✓' },
-        { key: 'pnl', label: 'P&L (Прибыль/Убыток)', start: 'Демо (вчера)', analyst: 'Полный доступ', strategist: 'Полный + Экспорт' },
-        { key: 'forensics', label: 'Форензика возвратов', start: '✗', analyst: '✓', strategist: '✓' },
-        { key: 'cashgap', label: 'Cash Gap анализ', start: '✗', analyst: '✗', strategist: '✓' },
+        { key: 'pnl', label: 'P&L (Прибыль/Убыток)', start: 'Демо (вчера)', analyst: 'Полный доступ', strategist: 'Полный + Экспорт PDF' },
+        { key: 'supply', label: 'Анализ поставок', start: '✓', analyst: '✓', strategist: '✓ + PDF' },
+        { key: 'seo_gen', label: 'SEO генератор текстов', start: '✓', analyst: '✓', strategist: '✓ + PDF' },
+        { key: 'seo_tracker', label: 'SEO трекер позиций', start: '✓', analyst: '✓', strategist: '✓ + PDF' },
+        { key: 'ai_analysis', label: 'AI анализ отзывов', start: '✓ (5/мес)', analyst: '✓ (100/мес)', strategist: '✓ (1000/мес) + PDF' },
+        { key: 'forensics', label: 'Форензика возвратов', start: '✗', analyst: '✓', strategist: '✓ + PDF' },
+        { key: 'cashgap', label: 'Cash Gap анализ', start: '✗', analyst: '✗', strategist: '✓ + PDF' },
+        { key: 'monitoring', label: 'Мониторинг цен', start: '✓', analyst: '✓ + PDF', strategist: '✓ + PDF' },
         { key: 'priority_poll', label: 'Приоритетный опрос', start: '✗', analyst: '✗', strategist: '✓' }
     ];
 

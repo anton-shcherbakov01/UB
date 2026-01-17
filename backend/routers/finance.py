@@ -1,8 +1,12 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+import io
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -399,3 +403,63 @@ async def get_pnl_data(
         "date_to": date_to_dt.isoformat(),
         "data": pnl_data
     }
+
+executor = ThreadPoolExecutor(max_workers=2)
+
+@router.get("/report/pnl-pdf")
+async def generate_pnl_pdf(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate P&L PDF report"""
+    from config.plans import has_feature
+    
+    # Check access (same logic as get_pnl_data)
+    now = datetime.utcnow()
+    if user.subscription_plan == "start":
+        if not has_feature(user.subscription_plan, "pnl_demo"):
+            raise HTTPException(status_code=403, detail="P&L PDF requires upgrade")
+        yesterday = now - timedelta(days=1)
+        date_from_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+        date_to_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+    else:
+        if not has_feature(user.subscription_plan, "pnl_full"):
+            raise HTTPException(status_code=403, detail="P&L PDF requires upgrade")
+        
+        if date_from:
+            try:
+                date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            except:
+                date_from_dt = now - timedelta(days=30)
+        else:
+            date_from_dt = now - timedelta(days=30)
+        
+        if date_to:
+            try:
+                date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            except:
+                date_to_dt = now
+        else:
+            date_to_dt = now
+    
+    # Get P&L data
+    pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
+    
+    # Generate PDF in executor
+    from services.pdf_generator import pdf_generator
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_pnl_pdf,
+        pnl_data,
+        date_from_dt.isoformat(),
+        date_to_dt.isoformat()
+    )
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="pnl_report_{date_from_dt.strftime("%Y%m%d")}_{date_to_dt.strftime("%Y%m%d")}.pdf"'}
+    )

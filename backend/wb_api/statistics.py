@@ -67,7 +67,11 @@ class WBStatisticsMixin(WBApiBase):
             raw_res = {}
             for i, key in enumerate(keys):
                 res = results_list[i]
-                raw_res[key] = res if isinstance(res, bool) else False
+                # Если результат - исключение, считаем что доступа нет
+                if isinstance(res, Exception):
+                    raw_res[key] = False
+                else:
+                    raw_res[key] = res if isinstance(res, bool) else False
 
         # Маппинг для UI (13 категорий)
         return {
