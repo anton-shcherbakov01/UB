@@ -63,11 +63,16 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
         if user_id and plan:
             user = await db.get(User, user_id)
             if user:
+                now = datetime.utcnow()
                 user.subscription_plan = plan
-                user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+                user.subscription_expires_at = now + timedelta(days=30)
+                # Принудительно сбрасываем квоты при любой успешной оплате
+                user.usage_reset_date = now + timedelta(days=30)
+                user.ai_requests_used = 0
+                user.extra_ai_balance = 0
                 db.add(user)
                 await db.commit()
-                logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars")
+                logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars (quotas reset)")
                 
     return {"ok": True}
 
@@ -167,16 +172,20 @@ async def yookassa_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
         user = await db.get(User, int(user_id))
         if user:
-            user.subscription_plan = plan_id
             now = datetime.utcnow()
+            user.subscription_plan = plan_id
             if user.subscription_expires_at and user.subscription_expires_at > now:
                 user.subscription_expires_at += timedelta(days=30)
             else:
                 user.subscription_expires_at = now + timedelta(days=30)
+            # Принудительно сбрасываем квоты при любой успешной оплате
+            user.usage_reset_date = now + timedelta(days=30)
+            user.ai_requests_used = 0
+            user.extra_ai_balance = 0
             user.is_recurring = False 
             db.add(user)
             await db.commit()
-            logger.info(f"User {user.telegram_id} subscription extended (YooKassa).")
+            logger.info(f"User {user.telegram_id} subscription extended (YooKassa, quotas reset).")
         
     return {"status": "ok"}
 
@@ -386,8 +395,8 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
         plan_config = get_plan_config(plan_id)
         if plan_config:
             # Update subscription
-            user.subscription_plan = plan_id
             now = datetime.utcnow()
+            user.subscription_plan = plan_id
             
             # Extend subscription (30 days)
             if user.subscription_expires_at and user.subscription_expires_at > now:
@@ -395,12 +404,12 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
             else:
                 user.subscription_expires_at = now + timedelta(days=30)
             
-            # Reset usage if starting new subscription period
-            if not user.usage_reset_date or user.usage_reset_date < now:
-                user.usage_reset_date = now + timedelta(days=30)
-                user.ai_requests_used = 0
+            # Принудительно сбрасываем квоты при любой успешной оплате
+            user.usage_reset_date = now + timedelta(days=30)
+            user.ai_requests_used = 0
+            user.extra_ai_balance = 0
             
-            logger.info(f"User {user.id} subscription updated to {plan_id} via Robokassa")
+            logger.info(f"User {user.id} subscription updated to {plan_id} via Robokassa (quotas reset)")
     
     db.add(user)
     await db.commit()

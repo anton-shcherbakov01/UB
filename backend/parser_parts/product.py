@@ -218,10 +218,8 @@ class ProductParser:
         total_qty = 0
 
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
+            # Используем asyncio.run() для корректной работы в Celery
+            data = asyncio.run(self._find_card_json(sku))
             
             if data:
                 static_info["name"] = data.get('imt_name') or data.get('subj_name')
@@ -280,10 +278,8 @@ class ProductParser:
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            static_data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
+            # Используем asyncio.run() для корректной работы в Celery
+            static_data = asyncio.run(self._find_card_json(sku))
 
             if not static_data: return {"status": "error", "message": "Card not found"}
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
@@ -309,14 +305,20 @@ class ProductParser:
             
             if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
 
+            # Защита от пустых данных
             raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
+            if not isinstance(raw_feedbacks, list):
+                raw_feedbacks = []
+            
             valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
             
             reviews = []
             for f in raw_feedbacks:
+                if not isinstance(f, dict):
+                    continue
                 txt = f.get('text', '')
-                if txt:
-                    reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                if txt and isinstance(txt, str) and txt.strip():
+                    reviews.append({"text": txt.strip(), "rating": f.get('productValuation', 5)})
                 if len(reviews) >= limit: break
             
             # Safely convert rating to float
