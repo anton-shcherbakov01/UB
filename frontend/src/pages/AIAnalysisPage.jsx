@@ -1,12 +1,13 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp, ArrowLeft } from 'lucide-react';
+import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp, ArrowLeft, Check, AlertCircle } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
 // --- Мини-компонент для раскрывающегося текста ---
 const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "border-slate-200" }) => {
     const [expanded, setExpanded] = useState(false);
+    // Защита от null/undefined
     const safeText = typeof text === 'string' ? text : String(text ?? '');
     const isLong = safeText.length > 60;
 
@@ -30,8 +31,35 @@ const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "bo
 };
 // ------------------------------------------------
 
-const AIAnalysisPage = ({ user, onUserUpdate }) => {
+const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     const navigate = useNavigate();
+    
+    // --- INTEGRATION FIX: Локальное состояние юзера ---
+    // Это гарантирует, что у нас всегда есть актуальные данные о лимитах, 
+    // даже если пропсы не передались или устарели.
+    const [currentUser, setCurrentUser] = useState(propUser || null);
+    const [userLoading, setUserLoading] = useState(!propUser);
+
+    useEffect(() => {
+        fetchUser();
+    }, []);
+
+    const fetchUser = async () => {
+        try {
+            const res = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                setCurrentUser(data);
+                if (onUserUpdate) onUserUpdate(data); // Синхронизируем наверх, если нужно
+            }
+        } catch (e) {
+            console.error("User fetch error:", e);
+        } finally {
+            setUserLoading(false);
+        }
+    };
+    // --------------------------------------------------
+
     const [sku, setSku] = useState('');
     const [step, setStep] = useState('input'); // input | config | analyzing | result
     
@@ -40,29 +68,30 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
     const [metaLoading, setMetaLoading] = useState(false);
     
     // Analysis Config
-    const [reviewLimit, setReviewLimit] = useState(100);
+    const [reviewLimit, setReviewLimit] = useState(30); // Default 30 is safer
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
     const [status, setStatus] = useState('');
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
-    const cancelTokenRef = useRef(false); // Flag to cancel polling (useRef for immediate access in loop)
+    const cancelTokenRef = useRef(false); // Flag to cancel polling
 
     // СБРОС СОСТОЯНИЯ
     const handleReset = () => {
-        cancelTokenRef.current = true; // Cancel any ongoing polling
+        cancelTokenRef.current = true;
         setSku('');
         setStep('input');
         setProductMeta(null);
         setResult(null);
-        setReviewLimit(100);
+        setReviewLimit(30);
         setStatus('');
         setLoading(false);
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        fetchUser(); // Обновляем лимиты при сбросе
     };
 
     const handleCheckProduct = async () => {
-        if (!sku) return;
+        if (!sku || sku.length < 5) return;
         setMetaLoading(true);
         try {
             const res = await fetch(`${API_URL}/api/ai/check/${sku}`, { 
@@ -71,15 +100,16 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
             });
             const data = await res.json();
             
-            if (res.status !== 200) throw new Error(data.detail || "Ошибка проверки");
+            if (!res.ok) throw new Error(data.detail || "Ошибка проверки");
+            if (data.status === 'error') throw new Error(data.message || "Товар не найден");
             
             setProductMeta(data);
             
             const total = data.total_reviews || 0;
             
-            let safeLimit = 100;
-            if (total > 0 && total < 100) safeLimit = total;
-            if (total === 0) safeLimit = 50; 
+            let safeLimit = 30; // Default
+            if (total > 0 && total < 30) safeLimit = total;
+            // Если отзывов очень много, не ставим сразу 100, чтобы не грузить долгим ожиданием
             
             setReviewLimit(safeLimit);
             setStep('config');
@@ -91,10 +121,11 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
     };
 
     const runAnalysis = async () => {
-        cancelTokenRef.current = false; // Reset cancel flag
+        cancelTokenRef.current = false;
         setLoading(true);
         setStep('analyzing');
         setResult(null);
+        setStatus('Инициализация...');
         
         try {
             const res = await fetch(`${API_URL}/api/ai/analyze/${sku}?limit=${reviewLimit}`, { 
@@ -102,205 +133,148 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 headers: getTgHeaders() 
             });
             
-            // Проверяем HTTP статус
             if (!res.ok) {
                 let errorData;
-                try {
-                    errorData = await res.json();
-                } catch {
-                    errorData = { detail: 'Неизвестная ошибка' };
-                }
-                setLoading(false);
-                setStep('config');
-                alert(errorData.detail || `Ошибка ${res.status}: Не удалось запустить анализ`);
-                return; // Exit immediately, don't start polling
+                try { errorData = await res.json(); } catch { errorData = { detail: `Ошибка ${res.status}` }; }
+                throw new Error(errorData.detail || "Не удалось запустить анализ");
             }
             
             const data = await res.json();
             
-            // Проверяем статус в JSON ответе (может быть ошибка даже при 200 OK)
-            if (data.status && data.status !== "accepted") {
-                setLoading(false);
-                setStep('config');
-                alert(data.error || data.detail || "Ошибка запуска анализа");
-                return; // Exit immediately
+            if (data.status && data.status !== "accepted" && data.status !== "success") {
+                throw new Error(data.error || data.detail || "Ошибка запуска анализа");
             }
             
-            // Проверяем наличие и валидность task_id
             const taskId = data.task_id;
-            if (!taskId || typeof taskId !== 'string') {
-                setLoading(false);
-                setStep('config');
-                alert('Не получен корректный task_id от сервера');
-                console.error("Invalid task_id received:", data);
-                return; // Exit immediately
-            }
+            if (!taskId) throw new Error('Не получен корректный task_id от сервера');
             
-            // Update user info after successful task creation (to reflect updated limits)
-            if (onUserUpdate) {
-                onUserUpdate();
-            }
-            
-            // Get queue information
+            // Get initial queue info if available
             const queueInfo = {
                 queue: data.queue || "normal",
                 position: data.position || 0,
                 is_priority: data.is_priority || false
             };
 
-            // Only start polling if we have a valid taskId and no cancel flag
+            // POLLING LOOP
             let attempts = 0;
+            // Увеличиваем таймаут ожидания до 3-4 минут (для больших отчетов)
             while(attempts < 120 && !cancelTokenRef.current) {
-                // Check cancel flag before each iteration
-                if (cancelTokenRef.current) {
-                    setLoading(false);
-                    return;
-                }
+                if (cancelTokenRef.current) return;
                 
-                // Check queue position
+                // 1. Check queue position (Твоя логика проверки очереди)
                 try {
                     const queueRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
                     if (queueRes.ok) {
                         const queueData = await queueRes.json();
                         if (queueData.position !== null && queueData.position !== undefined) {
                             queueInfo.position = queueData.position;
-                            queueInfo.queue = queueData.queue || queueInfo.queue;
                             queueInfo.is_priority = queueData.is_priority || queueInfo.is_priority;
                         }
                     }
                 } catch (e) {
-                    // Ignore queue check errors
+                    // Ignore queue check errors, main task check is more important
                 }
                 
-                // Update status with queue info
+                // Update status UI
                 if (queueInfo.is_priority) {
                     setStatus(`⚡ Приоритетная очередь: позиция ${queueInfo.position}... (${attempts*2}s)`);
                 } else if (queueInfo.position > 0) {
                     setStatus(`⏳ Ваше место в очереди: ${queueInfo.position}... (${attempts*2}s)`);
                 } else {
-                    setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
+                    setStatus(`Анализируем отзывы... (${attempts*2}s)`);
                 }
                 
                 await new Promise(r => setTimeout(r, 2000));
                 
-                // Double-check cancel flag after delay
-                if (cancelTokenRef.current) {
-                    setLoading(false);
-                    return;
-                }
+                if (cancelTokenRef.current) { setLoading(false); return; }
                 
+                // 2. Check Result
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
-                let sData;
-                try {
-                    sData = await sRes.json();
-                } catch (jsonErr) {
-                    setStatus('Ошибка формата ответа, повтор...');
-                    attempts++;
-                    continue;
-                }
-                if (!sData || typeof sData !== 'object') {
-                    attempts++;
-                    continue;
-                }
                 
-                if (sData.status === 'SUCCESS') {
-                    // Защитное программирование: проверяем наличие и тип данных
-                    if (sData.data === null || sData.data === undefined) {
-                        setLoading(false);
-                        setStep('config');
-                        alert('Ошибка: получены пустые данные от сервера');
-                        return;
-                    }
+                // Обработка 502/500 ошибок при поллинге (не падаем, пробуем еще)
+                if (!sRes.ok) {
+                    attempts++;
+                    continue;
+                }
+
+                let sData;
+                try { sData = await sRes.json(); } catch { attempts++; continue; }
+                
+                // --- INTEGRATION FIX: Robust Response Handling ---
+                const status = (sData.status || "").toUpperCase();
+
+                if (status === 'SUCCESS') {
+                    // Ищем данные в data ИЛИ result (Celery может вернуть по-разному)
+                    const resultData = sData.data || sData.result;
                     
-                    const resultData = sData.data;
-                    // Данные должны быть объектом (не строка, не массив, не число)
-                    if (typeof resultData !== 'object' || Array.isArray(resultData)) {
-                        setLoading(false);
-                        setStep('config');
-                        alert('Ошибка: некорректный формат ответа сервера');
-                        return;
-                    }
+                    if (!resultData) throw new Error("Пустой ответ от сервера");
                     
-                    // Обработка явной ошибки от бэкенда
                     if (resultData.status === 'error') {
-                        setLoading(false);
-                        setStep('config');
-                        alert(`Ошибка анализа: ${resultData.error || resultData.message || 'Неизвестная ошибка'}`);
-                        return;
+                        throw new Error(resultData.error || resultData.message || 'Ошибка при анализе');
                     }
                     
-                    // data.status === 'success' но ai_analysis отсутствует — показываем UI-ошибку, не падаем
-                    if (!resultData.ai_analysis || typeof resultData.ai_analysis !== 'object') {
+                    // Critical: Check if analysis exists
+                    if (!resultData.ai_analysis) {
+                        // Фаллбэк, чтобы не упасть с белым экраном
                         resultData.ai_analysis = {
-                            _error: 'Данные анализа отсутствуют',
-                            aspects: [],
-                            audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 },
-                            global_summary: 'Ошибка при получении данных анализа. Повторите попытку.',
+                            _error: 'AI не вернул данные. Возможно, отзывов слишком мало.',
+                            global_summary: 'Не удалось сформировать отчет.',
                             flaws: [],
-                            strategy: []
+                            strategy: [],
+                            aspects: [],
+                            audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 }
                         };
-                    }
-                    
-                    if (resultData.ai_analysis?._error) {
-                        setStatus(`⚠️ Ошибка AI: ${resultData.ai_analysis._error}`);
                     }
                     
                     setResult(resultData);
                     setStep('result');
                     setLoading(false);
-                    // Update user info after successful analysis completion (to reflect updated limits)
-                    if (onUserUpdate) {
-                        onUserUpdate();
-                    }
-                    break;
+                    fetchUser(); // Обновляем лимиты сразу
+                    return;
                 }
-                if (sData.status === 'FAILURE') {
-                    const errorMsg = sData.error || sData.data?.error || "Ошибка ИИ";
+                
+                if (status === 'FAILURE' || status === 'REVOKED') {
+                    const errorMsg = sData.error || sData.result?.error || "Ошибка выполнения задачи";
                     throw new Error(errorMsg);
                 }
-                if (sData.info) setStatus(sData.info);
                 
+                // Если задача в процессе (PENDING/STARTED) - продолжаем цикл
                 attempts++;
             }
             
-            // If we exit loop due to attempts limit
             if (attempts >= 120 && !cancelTokenRef.current) {
                 setLoading(false);
                 setStep('config');
-                alert('Превышено время ожидания результата анализа');
+                alert('Превышено время ожидания. Попробуйте позже.');
             }
         } catch(e) {
             setLoading(false);
             setStep('config');
-            const errorMsg = e.message || "Неизвестная ошибка при запуске анализа";
-            alert(errorMsg);
-            console.error("Analysis start error:", e);
-        } finally {
-            // Ensure loading is false even if something unexpected happens
-            setLoading(false);
+            console.error("Analysis error:", e);
+            alert(e.message || "Неизвестная ошибка");
         }
     };
 
     const handleDownloadPDF = async () => {
-        if (!sku && !result?.sku) {
-            alert('Ошибка: не указан SKU товара');
-            return;
-        }
         const targetSku = sku || result?.sku;
-        if (!targetSku) {
-            alert('Ошибка: не указан SKU товара');
-            return;
-        }
-        if (user?.plan === 'start') {
+        if (!targetSku) return alert('Ошибка: не указан SKU товара');
+        
+        // Используем currentUser вместо user
+        if (currentUser?.plan === 'start') {
             alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
             return;
         }
+        
+        setDownloading(true);
         try {
             const token = window.Telegram?.WebApp?.initData || "";
+            // Используем window.open для надежности
             const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
             window.open(downloadUrl, '_blank');
         } catch (e) {
             alert("Ошибка скачивания: " + e.message);
+        } finally {
+            setDownloading(false);
         }
     };
 
@@ -333,8 +307,17 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
 
     const sParams = getSliderParams();
 
+    // Если данные пользователя еще грузятся, показываем лоадер, чтобы не мелькал пустой интерфейс
+    if (userLoading) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-[#F7F9FC]">
+                <Loader2 className="animate-spin text-violet-600" size={32} />
+            </div>
+        );
+    }
+
     return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 bg-[#F7F9FC] min-h-screen">
             {/* HEADER */}
             <div className="flex justify-between items-stretch h-20">
                 <div className="bg-gradient-to-br from-violet-600 to-fuchsia-600 p-4 rounded-3xl text-white shadow-xl shadow-fuchsia-200 flex-1 mr-3 flex flex-col justify-center">
@@ -372,7 +355,17 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 </div>
             </div>
 
-            <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
+            <HistoryModule 
+                type="ai_review" 
+                isOpen={historyOpen} 
+                onClose={() => setHistoryOpen(false)} 
+                userId={currentUser?.id}
+                onSelect={(item) => {
+                    setSku(item.sku);
+                    setHistoryOpen(false);
+                    handleCheckProduct();
+                }}
+            />
 
             {/* MAIN INPUT CARD */}
             {step !== 'result' && (
@@ -406,7 +399,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                 {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
                                 <div>
                                     <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
-                                    {productMeta.total_reviews > 0 && (
+                                    {productMeta.total_reviews !== undefined && (
                                         <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
                                             Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
                                         </div>
@@ -415,8 +408,8 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                             </div>
 
                             <div className="mb-6 px-2">
-                                {/* Quota Display with Plan Info */}
-                                {user?.ai_requests_limit > 0 && (
+                                {/* Quota Display with Plan Info (Используем currentUser) */}
+                                {currentUser && (
                                     <div className="mb-4 p-4 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-xl border-2 border-indigo-100">
                                         <div className="flex items-center justify-between mb-3">
                                             <div className="flex items-center gap-2">
@@ -424,31 +417,34 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                                 <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">AI запросы</span>
                                             </div>
                                             <span className="text-xs font-black bg-white px-2 py-1 rounded-lg text-indigo-900 border border-indigo-200">
-                                                {user.ai_requests_used || 0} / {user.ai_requests_limit}
-                                                {user?.extra_ai_balance > 0 && (
-                                                    <span className="text-emerald-600 ml-1">+{user.extra_ai_balance}</span>
-                                                )}
+                                                {currentUser.ai_requests_used || 0} / {currentUser.ai_requests_limit}
                                             </span>
                                         </div>
                                         <div className="h-2.5 bg-indigo-100 rounded-full overflow-hidden mb-2">
                                             <div 
                                                 className="h-full bg-gradient-to-r from-indigo-600 to-violet-600 transition-all"
                                                 style={{ 
-                                                    width: `${Math.min(100, ((user.ai_requests_used || 0) / user.ai_requests_limit) * 100)}%` 
+                                                    width: `${Math.min(100, ((currentUser.ai_requests_used || 0) / (currentUser.ai_requests_limit || 1)) * 100)}%` 
                                                 }}
                                             />
                                         </div>
-                                        {user?.extra_ai_balance > 0 && (
-                                            <p className="text-xs text-indigo-600 font-medium">Дополнительный баланс: {user.extra_ai_balance} запросов</p>
+                                        {currentUser?.extra_ai_balance > 0 && (
+                                            <p className="text-xs text-indigo-600 font-medium">Дополнительный баланс: {currentUser.extra_ai_balance} запросов</p>
                                         )}
-                                        {((user.ai_requests_used || 0) / user.ai_requests_limit) >= 0.8 && (
+                                        {((currentUser.ai_requests_used || 0) / (currentUser.ai_requests_limit || 1)) >= 0.8 && (
                                             <p className="text-xs text-amber-600 font-medium mt-1">⚠️ Осталось мало запросов. Рассмотрите обновление тарифа.</p>
+                                        )}
+                                        {currentUser.plan === 'start' && currentUser.usage_reset_date && (
+                                            <p className="text-[10px] text-amber-600 font-bold mt-1 flex items-center gap-1">
+                                                <Lock size={10} />
+                                                Лимиты обновятся {new Date(currentUser.usage_reset_date).toLocaleDateString()}
+                                            </p>
                                         )}
                                     </div>
                                 )}
                                 
                                 {/* Available Features Info */}
-                                {user && (
+                                {currentUser && (
                                     <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
                                         <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Доступные функции</div>
                                         <div className="space-y-1.5">
@@ -456,7 +452,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                                 <Check size={12} className="text-emerald-600" />
                                                 <span className="text-slate-600">Анализ отзывов AI</span>
                                             </div>
-                                            {user?.plan === 'start' ? (
+                                            {currentUser?.plan === 'start' ? (
                                                 <div className="flex items-center gap-2 text-xs">
                                                     <Lock size={12} className="text-amber-500" />
                                                     <span className="text-slate-500">PDF экспорт (доступен на тарифе <strong>Аналитик</strong>+)</span>
@@ -493,6 +489,9 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                     <span>{sParams.min}</span>
                                     <span>{sParams.max} (Max)</span>
                                 </div>
+                                <p className="text-[10px] text-slate-400 text-center mt-2">
+                                    Больше отзывов = точнее результат, но дольше ожидание
+                                </p>
                             </div>
 
                             <div className="flex gap-2">
@@ -529,18 +528,18 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                     {/* Кнопки действий */}
                     <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl">
                          <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600 px-3 py-2">
-                            ← Настройки
+                           ← Настройки
                          </button>
                         <button 
                             onClick={handleDownloadPDF} 
                             disabled={downloading}
                             className={`
                                 flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all active:scale-95
-                                ${user?.plan === 'start' ? 'bg-white text-slate-400 border border-slate-200' : 'bg-slate-900 text-white shadow-lg'}
+                                ${currentUser?.plan === 'start' ? 'bg-white text-slate-400 border border-slate-200' : 'bg-slate-900 text-white shadow-lg'}
                             `}
                         >
-                            {downloading ? <Loader2 size={14} className="animate-spin"/> : (user?.plan === 'start' ? <Lock size={14}/> : <FileDown size={14}/>)}
-                            {user?.plan === 'start' ? 'PDF (PRO)' : 'Скачать PDF'}
+                            {downloading ? <Loader2 size={14} className="animate-spin"/> : (currentUser?.plan === 'start' ? <Lock size={14}/> : <FileDown size={14}/>)}
+                            {currentUser?.plan === 'start' ? 'PDF (PRO)' : 'Скачать PDF'}
                         </button>
                     </div>
 
@@ -555,6 +554,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         </div>
                     </div>
 
+                    {/* БЕЗОПАСНЫЙ РЕНДЕРИНГ РЕЗУЛЬТАТОВ */}
                     {result?.ai_analysis?.global_summary && (
                         <div className={`p-5 rounded-2xl text-sm border-l-4 shadow-md ${
                             result?.ai_analysis?._error 
@@ -563,7 +563,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         }`}>
                             {result?.ai_analysis?._error ? (
                                 <div>
-                                    <div className="font-bold mb-1">⚠️ Ошибка AI</div>
+                                    <div className="font-bold mb-1 flex items-center gap-2"><AlertCircle size={16}/> Ошибка AI</div>
                                     <div>{result.ai_analysis.global_summary}</div>
                                 </div>
                             ) : (
@@ -611,6 +611,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         </div>
                     )}
 
+                    {/* INTEGRATION FIX: Safe map for aspects */}
                     {result?.ai_analysis?.aspects && Array.isArray(result.ai_analysis.aspects) && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
@@ -648,17 +649,18 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                     )}
 
                      <div className="grid grid-cols-1 gap-4">
-                        {/* Блок критических зон (с раскрытием) */}
+                        {/* Критические зоны - INTEGRATION FIX: Use correct field names and safe map */}
+                        {/* Проверяем и flaws и negatives для совместимости */}
                         <div className="bg-red-50 p-5 rounded-3xl border border-red-100">
                             <h3 className="text-red-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <ThumbsDown size={16} /> Критические зоны
                             </h3>
                             <ul className="space-y-2">
-                                {Array.isArray(result?.ai_analysis?.flaws) && result.ai_analysis.flaws.length > 0 ? (
-                                    result.ai_analysis.flaws.map((f, i) => (
+                                {(result?.ai_analysis?.flaws || result?.ai_analysis?.negatives || [])?.length > 0 ? (
+                                    (result?.ai_analysis?.flaws || result?.ai_analysis?.negatives).map((f, i) => (
                                         <ExpandableText 
                                             key={i} 
-                                            text={typeof f === 'string' ? f : String(f)} 
+                                            text={String(f)} 
                                             colorClass="text-slate-700" 
                                             borderClass="border-red-50" 
                                         />
@@ -669,7 +671,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                             </ul>
                         </div>
 
-                        {/* Блок точек роста (с раскрытием) */}
+                        {/* Точки роста - INTEGRATION FIX: Safe map */}
                         <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
                             <h3 className="text-emerald-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <Sparkles size={16} /> Точки роста
@@ -679,7 +681,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                     result.ai_analysis.strategy.map((s, i) => (
                                         <ExpandableText 
                                             key={i} 
-                                            text={typeof s === 'string' ? s : String(s)} 
+                                            text={String(s)} 
                                             colorClass="text-slate-700" 
                                             borderClass="border-emerald-100 border-l-4 border-l-emerald-400" 
                                         />

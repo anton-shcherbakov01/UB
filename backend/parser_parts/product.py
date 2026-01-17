@@ -43,6 +43,7 @@ class ProductParser:
     """
     Восстановленная логика парсинга Wildberries (Legacy/Stable).
     Использует перебор корзин для поиска card.json и Selenium для цен.
+    Гибридная версия: Async для метаданных + Sync (requests) для отзывов.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -241,8 +242,6 @@ class ProductParser:
 
     def get_product_data(self, sku: int):
         """Парсинг цен (оставлен для совместимости с task)"""
-        # (Код парсинга цен Selenium, идентичный вашему, для краткости опущен, 
-        # но так как я должен вернуть полный файл - вставляю полную версию из вашего примера)
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         total_qty = 0
@@ -304,7 +303,8 @@ class ProductParser:
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
         Основной метод парсинга отзывов.
-        Восстановлен из вашего файла.
+        СИНХРОННЫЙ, использует asyncio.run только для card.json.
+        Использует requests для получения отзывов (стабильно).
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
