@@ -35,7 +35,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       # ВОЗВРАЩАЕМ КОНФИГ: Теперь он оптимизирован и безопасен
-      - clickhouse/config.xml:/etc/clickhouse-server/config.d/my_custom_config.xml:ro
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/my_custom_config.xml:ro
     environment:
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
