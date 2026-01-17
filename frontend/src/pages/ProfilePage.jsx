@@ -312,7 +312,6 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                 </div>
                 <p className="text-[10px] text-slate-300">ИП Щербаков Антон Алексеевич</p>
                 <p className="text-[10px] text-slate-300">ИНН: 712807221159 • ОГРНИП: 325710000062103</p>
-                <p className="text-[10px] text-slate-300">Адрес: Тульская область, Киреевский район, поселок Приупский, улица Победа, дом 8</p>
                 <p className="text-[10px] text-slate-300">Email: anton.sherbakov.01@gmail.com</p>
                 <p className="text-[10px] text-slate-300">Telegram Support: <a href="https://t.me/AAntonShch" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400">@AAntonShch</a></p>
                 <p className="text-[10px] text-slate-300 mt-2">ID: {user?.id} • Версия: 2.2.0</p>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Sparkles, Clock, Loader2, Star, ThumbsDown, BarChart3, Users, BrainCircuit, ShieldCheck, Heart, FileDown, Lock, Settings2, Search, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
@@ -43,15 +43,18 @@ const AIAnalysisPage = ({ user }) => {
     const [status, setStatus] = useState('');
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
+    const cancelTokenRef = useRef(false); // Flag to cancel polling (useRef for immediate access in loop)
 
     // СБРОС СОСТОЯНИЯ
     const handleReset = () => {
+        cancelTokenRef.current = true; // Cancel any ongoing polling
         setSku('');
         setStep('input');
         setProductMeta(null);
         setResult(null);
         setReviewLimit(100);
         setStatus('');
+        setLoading(false);
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
@@ -85,6 +88,7 @@ const AIAnalysisPage = ({ user }) => {
     };
 
     const runAnalysis = async () => {
+        cancelTokenRef.current = false; // Reset cancel flag
         setLoading(true);
         setStep('analyzing');
         setResult(null);
@@ -95,12 +99,40 @@ const AIAnalysisPage = ({ user }) => {
                 headers: getTgHeaders() 
             });
             const data = await res.json();
+            
+            // Check if request failed - STOP IMMEDIATELY if error
+            if (!res.ok) {
+                setLoading(false);
+                setStep('config');
+                alert(data.detail || `Ошибка ${res.status}: Не удалось запустить анализ`);
+                return; // Exit immediately, don't start polling
+            }
+            
             const taskId = data.task_id;
+            if (!taskId) {
+                setLoading(false);
+                setStep('config');
+                alert('Не получен task_id от сервера');
+                return; // Exit immediately
+            }
 
+            // Only start polling if we have a valid taskId and no cancel flag
             let attempts = 0;
-            while(attempts < 120) {
+            while(attempts < 120 && !cancelTokenRef.current) {
+                // Check cancel flag before each iteration
+                if (cancelTokenRef.current) {
+                    setLoading(false);
+                    return;
+                }
+                
                 setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
                 await new Promise(r => setTimeout(r, 2000));
+                
+                // Double-check cancel flag after delay
+                if (cancelTokenRef.current) {
+                    setLoading(false);
+                    return;
+                }
                 
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
                 const sData = await sRes.json();
@@ -111,6 +143,7 @@ const AIAnalysisPage = ({ user }) => {
                     }
                     setResult(sData.data);
                     setStep('result');
+                    setLoading(false);
                     break;
                 }
                 if (sData.status === 'FAILURE') {
@@ -121,10 +154,19 @@ const AIAnalysisPage = ({ user }) => {
                 
                 attempts++;
             }
+            
+            // If we exit loop due to attempts limit
+            if (attempts >= 120 && !cancelTokenRef.current) {
+                setLoading(false);
+                setStep('config');
+                alert('Превышено время ожидания результата анализа');
+            }
         } catch(e) {
-            alert(e.message);
+            setLoading(false);
             setStep('config');
+            alert(e.message);
         } finally {
+            // Ensure loading is false even if something unexpected happens
             setLoading(false);
         }
     };
