@@ -7,7 +7,8 @@ import HistoryModule from '../components/HistoryModule';
 // --- Мини-компонент для раскрывающегося текста ---
 const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "border-slate-200" }) => {
     const [expanded, setExpanded] = useState(false);
-    const isLong = text.length > 60; // Условие "длинного" текста
+    const safeText = typeof text === 'string' ? text : String(text ?? '');
+    const isLong = safeText.length > 60;
 
     return (
         <li 
@@ -16,7 +17,7 @@ const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "bo
         >
             <div className={`flex justify-between items-start gap-2 ${isLong ? 'cursor-pointer' : ''}`}>
                 <span className={`${colorClass} ${expanded ? '' : 'line-clamp-2'}`}>
-                    {text}
+                    {safeText}
                 </span>
                 {isLong && (
                     <button className="text-slate-400 mt-0.5 shrink-0">
@@ -189,19 +190,38 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 }
                 
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
-                const sData = await sRes.json();
+                let sData;
+                try {
+                    sData = await sRes.json();
+                } catch (jsonErr) {
+                    setStatus('Ошибка формата ответа, повтор...');
+                    attempts++;
+                    continue;
+                }
+                if (!sData || typeof sData !== 'object') {
+                    attempts++;
+                    continue;
+                }
                 
                 if (sData.status === 'SUCCESS') {
-                    // Защитное программирование: проверяем наличие данных
-                    if (!sData.data) {
+                    // Защитное программирование: проверяем наличие и тип данных
+                    if (sData.data === null || sData.data === undefined) {
                         setLoading(false);
                         setStep('config');
                         alert('Ошибка: получены пустые данные от сервера');
                         return;
                     }
                     
-                    // Проверяем структуру данных
                     const resultData = sData.data;
+                    // Данные должны быть объектом (не строка, не массив, не число)
+                    if (typeof resultData !== 'object' || Array.isArray(resultData)) {
+                        setLoading(false);
+                        setStep('config');
+                        alert('Ошибка: некорректный формат ответа сервера');
+                        return;
+                    }
+                    
+                    // Обработка явной ошибки от бэкенда
                     if (resultData.status === 'error') {
                         setLoading(false);
                         setStep('config');
@@ -209,13 +229,14 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         return;
                     }
                     
-                    // Убеждаемся, что ai_analysis существует и является объектом
+                    // data.status === 'success' но ai_analysis отсутствует — показываем UI-ошибку, не падаем
                     if (!resultData.ai_analysis || typeof resultData.ai_analysis !== 'object') {
                         resultData.ai_analysis = {
                             _error: 'Данные анализа отсутствуют',
                             aspects: [],
                             audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 },
-                            global_summary: 'Ошибка при получении данных анализа',
+                            global_summary: 'Ошибка при получении данных анализа. Повторите попытку.',
+                            flaws: [],
                             strategy: []
                         };
                     }

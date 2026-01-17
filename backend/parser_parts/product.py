@@ -324,23 +324,42 @@ class ProductParser:
             
             feed_data = None
             headers = {"User-Agent": random.choice(self.user_agents)}
+            last_error = None
             
             for url in endpoints:
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
-                    if r.status_code == 200:
+                    if r.status_code != 200:
+                        continue
+                    try:
                         feed_data = r.json()
+                    except (ValueError, TypeError) as json_err:
+                        logger.warning(f"Invalid JSON from {url[:50]}...: {json_err}")
+                        continue
+                    if isinstance(feed_data, dict):
                         break
-                except: continue
+                    feed_data = None
+                except requests.RequestException as req_err:
+                    last_error = str(req_err)
+                    logger.debug(f"Requests error for {url[:40]}...: {req_err}")
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    logger.debug(f"Unexpected error fetching {url[:40]}...: {e}")
+                    continue
             
-            if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
+            if not feed_data or not isinstance(feed_data, dict):
+                msg = "API отзывов недоступен"
+                if last_error:
+                    msg = f"{msg} ({last_error[:80]})"
+                return {"status": "error", "message": msg}
 
-            # Защита от пустых данных
-            raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
+            # Защита от пустых и неожиданных структур данных WB
+            data_part = feed_data.get('data') if isinstance(feed_data.get('data'), dict) else {}
+            raw_feedbacks = feed_data.get('feedbacks') or data_part.get('feedbacks') or []
             if not isinstance(raw_feedbacks, list):
                 raw_feedbacks = []
-            
-            valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
+            valuation = feed_data.get('valuation') or data_part.get('valuation', 0)
             
             reviews = []
             for f in raw_feedbacks:

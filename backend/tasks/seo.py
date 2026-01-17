@@ -99,7 +99,8 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
                     "aspects": [],
                     "audience_stats": {"rational_percent": 0, "emotional_percent": 0, "skeptic_percent": 0},
                     "global_summary": "Ошибка при анализе отзывов",
-                    "strategy": []
+                    "flaws": ["Ошибка формата ответа"],
+                    "strategy": ["Повторите попытку"]
                 }
         except Exception as ai_error:
             logger.error(f"AI analysis exception for SKU {sku}: {ai_error}", exc_info=True)
@@ -108,7 +109,8 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
                 "aspects": [],
                 "audience_stats": {"rational_percent": 0, "emotional_percent": 0, "skeptic_percent": 0},
                 "global_summary": "Ошибка при анализе отзывов",
-                "strategy": []
+                "flaws": ["Сервис AI временно недоступен"],
+                "strategy": ["Повторите попытку позже"]
             }
 
         # Проверяем наличие ошибки в AI ответе
