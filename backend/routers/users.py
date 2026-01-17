@@ -41,6 +41,8 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
     # Get quota usage info
     from config.plans import get_limit
     ai_limit = get_limit(user.subscription_plan, "ai_requests")
+    cluster_limit = get_limit(user.subscription_plan, "cluster_requests")
+    review_limit = get_limit(user.subscription_plan, "review_analysis_limit")
     
     return {
         "id": user.telegram_id,
@@ -55,7 +57,12 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "subscription_expires_at": user.subscription_expires_at,
         "ai_requests_used": user.ai_requests_used or 0,
         "ai_requests_limit": ai_limit,
-        "extra_ai_balance": user.extra_ai_balance or 0
+        "cluster_requests_limit": cluster_limit,
+        "cluster_requests_used": user.cluster_requests_used or 0,
+        "review_analysis_limit": review_limit,
+        "extra_ai_balance": user.extra_ai_balance or 0,
+        "offer_accepted": user.offer_accepted or False,
+        "privacy_accepted": user.privacy_accepted or False
     }
 
 @router.post("/token")
@@ -145,6 +152,36 @@ async def delete_wb_token(
     await db.commit()
     return {"status": "deleted"}
 
+@router.post("/accept-offer")
+async def accept_offer(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Принять публичную оферту"""
+    from datetime import datetime
+    
+    user.offer_accepted = True
+    user.offer_accepted_at = datetime.utcnow()
+    db.add(user)
+    await db.commit()
+    
+    return {"status": "accepted", "message": "Оферта принята"}
+
+@router.post("/accept-privacy")
+async def accept_privacy(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Принять политику конфиденциальности"""
+    from datetime import datetime
+    
+    user.privacy_accepted = True
+    user.privacy_accepted_at = datetime.utcnow()
+    db.add(user)
+    await db.commit()
+    
+    return {"status": "accepted", "message": "Политика конфиденциальности принята"}
+
 @router.get("/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
     """
@@ -180,7 +217,7 @@ async def get_tariffs(user: User = Depends(get_current_user)):
                 "SEO трекер + PDF",
                 "AI анализ отзывов + PDF",
                 "Форензика возвратов + PDF",
-                "Мониторинг цен + PDF"
+                "Unit экономика"
             ],
             "is_best": True
         },
@@ -196,7 +233,7 @@ async def get_tariffs(user: User = Depends(get_current_user)):
                 "SEO трекер + PDF",
                 "AI анализ отзывов + PDF",
                 "Форензика + Cash Gap + PDF",
-                "Мониторинг цен + PDF",
+                "Unit экономика",
                 "Приоритетный опрос"
             ]
         }

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Calendar, Package, Search, Filter, 
     CheckCircle2, Loader2, MapPin, XCircle, 
-    ArrowLeft, Truck, Bell, BellRing, Trash2
+    ArrowLeft, Truck, Bell, BellRing, Trash2, HelpCircle
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -173,20 +173,40 @@ const SlotsPage = ({ user, onNavigate }) => {
         <div className="p-4 pb-32 space-y-4 animate-in slide-in-from-right-4 fade-in">
             {/* Header */}
             <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1">
                     {onNavigate && <button onClick={() => onNavigate('home')} className="p-2 bg-white rounded-xl border border-slate-100"><ArrowLeft size={20} className="text-slate-500"/></button>}
                     <div>
                         <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">Слоты</h1>
                         <p className="text-slate-500 text-xs font-medium">Мониторинг приемки</p>
                     </div>
                 </div>
-                {/* Active Monitors Counter */}
-                {monitors.length > 0 && (
-                    <div className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-200">
-                        <BellRing size={14} className="animate-pulse"/>
-                        {monitors.length} на слежении
+                <div className="flex items-center gap-2">
+                    <div className="group relative">
+                        <button className="p-2 bg-white rounded-xl border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors">
+                            <HelpCircle size={20}/>
+                        </button>
+                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2">Коэффициенты приемки</div>
+                            <p className="mb-2">Коэффициент показывает доступность слотов на складе:</p>
+                            <ul className="space-y-1 list-disc list-inside text-[10px]">
+                                <li><strong>x0</strong> - Бесплатные слоты (зеленый)</li>
+                                <li><strong>x1</strong> - Низкая загрузка (синий)</li>
+                                <li><strong>x2-5</strong> - Средняя загрузка (желтый)</li>
+                                <li><strong>x6+</strong> - Высокая загрузка (красный)</li>
+                                <li><strong>—</strong> - Склад закрыт</li>
+                            </ul>
+                            <p className="mt-2 text-[10px]">Подпишитесь на уведомления, чтобы получать информацию о появлении свободных слотов.</p>
+                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                        </div>
                     </div>
-                )}
+                    {/* Active Monitors Counter */}
+                    {monitors.length > 0 && (
+                        <div className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-200">
+                            <BellRing size={14} className="animate-pulse"/>
+                            {monitors.length} на слежении
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Controls */}

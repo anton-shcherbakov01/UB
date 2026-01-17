@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from database import get_db, User, ProductCost
 from dependencies import get_current_user, get_redis_client
+from dependencies.quota import QuotaCheck
 from fastapi import HTTPException
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
@@ -462,4 +463,44 @@ async def generate_pnl_pdf(
         io.BytesIO(pdf_bytes),
         media_type='application/pdf',
         headers={'Content-Disposition': f'attachment; filename="pnl_report_{date_from_dt.strftime("%Y%m%d")}_{date_to_dt.strftime("%Y%m%d")}.pdf"'}
+    )
+
+@router.get("/report/unit-economy-pdf")
+async def generate_unit_economy_pdf(
+    user: User = Depends(QuotaCheck(feature_flag="unit_economy")),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate Unit Economy PDF report. Requires Analyst+ plan."""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+    
+    # Get unit economy data (reuse existing endpoint logic)
+    from fastapi import BackgroundTasks
+    background_tasks = BackgroundTasks()
+    
+    # Call the internal endpoint logic
+    unit_data = await get_my_products_finance(background_tasks, user, db)
+    
+    if not unit_data:
+        raise HTTPException(status_code=404, detail="Нет данных для Unit экономики")
+    
+    # Generate PDF in executor
+    from services.pdf_generator import pdf_generator
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_unit_economy_pdf,
+        unit_data
+    )
+    
+    filename = f"unit_economy_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(pdf_bytes)),
+            'Cache-Control': 'no-cache'
+        }
     )

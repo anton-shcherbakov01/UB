@@ -1,13 +1,35 @@
 import React from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
+import { API_URL, getTgHeaders } from '../config';
 
-const PrivacyPage = ({ onBack }) => {
+const PrivacyPage = ({ onBack, onAccept, isModal = false }) => {
+    const handleAccept = async () => {
+        if (onAccept) {
+            await onAccept();
+        } else {
+            // Если onAccept не передан, вызываем API напрямую
+            try {
+                const res = await fetch(`${API_URL}/api/user/accept-privacy`, {
+                    method: 'POST',
+                    headers: getTgHeaders()
+                });
+                if (res.ok && onBack) {
+                    onBack();
+                }
+            } catch (e) {
+                console.error('Failed to accept privacy:', e);
+            }
+        }
+    };
+
     return (
-        <div className="p-4 max-w-2xl mx-auto pb-32">
+        <div className={`${isModal ? 'p-6' : 'p-4 max-w-2xl mx-auto pb-32'}`}>
             <div className="flex items-center gap-3 mb-6">
-                <button onClick={onBack} className="text-slate-400 hover:text-slate-600">
-                    <ArrowLeft size={24} />
-                </button>
+                {onBack && !isModal && (
+                    <button onClick={onBack} className="text-slate-400 hover:text-slate-600">
+                        <ArrowLeft size={24} />
+                    </button>
+                )}
                 <h1 className="text-2xl font-black text-slate-800">Политика конфиденциальности</h1>
             </div>
             
@@ -179,6 +201,22 @@ const PrivacyPage = ({ onBack }) => {
                         Сервиса «JuicyStat».</p>
                     </div>
                 </section>
+            </div>
+            
+            {/* Кнопка принятия условий */}
+            <div className={`${isModal ? 'sticky bottom-0 bg-white border-t border-slate-200 p-4' : 'mt-8'}`}>
+                <button
+                    onClick={handleAccept}
+                    className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-black text-lg hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
+                >
+                    <Check size={20} />
+                    Принимаю условия политики конфиденциальности
+                </button>
+                {isModal && (
+                    <p className="text-xs text-slate-500 text-center mt-3">
+                        Для продолжения работы необходимо принять условия политики конфиденциальности
+                    </p>
+                )}
             </div>
         </div>
     );

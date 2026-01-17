@@ -2,6 +2,7 @@ import logging
 import asyncio
 import redis
 from datetime import datetime, timedelta
+import pytz
 
 from celery_app import celery_app
 from parser_service import parser_service
@@ -120,7 +121,10 @@ def send_hourly_summary():
             if (now - last_sent).total_seconds() >= (settings.summary_interval * 3600 - 60):
                 try:
                     stats = loop.run_until_complete(wb_api_service.get_statistics_today(user.wb_api_token))
-                    msg = f"📊 <b>Сводка за сегодня</b> ({datetime.now().strftime('%H:%M')})\n➖➖➖➖➖➖➖➖\n💰 Заказы: <b>{stats['orders_sum']:,.0f} ₽</b> ({stats['orders_count']} шт)\n💵 Выкупы: <b>{stats['sales_sum']:,.0f} ₽</b> ({stats['sales_count']} шт)\n"
+                    # Используем московское время (UTC+3)
+                    moscow_tz = pytz.timezone('Europe/Moscow')
+                    moscow_time = datetime.now(moscow_tz)
+                    msg = f"📊 <b>Сводка за сегодня</b> ({moscow_time.strftime('%H:%M')} МСК)\n➖➖➖➖➖➖➖➖\n💰 Заказы: <b>{stats['orders_sum']:,.0f} ₽</b> ({stats['orders_count']} шт)\n💵 Выкупы: <b>{stats['sales_sum']:,.0f} ₽</b> ({stats['sales_count']} шт)\n"
                     # Воронка показывается если включена в настройках (даже если данные 0 - заглушка)
                     if settings.show_funnel:
                         visitors = stats.get('visitors', 0)

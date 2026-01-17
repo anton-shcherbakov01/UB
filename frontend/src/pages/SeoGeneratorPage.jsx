@@ -1,7 +1,28 @@
-import React, { useState } from 'react';
-import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download, Lock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download, Lock, CheckCircle, AlertCircle, XCircle, ArrowLeft } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
+
+// Toast Notification Component
+const Toast = ({ message, type = 'error', onClose }) => {
+    useEffect(() => {
+        const timer = setTimeout(() => onClose(), 5000);
+        return () => clearTimeout(timer);
+    }, [onClose]);
+
+    const bgColor = type === 'success' ? 'bg-emerald-500' : type === 'info' ? 'bg-blue-500' : 'bg-red-500';
+    const Icon = type === 'success' ? CheckCircle : type === 'info' ? AlertCircle : XCircle;
+
+    return (
+        <div className={`fixed top-4 right-4 ${bgColor} text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 z-50 animate-in slide-in-from-top-5 fade-in min-w-[300px] max-w-[90vw]`}>
+            <Icon size={20} className="shrink-0" />
+            <p className="flex-1 text-sm font-medium">{message}</p>
+            <button onClick={onClose} className="shrink-0 hover:opacity-70 transition-opacity">
+                <X size={16} />
+            </button>
+        </div>
+    );
+};
 
 const SeoGeneratorPage = ({ user, onUserUpdate }) => {
     const [step, setStep] = useState(1);
@@ -24,6 +45,13 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
     const [error, setError] = useState('');
     const [historyOpen, setHistoryOpen] = useState(false);
     const [pdfLoading, setPdfLoading] = useState(false);
+    
+    // Toast State
+    const [toast, setToast] = useState(null);
+    
+    const showToast = (message, type = 'error') => {
+        setToast({ message, type });
+    };
 
     const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
 
@@ -76,9 +104,14 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
                 const sData = await sRes.json().catch(() => ({}));
                 if ((sData.status || '').toUpperCase() === 'SUCCESS') {
                     const raw = sData.data || {};
-                    if (raw.error) setError('Кластеризация: ' + raw.error);
+                    if (raw.error) {
+                        setError('Кластеризация: ' + raw.error);
+                        showToast('Кластеризация: ' + raw.error, 'error');
+                        return;
+                    }
                     const clustersData = raw.clusters ?? (Array.isArray(raw) ? raw : []);
                     setClusters(Array.isArray(clustersData) ? clustersData : (clustersData?.clusters || []));
+                    showToast(`Кластеризация завершена: ${clustersData.length || 0} групп`, 'success');
                     onUserUpdate?.();
                     return;
                 }
@@ -88,7 +121,9 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
             }
             throw new Error('Превышено время ожидания');
         } catch (e) {
-            setError('Ошибка кластеризации: ' + (e.message || ''));
+            const errorMsg = e.message || 'Ошибка кластеризации';
+            setError(errorMsg);
+            showToast(errorMsg, 'error');
         } finally {
             setLoading(false);
             setStatus('');
@@ -158,10 +193,10 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
 
     const downloadPdf = async () => {
         if (!result || !sku) return;
-        if (user?.plan === 'start') {
-            alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
-            return;
-        }
+            if (user?.plan === 'start') {
+                showToast("Скачивание PDF доступно только на тарифе Аналитик или выше", 'info');
+                return;
+            }
         setPdfLoading(true);
         try {
             // Как в AIAnalysisPage: window.open для мобильных (blob+click часто не срабатывает)
@@ -169,26 +204,61 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
             const url = `${API_URL}/api/report/seo-pdf/${sku}?x_tg_data=${encodeURIComponent(token)}`;
             window.open(url, '_blank');
         } catch (e) {
-            alert("Не удалось скачать PDF: " + (e.message || ''));
+            showToast("Не удалось скачать PDF: " + (e.message || ''), 'error');
         } finally {
             setPdfLoading(false);
         }
     };
 
-    const CopyButton = ({ text }) => (
-        <button onClick={() => {navigator.clipboard.writeText(text); alert("Скопировано!");}} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 rounded-lg">
-            <Copy size={16} />
-        </button>
-    );
+    const CopyButton = ({ text, onCopy }) => {
+        const handleCopy = () => {
+            navigator.clipboard.writeText(text);
+            if (onCopy) onCopy();
+            else showToast("Скопировано!", 'success');
+        };
+        return (
+            <button onClick={handleCopy} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 rounded-lg">
+                <Copy size={16} />
+            </button>
+        );
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+            {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
             <div className="flex justify-between items-center">
-                <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200 flex-1 mr-4">
-                    <h1 className="text-2xl font-black flex items-center gap-2"><Wand2 className="text-yellow-200" /> SEO Gen</h1>
-                    <p className="text-sm opacity-90 mt-2">GEO-оптимизация 2026</p>
+                <div className="flex items-center gap-3 flex-1 mr-4">
+                    <button 
+                        onClick={() => window.history.length > 1 ? window.history.back() : window.location.href = '/'} 
+                        className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors"
+                    >
+                        <ArrowLeft size={20} />
+                    </button>
+                    <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200 flex-1">
+                        <h1 className="text-2xl font-black flex items-center gap-2"><Wand2 className="text-yellow-200" /> SEO Gen</h1>
+                        <p className="text-sm opacity-90 mt-2">GEO-оптимизация 2026</p>
+                    </div>
                 </div>
-                <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
+                <div className="flex gap-2">
+                    <div className="group relative">
+                        <button className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors">
+                            <HelpCircle size={24}/>
+                        </button>
+                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-72 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2">SEO Генератор</div>
+                            <p className="mb-2">Создавайте оптимизированные описания товаров с помощью AI:</p>
+                            <ul className="space-y-1 text-[10px] list-disc list-inside">
+                                <li><strong>Кластеризация ключевых слов</strong> - группировка по темам (Аналитик+)</li>
+                                <li><strong>Генерация контента</strong> - создание заголовков и описаний</li>
+                                <li><strong>Выбор тона</strong> - продающий, информативный, дерзкий и др. (Аналитик+)</li>
+                                <li><strong>Настройка длины</strong> - контроль размера заголовка и описания</li>
+                            </ul>
+                            <p className="mt-2 text-[10px]">Используйте кластеризацию для лучшей структуры ключевых слов перед генерацией.</p>
+                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                        </div>
+                    </div>
+                    <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors"><Clock size={24}/></button>
+                </div>
             </div>
             
             <HistoryModule type="seo" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
@@ -231,15 +301,28 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
                         </div>
 
                         {user && (
-                            <div className="p-3 bg-gradient-to-br from-orange-50 to-pink-50 rounded-xl border border-orange-100">
-                                <div className="flex justify-between items-center text-xs">
-                                    <span className="font-bold text-orange-800">AI запросы</span>
-                                    <span className="font-black text-orange-900">{user.ai_requests_used ?? 0} / {user.ai_requests_limit ?? 0}</span>
+                            <>
+                                <div className="p-3 bg-gradient-to-br from-orange-50 to-pink-50 rounded-xl border border-orange-100">
+                                    <div className="flex justify-between items-center text-xs">
+                                        <span className="font-bold text-orange-800">AI запросы</span>
+                                        <span className="font-black text-orange-900">{user.ai_requests_used ?? 0} / {user.ai_requests_limit ?? 0}</span>
+                                    </div>
+                                    <div className="h-1.5 bg-orange-100 rounded-full mt-1 overflow-hidden">
+                                        <div className="h-full bg-orange-500 rounded-full" style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / (user.ai_requests_limit || 1)) * 100)}%` }} />
+                                    </div>
                                 </div>
-                                <div className="h-1.5 bg-orange-100 rounded-full mt-1 overflow-hidden">
-                                    <div className="h-full bg-orange-500 rounded-full" style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / (user.ai_requests_limit || 1)) * 100)}%` }} />
-                                </div>
-                            </div>
+                                {user.cluster_requests_limit !== undefined && user.cluster_requests_limit > 0 && (
+                                    <div className="p-3 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                                        <div className="flex justify-between items-center text-xs">
+                                            <span className="font-bold text-indigo-800">Кластеризация</span>
+                                            <span className="font-black text-indigo-900">{user.cluster_requests_used ?? 0} / {user.cluster_requests_limit ?? 0}</span>
+                                        </div>
+                                        <div className="h-1.5 bg-indigo-100 rounded-full mt-1 overflow-hidden">
+                                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, ((user.cluster_requests_used || 0) / (user.cluster_requests_limit || 1)) * 100)}%` }} />
+                                        </div>
+                                    </div>
+                                )}
+                            </>
                         )}
 
                         {status && <div className="text-xs text-indigo-600 font-medium bg-indigo-50 p-2 rounded-lg text-center">{status}</div>}
@@ -305,9 +388,25 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
                                             key={t}
                                             onClick={() => !locked && setTone(t)}
                                             disabled={locked}
-                                            className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all ${locked ? 'border-slate-100 bg-slate-50 text-slate-400 cursor-not-allowed' : tone === t ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-100 bg-white text-slate-500'}`}
+                                            title={locked ? 'Доступно на тарифе Аналитик+' : ''}
+                                            className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all relative group ${
+                                                locked 
+                                                    ? 'border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 text-amber-600 cursor-not-allowed shadow-sm' 
+                                                    : tone === t 
+                                                        ? 'border-orange-500 bg-orange-50 text-orange-600 shadow-md' 
+                                                        : 'border-slate-100 bg-white text-slate-500 hover:border-orange-200 hover:bg-orange-50'
+                                            }`}
                                         >
+                                            {locked && (
+                                                <Lock size={12} className="inline-block mr-1.5 opacity-70" />
+                                            )}
                                             {t}
+                                            {locked && (
+                                                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
+                                                    Доступно на тарифе Аналитик+
+                                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                                                </div>
+                                            )}
                                         </button>
                                     );
                                 })}

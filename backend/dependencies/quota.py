@@ -103,9 +103,11 @@ class QuotaCheck:
                 # Reset monthly usage
                 days_passed = (now - user.usage_reset_date).days
                 if days_passed >= 30:
-                    # Reset usage for ai_requests if that's the resource being checked
+                    # Reset usage for resources
                     if self.resource_key == "ai_requests":
                         user.ai_requests_used = 0
+                    elif self.resource_key == "cluster_requests":
+                        user.cluster_requests_used = 0
                     # Set next reset date (30 days from now)
                     user.usage_reset_date = now + timedelta(days=30)
                     db.add(user)
@@ -132,6 +134,18 @@ class QuotaCheck:
                             detail=f"AI requests quota exhausted ({user.ai_requests_used}/{monthly_limit}). Upgrade or purchase add-on."
                         )
                 # If we have extra balance, we can proceed (will consume from balance)
+            elif self.resource_key == "cluster_requests":
+                # Initialize value if None
+                if user.cluster_requests_used is None:
+                    user.cluster_requests_used = 0
+                
+                # Check monthly limit
+                if user.cluster_requests_used >= monthly_limit:
+                    plan_config = get_plan_config(user.subscription_plan)
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"Кластеризация: лимит исчерпан ({user.cluster_requests_used}/{monthly_limit}). Обновите тариф."
+                    )
             # Add other resource types here as needed
         
         return user
@@ -192,33 +206,21 @@ async def increment_usage(
         
         # Update database
         if db:
-            # Use merge to ensure user is in session (works whether user is tracked or not)
-            # This is safer than add() which would fail if user is already in session
             merged_user = await db.merge(user)
-            
-            # Flush to ensure changes are written to the database (but don't commit yet)
             await db.flush()
-            # Commit the transaction
             await db.commit()
-            # Refresh specific attributes to get latest values from database
             await db.refresh(merged_user, attribute_names=["ai_requests_used", "extra_ai_balance", "usage_reset_date"])
-            
-            # Update original user object with merged values
             user.ai_requests_used = merged_user.ai_requests_used
             user.extra_ai_balance = merged_user.extra_ai_balance
             user.usage_reset_date = merged_user.usage_reset_date
-            
             logger.info(f"Updated usage for user {user.id}: ai_requests_used={user.ai_requests_used}, extra_ai_balance={user.extra_ai_balance}")
         else:
-            # If no db session provided, we need to create one and fetch user fresh
             from database import AsyncSessionLocal
             from sqlalchemy import select
             async with AsyncSessionLocal() as session:
-                # Fetch user fresh from database to ensure we have the latest state
                 result = await session.execute(select(User).where(User.id == user.id))
                 fresh_user = result.scalar_one()
                 
-                # Update the fresh user object
                 if resource_key == "ai_requests":
                     if fresh_user.ai_requests_used is None:
                         fresh_user.ai_requests_used = 0
@@ -240,10 +242,55 @@ async def increment_usage(
                 await session.flush()
                 await session.commit()
                 await session.refresh(fresh_user, attribute_names=["ai_requests_used", "extra_ai_balance", "usage_reset_date"])
-                
-                # Update the original user object with fresh values
                 user.ai_requests_used = fresh_user.ai_requests_used
                 user.extra_ai_balance = fresh_user.extra_ai_balance
+                user.usage_reset_date = fresh_user.usage_reset_date
+    
+    elif resource_key == "cluster_requests":
+        # Initialize value if None
+        if user.cluster_requests_used is None:
+            user.cluster_requests_used = 0
+        
+        # Get limit from plan
+        monthly_limit = get_limit(user.subscription_plan, resource_key)
+        
+        # Simple increment (no extra balance for clustering)
+        user.cluster_requests_used += amount
+        
+        # Update Redis cache
+        r_client = get_redis_client()
+        if r_client:
+            try:
+                cache_key = f"quota:{user.id}:{resource_key}"
+                r_client.setex(cache_key, 3600, str(user.cluster_requests_used))
+            except Exception as e:
+                logger.warning(f"Redis cache update failed: {e}")
+        
+        # Update database
+        if db:
+            merged_user = await db.merge(user)
+            await db.flush()
+            await db.commit()
+            await db.refresh(merged_user, attribute_names=["cluster_requests_used", "usage_reset_date"])
+            user.cluster_requests_used = merged_user.cluster_requests_used
+            user.usage_reset_date = merged_user.usage_reset_date
+            logger.info(f"Updated usage for user {user.id}: cluster_requests_used={user.cluster_requests_used}")
+        else:
+            from database import AsyncSessionLocal
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(select(User).where(User.id == user.id))
+                fresh_user = result.scalar_one()
+                
+                if fresh_user.cluster_requests_used is None:
+                    fresh_user.cluster_requests_used = 0
+                fresh_user.cluster_requests_used += amount
+                
+                session.add(fresh_user)
+                await session.flush()
+                await session.commit()
+                await session.refresh(fresh_user, attribute_names=["cluster_requests_used", "usage_reset_date"])
+                user.cluster_requests_used = fresh_user.cluster_requests_used
                 user.usage_reset_date = fresh_user.usage_reset_date
     
     # Add other resource types here as needed

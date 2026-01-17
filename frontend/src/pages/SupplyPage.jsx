@@ -3,7 +3,7 @@ import {
     Truck, Scale, Loader2, MapPin, ArrowRight, 
     PackageCheck, AlertTriangle, Box, RefreshCw,
     Activity, Settings, X, Save, HelpCircle, Info,
-    ArrowDown, FilterX
+    ArrowDown, FilterX, FileDown, ArrowLeft
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import AbcXyzMatrix from '../components/AbcXyzMatrix'; // <-- Импорт матрицы
@@ -501,12 +501,30 @@ const SupplyPage = () => {
                         <p className="text-sm opacity-90 mt-2 font-medium">Умное управление запасами</p>
                     </div>
                     
-                    <button 
-                        onClick={() => setShowSettings(true)}
-                        className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors"
-                    >
-                        <Settings className="text-white" size={20} />
-                    </button>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={async () => {
+                                try {
+                                    const url = `${API_URL}/api/supply/report/supply-pdf`;
+                                    const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
+                                    const fullUrl = x_tg_data ? `${url}?x_tg_data=${encodeURIComponent(x_tg_data)}` : url;
+                                    window.open(fullUrl, '_blank');
+                                } catch (e) {
+                                    alert('Не удалось скачать PDF: ' + (e.message || ''));
+                                }
+                            }}
+                            className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors"
+                            title="Скачать PDF отчёт"
+                        >
+                            <FileDown className="text-white" size={20} />
+                        </button>
+                        <button 
+                            onClick={() => setShowSettings(true)}
+                            className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors"
+                        >
+                            <Settings className="text-white" size={20} />
+                        </button>
+                    </div>
                 </div>
                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
             </div>

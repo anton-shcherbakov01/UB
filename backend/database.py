@@ -49,6 +49,15 @@ class User(Base):
     usage_reset_date = Column(DateTime, nullable=True)
     ai_requests_used = Column(Integer, default=0)
     extra_ai_balance = Column(Integer, default=0)
+    cluster_requests_used = Column(Integer, default=0)
+    
+    # Offer acceptance
+    offer_accepted = Column(Boolean, default=False)
+    offer_accepted_at = Column(DateTime, nullable=True)
+    
+    # Privacy policy acceptance
+    privacy_accepted = Column(Boolean, default=False)
+    privacy_accepted_at = Column(DateTime, nullable=True)
     
     created_at = Column(DateTime, default=datetime.utcnow)
     

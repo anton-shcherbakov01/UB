@@ -52,7 +52,18 @@ class SeoPdfRequest(BaseModel):
 
 @router.get("/seo/regions")
 async def get_regions():
-    return [{"key": k, "label": k.upper()} for k in GEO_COOKIES.keys()]
+    """Возвращает список доступных регионов с человекочитаемыми названиями"""
+    region_labels = {
+        "moscow": "Москва",
+        "spb": "Санкт-Петербург",
+        "ekb": "Екатеринбург",
+        "krasnodar": "Краснодар",
+        "kazan": "Казань"
+    }
+    return [
+        {"key": k, "label": region_labels.get(k, k.upper())} 
+        for k in GEO_COOKIES.keys()
+    ]
 
 @router.get("/seo/position")
 async def check_position(
@@ -161,10 +172,10 @@ async def generate_seo_content(
 @router.post("/seo/cluster")
 async def cluster_keywords_endpoint(
     req: ClusterRequest,
-    user: User = Depends(QuotaCheck("ai_requests", "seo_semantics")),
+    user: User = Depends(QuotaCheck("cluster_requests", "seo_semantics")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Кластеризация ключевых слов (BERT). Доступна на тарифе Аналитик+. Списывает ai_requests."""
+    """Кластеризация ключевых слов (BERT). Доступна на тарифе Аналитик+. Списывает cluster_requests."""
     try:
         task = cluster_keywords_task.delay(req.keywords, user.id, req.sku)
         if not task or not task.id:
@@ -184,7 +195,7 @@ async def cluster_keywords_endpoint(
         logger.warning(f"Queue service error (non-critical): {qe}")
 
     try:
-        await increment_usage(user, "ai_requests", amount=1, db=db)
+        await increment_usage(user, "cluster_requests", amount=1, db=db)
     except Exception as ue:
         logger.error(f"Failed to increment usage for user {user.id}: {ue}", exc_info=True)
 
@@ -334,3 +345,58 @@ async def generate_seo_pdf_report(
         "Expires": "0",
     }
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
+@router.get("/seo/report/tracker-pdf")
+async def generate_seo_tracker_pdf(
+    sku: Optional[int] = Query(None),
+    keyword: Optional[str] = Query(None),
+    user: User = Depends(QuotaCheck(feature_flag="pnl_full")),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate SEO Tracker PDF report. Requires Analyst+ plan."""
+    # Build query
+    query = select(SeoPosition).where(SeoPosition.user_id == user.id)
+    if sku:
+        query = query.where(SeoPosition.sku == sku)
+    if keyword:
+        query = query.where(SeoPosition.keyword.ilike(f"%{keyword}%"))
+    query = query.order_by(SeoPosition.last_check.desc())
+    
+    result = await db.execute(query)
+    positions = result.scalars().all()
+    
+    # Convert to dict format
+    positions_data = [
+        {
+            "sku": str(p.sku),
+            "keyword": p.keyword,
+            "position": p.position,
+            "geo": "moscow",  # Default, could be extended
+            "last_check": p.last_check.isoformat() if p.last_check else ""
+        }
+        for p in positions
+    ]
+    
+    # Generate PDF in executor
+    loop = asyncio.get_event_loop()
+    from services.pdf_generator import pdf_generator
+    
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_seo_tracker_pdf,
+        positions_data,
+        str(sku) if sku else None,
+        keyword
+    )
+    
+    filename = f"seo_tracker_{sku or 'all'}_{keyword or 'all'}_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+            "Cache-Control": "no-cache"
+        }
+    )

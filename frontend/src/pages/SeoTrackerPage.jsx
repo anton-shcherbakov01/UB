@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Search, MapPin, Rocket, Info, CheckCircle, 
     AlertTriangle, Loader2, RotateCcw, HelpCircle, 
-    Target, Globe, Zap, ArrowLeft
+    Target, Globe, Zap, ArrowLeft, FileDown
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -54,14 +54,43 @@ const SEOTrackerPage = ({ onNavigate }) => {
             
             {/* HEADER (В едином стиле с AI Стратегом) */}
             <div className="flex justify-between items-stretch h-20">
-                <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-200 flex-1 mr-3 flex flex-col justify-center">
-                    <h1 className="text-xl font-black flex items-center gap-2">
-                        <Rocket className="text-cyan-300" size={20} /> SEO Радар
-                    </h1>
-                    <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider font-bold">Real-time Rank Tracking</p>
+                <div className="flex items-center gap-3 flex-1 mr-3">
+                    {onNavigate && (
+                        <button 
+                            onClick={() => onNavigate('home')} 
+                            className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"
+                        >
+                            <ArrowLeft size={20} />
+                        </button>
+                    )}
+                    <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-200 flex-1 flex flex-col justify-center">
+                        <h1 className="text-xl font-black flex items-center gap-2">
+                            <Rocket className="text-cyan-300" size={20} /> SEO Радар
+                        </h1>
+                        <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider font-bold">Real-time Rank Tracking</p>
+                    </div>
                 </div>
                 
                 <div className="flex flex-col gap-2 h-full">
+                    <button 
+                        onClick={async () => {
+                            try {
+                                const params = new URLSearchParams();
+                                if (sku) params.append('sku', sku);
+                                if (query) params.append('keyword', query);
+                                const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
+                                if (x_tg_data) params.append('x_tg_data', x_tg_data);
+                                const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
+                                window.open(url, '_blank');
+                            } catch (e) {
+                                alert('Не удалось скачать PDF: ' + (e.message || ''));
+                            }
+                        }}
+                        className="bg-indigo-50 border-indigo-200 text-indigo-600 p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border"
+                        title="Скачать PDF отчёт"
+                    >
+                        <FileDown size={20}/>
+                    </button>
                     <button 
                         onClick={() => setShowGeoInfo(!showGeoInfo)}
                         className={`p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400'}`}
@@ -208,6 +237,36 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                     <b>Совет:</b> Если вы видите рекламную пометку, значит текущая позиция удерживается за счет ставок. Чтобы расти органически, работайте над CTR карточки и скоростью доставки в выбранном ГЕО.
                                 </div>
                             </div>
+
+                            {/* Блок изменения региона */}
+                            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <MapPin className="text-indigo-600" size={18}/>
+                                    <span className="text-sm font-bold text-slate-800">Проверить в другом регионе</span>
+                                </div>
+                                <div className="flex gap-3">
+                                    <div className="flex-1 relative">
+                                        <select 
+                                            value={geo} 
+                                            onChange={e => setGeo(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-2xl font-bold text-sm outline-none border border-slate-100 appearance-none focus:ring-2 ring-indigo-100"
+                                        >
+                                            {regions.length > 0 ? regions.map(r => (
+                                                <option key={r.key} value={r.key}>{r.label}</option>
+                                            )) : <option value="moscow">Москва</option>}
+                                        </select>
+                                        <MapPin className="absolute left-3 top-3.5 text-slate-300" size={18} />
+                                    </div>
+                                    <button 
+                                        onClick={handleCheck}
+                                        disabled={loading}
+                                        className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {loading ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}
+                                        Проверить
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     ) : (
                         <div className="bg-white p-8 rounded-[32px] border border-slate-200 text-center shadow-lg">
@@ -219,12 +278,44 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                 Товар не обнаружен в первых 500 результатах. <br/>
                                 Это может быть связано с нулевыми остатками на складах региона <b>{geo}</b> или отсутствием индексации по запросу <b>"{query}"</b>.
                             </div>
-                            <button 
-                                onClick={handleReset}
-                                className="mt-6 text-indigo-600 font-bold text-sm border-b-2 border-indigo-100 pb-1"
-                            >
-                                Попробовать другой запрос
-                            </button>
+                            <div className="space-y-3 mt-6">
+                                <button 
+                                    onClick={handleReset}
+                                    className="text-indigo-600 font-bold text-sm border-b-2 border-indigo-100 pb-1"
+                                >
+                                    Попробовать другой запрос
+                                </button>
+                                
+                                {/* Блок изменения региона для случая "не найдено" */}
+                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <MapPin className="text-indigo-600" size={16}/>
+                                        <span className="text-xs font-bold text-slate-700">Попробовать другой регион</span>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 relative">
+                                            <select 
+                                                value={geo} 
+                                                onChange={e => setGeo(e.target.value)}
+                                                className="w-full pl-8 pr-4 py-2 bg-white rounded-xl font-bold text-xs outline-none border border-slate-200 appearance-none focus:ring-2 ring-indigo-100"
+                                            >
+                                                {regions.length > 0 ? regions.map(r => (
+                                                    <option key={r.key} value={r.key}>{r.label}</option>
+                                                )) : <option value="moscow">Москва</option>}
+                                            </select>
+                                            <MapPin className="absolute left-2 top-2.5 text-slate-300" size={14} />
+                                        </div>
+                                        <button 
+                                            onClick={handleCheck}
+                                            disabled={loading}
+                                            className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                        >
+                                            {loading ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>}
+                                            Проверить
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

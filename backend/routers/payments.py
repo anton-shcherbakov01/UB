@@ -70,6 +70,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
                 user.usage_reset_date = now + timedelta(days=30)
                 user.ai_requests_used = 0
                 user.extra_ai_balance = 0
+                user.cluster_requests_used = 0
                 db.add(user)
                 await db.commit()
                 logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars (quotas reset)")

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle 
+    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle, ArrowLeft
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -9,7 +9,7 @@ import {
 import { API_URL, getTgHeaders } from '../config';
 import CostEditModal from '../components/CostEditModal';
 
-const FinancePage = ({ user }) => {
+const FinancePage = ({ user, onNavigate }) => {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [editingCost, setEditingCost] = useState(null);
@@ -147,15 +147,39 @@ const FinancePage = ({ user }) => {
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
              <div className="flex justify-between items-center">
-                <div>
-                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-                        <DollarSign className="text-emerald-500" fill="currentColor" /> 
-                        Финансы
-                    </h2>
-                    <p className="text-xs text-slate-400">P&L и Unit-экономика</p>
+                <div className="flex items-center gap-3 flex-1">
+                    {onNavigate && (
+                        <button 
+                            onClick={() => onNavigate('home')} 
+                            className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors"
+                        >
+                            <ArrowLeft size={20} />
+                        </button>
+                    )}
+                    <div className="flex-1">
+                        <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                            <DollarSign className="text-emerald-500" fill="currentColor" /> 
+                            Финансы
+                        </h2>
+                        <p className="text-xs text-slate-400">P&L и Unit-экономика</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <div className="group relative">
+                        <button className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors">
+                            <HelpCircle size={20} />
+                        </button>
+                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2">P&L (Прибыль и Убытки)</div>
+                            <p className="mb-2">Отчет о финансовых результатах: выручка, себестоимость, комиссии, логистика и итоговая прибыль.</p>
+                            <div className="font-bold mb-2 mt-3">Unit Экономика</div>
+                            <p>Анализ прибыльности каждого товара: ROI, маржа, себестоимость и рекомендации по оптимизации.</p>
+                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                        </div>
+                    </div>
                 </div>
                 <div className="flex bg-white rounded-xl p-1 shadow-sm border border-slate-100">
-                    <button 
+                    <button
                         onClick={() => setViewMode('unit')}
                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'unit' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}
                     >

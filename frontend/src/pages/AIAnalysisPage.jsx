@@ -294,9 +294,15 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const getSliderParams = () => {
-        if (!productMeta) return { max: 100, min: 10, step: 10 };
+        if (!productMeta) {
+            // Если нет данных о продукте, используем лимит тарифа или 100 по умолчанию
+            const tariffLimit = currentUser?.review_analysis_limit || 100;
+            return { max: tariffLimit, min: 10, step: 10 };
+        }
         const total = productMeta.total_reviews || 0;
-        const max = total > 0 ? total : 200;
+        const tariffLimit = currentUser?.review_analysis_limit || 200;
+        // Максимум - минимум из доступных отзывов и лимита тарифа
+        const max = total > 0 ? Math.min(total, tariffLimit) : tariffLimit;
         let min = 10;
         if (max < 10) min = 1;
         let step = 10;
@@ -328,6 +334,23 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 </div>
                 
                 <div className="flex flex-col gap-2 h-full">
+                    <div className="group relative">
+                        <button className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center">
+                            <HelpCircle className="text-white" size={20} />
+                        </button>
+                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-72 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2">AI Анализ отзывов</div>
+                            <p className="mb-2">Сервис анализирует отзывы покупателей с помощью AI и предоставляет:</p>
+                            <ul className="space-y-1 text-[10px] list-disc list-inside">
+                                <li><strong>Аспектный анализ</strong> - оценка качества по ключевым характеристикам товара</li>
+                                <li><strong>Психографика</strong> - определение типа аудитории (рационалы, эмоционалы, скептики)</li>
+                                <li><strong>Стратегия роста</strong> - рекомендации по улучшению товара и маркетинга</li>
+                                <li><strong>Советы для инфографики</strong> - идеи для визуализации преимуществ</li>
+                            </ul>
+                            <p className="mt-2 text-[10px]">Чем больше отзывов проанализировано, тем точнее результат. Лимит зависит от тарифа.</p>
+                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                        </div>
+                    </div>
                     <button 
                         onClick={() => navigate('/')} 
                         className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"
@@ -489,6 +512,11 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                     <span>{sParams.min}</span>
                                     <span>{sParams.max} (Max)</span>
                                 </div>
+                                {currentUser?.review_analysis_limit && (
+                                    <p className="text-[10px] text-amber-600 text-center mt-1 font-medium">
+                                        Лимит тарифа: до {currentUser.review_analysis_limit} отзывов
+                                    </p>
+                                )}
                                 <p className="text-[10px] text-slate-400 text-center mt-2">
                                     Больше отзывов = точнее результат, но дольше ожидание
                                 </p>

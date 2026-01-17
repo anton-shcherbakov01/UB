@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from concurrent.futures import ThreadPoolExecutor
 
 from database import get_db, User, SupplySettings
-from dependencies import get_current_user, get_redis_client
+from dependencies import get_current_user, get_redis_client, QuotaCheck
 from wb_api.statistics import WBStatisticsAPI
 from services.supply import supply_service
 from services.wb_supply_service import WBSupplyService
@@ -210,3 +210,56 @@ async def get_warehouse_coefficients(
     except Exception as e:
         logger.error(f"Warehouse fetch error: {e}")
         return []
+
+@router.get("/report/supply-pdf")
+async def generate_supply_pdf(
+    user: User = Depends(QuotaCheck(feature_flag="pnl_full")),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate Supply analysis PDF report. Requires Analyst+ plan."""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+    
+    # Get supply analysis data
+    try:
+        settings = await get_or_create_settings(db, user.id)
+        config = {
+            "lead_time": settings.lead_time,
+            "min_stock_days": settings.min_stock_days,
+            "abc_a_share": settings.abc_a_share
+        }
+        
+        wb_api = WBStatisticsAPI(user.wb_api_token)
+        turnover_data = await wb_api.get_turnover_data()
+        stocks = turnover_data.get("stocks", [])
+        orders = turnover_data.get("orders", [])
+        
+        analysis = supply_service.analyze_supply(stocks, orders, config)
+    except Exception as e:
+        logger.error(f"Supply PDF data fetch error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка получения данных: {str(e)}")
+    
+    # Generate PDF in executor
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    
+    from services.pdf_generator import pdf_generator
+    from datetime import datetime
+    
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_supply_pdf,
+        analysis
+    )
+    
+    filename = f"supply_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(pdf_bytes)),
+            'Cache-Control': 'no-cache'
+        }
+    )

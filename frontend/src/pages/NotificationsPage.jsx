@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock } from 'lucide-react';
+import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
 // Карта цветов для Tailwind, чтобы избежать динамических строк, которые Tailwind не компилирует
@@ -66,9 +66,27 @@ const NotificationsPage = ({ onNavigate }) => {
         <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
             <div className="flex items-center gap-3">
                 <button onClick={() => onNavigate('profile')} className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm"><ArrowLeft size={20} className="text-slate-500"/></button>
-                <div>
+                <div className="flex-1">
                     <h1 className="text-2xl font-black text-slate-900 leading-none">Уведомления</h1>
                     <p className="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-wider">Настройка Telegram бота</p>
+                    <p className="text-[9px] text-amber-600 font-medium mt-1">⏰ Все время указано в часовом поясе МСК (UTC+3)</p>
+                </div>
+                <div className="group relative">
+                    <button className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors">
+                        <HelpCircle size={20}/>
+                    </button>
+                    <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                        <div className="font-bold mb-2">Настройки уведомлений</div>
+                        <p className="mb-2">Включите уведомления о важных событиях в вашем бизнесе:</p>
+                        <ul className="space-y-1 text-[10px]">
+                            <li><strong>Новые заказы</strong> - мгновенные уведомления при поступлении заказа</li>
+                            <li><strong>Изменение цен</strong> - отслеживание динамики цен на ваши товары</li>
+                            <li><strong>Продажи</strong> - ежедневные отчеты о продажах</li>
+                            <li><strong>Воронка продаж</strong> - анализ конверсии по этапам воронки</li>
+                        </ul>
+                        <p className="mt-2 text-[10px]">Все уведомления приходят в Telegram бот.</p>
+                        <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                    </div>
                 </div>
             </div>
 
