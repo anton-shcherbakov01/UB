@@ -9,6 +9,7 @@ import requests
 import asyncio
 import aiohttp
 import zipfile
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -174,6 +175,35 @@ class ProductParser:
         except: pass
         return 0
 
+    # --- БЕЗОПАСНЫЙ ЗАПУСК ASYNC КОДА В CELERY ---
+    
+    def _safe_run_async(self, coro):
+        """
+        Безопасный запуск async кода в Celery (защита от RuntimeError).
+        Проверяет наличие running event loop и использует ThreadPoolExecutor если нужно.
+        """
+        try:
+            # Пытаемся получить running loop
+            asyncio.get_running_loop()
+            # Если дошли сюда - loop уже есть, нужно использовать другой подход
+            # Создаем новый loop в отдельном потоке
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
+        except RuntimeError:
+            # Нет running loop - безопасно использовать asyncio.run()
+            return asyncio.run(coro)
+        except Exception as e:
+            logger.error(f"Error in _safe_run_async: {e}", exc_info=True)
+            # Fallback: создаем новый loop вручную
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
     # --- МЕТОДЫ ДЛЯ API / ROUTER ---
 
     async def get_review_stats(self, sku: int):
@@ -218,8 +248,8 @@ class ProductParser:
         total_qty = 0
 
         try:
-            # Используем asyncio.run() для корректной работы в Celery
-            data = asyncio.run(self._find_card_json(sku))
+            # Используем безопасный запуск async кода для корректной работы в Celery
+            data = self._safe_run_async(self._find_card_json(sku))
             
             if data:
                 static_info["name"] = data.get('imt_name') or data.get('subj_name')
@@ -278,8 +308,8 @@ class ProductParser:
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
-            # Используем asyncio.run() для корректной работы в Celery
-            static_data = asyncio.run(self._find_card_json(sku))
+            # Используем безопасный запуск async кода для корректной работы в Celery
+            static_data = self._safe_run_async(self._find_card_json(sku))
 
             if not static_data: return {"status": "error", "message": "Card not found"}
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')

@@ -8,6 +8,9 @@
         <console>1</console>
     </logger>
 
+    <!-- Слушаем только IPv4 (убирает ошибки DNS error на серверах без IPv6) -->
+    <listen_host>0.0.0.0</listen_host>
+
     <!-- ОПТИМИЗАЦИЯ ПАМЯТИ ДЛЯ 16GB RAM -->
     
     <!-- 1. Максимум памяти для процесса ClickHouse (4GB) -->

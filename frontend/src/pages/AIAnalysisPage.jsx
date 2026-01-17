@@ -100,21 +100,38 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 method: 'POST', 
                 headers: getTgHeaders() 
             });
-            const data = await res.json();
             
-            // Check if request failed - STOP IMMEDIATELY if error
+            // Проверяем HTTP статус
             if (!res.ok) {
+                let errorData;
+                try {
+                    errorData = await res.json();
+                } catch {
+                    errorData = { detail: 'Неизвестная ошибка' };
+                }
                 setLoading(false);
                 setStep('config');
-                alert(data.detail || `Ошибка ${res.status}: Не удалось запустить анализ`);
+                alert(errorData.detail || `Ошибка ${res.status}: Не удалось запустить анализ`);
                 return; // Exit immediately, don't start polling
             }
             
-            const taskId = data.task_id;
-            if (!taskId) {
+            const data = await res.json();
+            
+            // Проверяем статус в JSON ответе (может быть ошибка даже при 200 OK)
+            if (data.status && data.status !== "accepted") {
                 setLoading(false);
                 setStep('config');
-                alert('Не получен task_id от сервера');
+                alert(data.error || data.detail || "Ошибка запуска анализа");
+                return; // Exit immediately
+            }
+            
+            // Проверяем наличие и валидность task_id
+            const taskId = data.task_id;
+            if (!taskId || typeof taskId !== 'string') {
+                setLoading(false);
+                setStep('config');
+                alert('Не получен корректный task_id от сервера');
+                console.error("Invalid task_id received:", data);
                 return; // Exit immediately
             }
             
@@ -205,7 +222,9 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
         } catch(e) {
             setLoading(false);
             setStep('config');
-            alert(e.message);
+            const errorMsg = e.message || "Неизвестная ошибка при запуске анализа";
+            alert(errorMsg);
+            console.error("Analysis start error:", e);
         } finally {
             // Ensure loading is false even if something unexpected happens
             setLoading(false);

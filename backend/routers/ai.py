@@ -55,8 +55,19 @@ async def start_ai_analysis(
     Requires ai_requests quota.
     """
     try:
-        # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
-        task = analyze_reviews_task.delay(sku, limit, user.id)
+        # Проверка доступности Celery и создание задачи с обработкой ошибок
+        task = None
+        try:
+            task = analyze_reviews_task.delay(sku, limit, user.id)
+            if not task:
+                raise HTTPException(status_code=500, detail="Не удалось создать задачу анализа: задача не создана")
+            if not task.id or not isinstance(task.id, str):
+                raise HTTPException(status_code=500, detail="Не удалось создать задачу анализа: невалидный task_id")
+        except HTTPException:
+            raise
+        except Exception as celery_error:
+            logger.error(f"Celery task creation failed for SKU {sku}, user {user.id}: {celery_error}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(celery_error)}")
         
         # Add task to queue and get position (with error handling)
         queue_info = {
@@ -75,8 +86,12 @@ async def start_ai_analysis(
             logger.warning(f"Queue service error (non-critical): {queue_error}")
             # Continue without queue info if queue service fails
         
-        # Increment usage after task is accepted
-        await increment_usage(user, "ai_requests", amount=1, db=db)
+        # Только после успешного создания задачи списываем квоту
+        try:
+            await increment_usage(user, "ai_requests", amount=1, db=db)
+        except Exception as usage_error:
+            logger.error(f"Failed to increment usage for user {user.id}: {usage_error}", exc_info=True)
+            # Не прерываем выполнение, но логируем ошибку
         
         return {
             "status": "accepted", 
@@ -85,8 +100,10 @@ async def start_ai_analysis(
             "position": queue_info.get("position", 0),
             "is_priority": queue_info.get("is_priority", False)
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error starting AI analysis: {e}", exc_info=True)
+        logger.error(f"Error starting AI analysis for SKU {sku}, user {user.id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(e)}")
 
 @router.get("/ai/queue/{task_id}")

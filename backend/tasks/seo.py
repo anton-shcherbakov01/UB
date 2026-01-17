@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import json
 from typing import List
 
 from celery_app import celery_app
@@ -60,6 +61,17 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
                 pass
             return {"status": "error", "error": "Некорректная структура данных о товаре"}
         
+        # Проверка сериализуемости данных перед дальнейшей обработкой
+        try:
+            json.dumps(product_info)  # Проверка сериализуемости
+        except (TypeError, ValueError) as ser_error:
+            logger.error(f"Product info not serializable for SKU {sku}: {ser_error}")
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
+            return {"status": "error", "error": "Данные не могут быть обработаны (ошибка сериализации)"}
+        
         self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
         
         # Safely extract reviews
@@ -100,17 +112,27 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
             logger.error(f"AI analysis error for SKU {sku}: {ai_result['_error']}")
             # Не прерываем выполнение, но пометим в результате
 
-        # Build final result safely
+        # Build final result safely with explicit type conversion
         try:
             final_result = {
                 "status": "success",
-                "sku": sku,
-                "product_name": product_name,
-                "image": product_info.get('image') or product_info.get('image_url'),
-                "rating": product_info.get('rating', 0.0),
-                "reviews_count": len(reviews),
-                "ai_analysis": ai_result
+                "sku": int(sku),
+                "product_name": str(product_name),
+                "image": str(product_info.get('image') or product_info.get('image_url') or ""),
+                "rating": float(product_info.get('rating', 0.0)),
+                "reviews_count": int(len(reviews)),
+                "ai_analysis": ai_result  # ai_result уже должен быть словарем
             }
+            
+            # Проверка сериализуемости финального результата
+            json.dumps(final_result)
+        except (TypeError, ValueError) as ser_error:
+            logger.error(f"Final result not serializable for SKU {sku}: {ser_error}", exc_info=True)
+            try:
+                queue_service.remove_task_from_queue(self.request.id)
+            except:
+                pass
+            return {"status": "error", "error": f"Ошибка сериализации результата: {str(ser_error)}"}
         except Exception as result_error:
             logger.error(f"Error building final result for SKU {sku}: {result_error}", exc_info=True)
             try:
