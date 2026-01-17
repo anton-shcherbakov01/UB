@@ -1,21 +1,49 @@
 <?xml version="1.0"?>
 <clickhouse>
-    <!-- Maximum memory usage for the server (5GB for 16GB RAM server) -->
-    <max_server_memory_usage>5000000000</max_server_memory_usage>
+    <!-- 
+        ОПТИМИЗАЦИЯ ДЛЯ 16GB RAM (С УЧЕТОМ SELENIUM И POSTGRES)
+        Выделяем ClickHouse строго ~4GB, чтобы оставить 12GB остальным сервисам.
+    -->
+
+    <!-- Максимум памяти для всего сервера (4GB) -->
+    <max_server_memory_usage>4294967296</max_server_memory_usage>
     
-    <!-- Mark cache size (512MB) -->
-    <mark_cache_size>536870912</mark_cache_size>
+    <!-- 
+        Mark cache (кэш "засечек" данных).
+        Критичен для скорости SELECT. 
+        Уменьшаем до 256MB (было 512MB).
+    -->
+    <mark_cache_size>268435456</mark_cache_size>
     
-    <!-- Uncompressed cache size (1GB) -->
-    <uncompressed_cache_size>1073741824</uncompressed_cache_size>
+    <!-- 
+        Кэш разжатых данных. 
+        Жрет много памяти. Для экономии уменьшаем до 256MB (было 1GB).
+    -->
+    <uncompressed_cache_size>268435456</uncompressed_cache_size>
     
-    <!-- Query memory limit (2GB per query) -->
-    <max_memory_usage>2147483648</max_memory_usage>
+    <!-- 
+        Лимит на ОДИН запрос. 
+        Ставим 1.5GB. Если запрос требует больше - он упадет, но не уронит сервер.
+    -->
+    <max_memory_usage>1610612736</max_memory_usage>
     
-    <!-- Maximum number of concurrent queries -->
-    <max_concurrent_queries>100</max_concurrent_queries>
+    <!-- 
+        Лимит конкурентных запросов. 
+        100 - это много для аналитики. Ставим 20, чтобы не забивать очередь.
+    -->
+    <max_concurrent_queries>20</max_concurrent_queries>
     
-    <!-- Background pool settings -->
-    <background_pool_size>16</background_pool_size>
+    <!-- 
+        Фоновые процессы (слияние кусков данных). 
+        По умолчанию 16. Это создает нагрузку при старте.
+        Уменьшаем до 4. Данные будут сливаться медленнее, но стабильнее.
+    -->
+    <background_pool_size>4</background_pool_size>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- Логи (оставляем стандартные настройки образа, чтобы видеть их в docker logs) -->
+    <logger>
+        <level>information</level>
+        <console>1</console>
+    </logger>
 </clickhouse>
