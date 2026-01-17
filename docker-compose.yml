@@ -34,7 +34,7 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      # Раскомментировано. Этот файл будет применен поверх дефолтного конфига.
+      # Монтируем кастомный конфиг (память и т.д.)
       - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/my_custom_config.xml:ro
     environment:
       - CLICKHOUSE_DB=wb_analytics
@@ -46,12 +46,12 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      # Проверка через wget надежнее для Docker, чем clickhouse-client
-      test: ["CMD", "wget", "--no-verbose", "--spider", "--tries=1", "http://localhost:8123/ping"]
-      interval: 5s
+      # Увеличили start_period и тайм-ауты для надежности
+      test: ["CMD-SHELL", "wget --no-verbose --spider --tries=1 http://localhost:8123/ping || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 20
-      start_period: 10s
+      retries: 5
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
