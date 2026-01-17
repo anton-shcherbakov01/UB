@@ -14,7 +14,16 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     try:
         self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
         
-        product_info = parser_service.get_full_product_info(sku, limit)
+        try:
+            product_info = parser_service.get_full_product_info(sku, limit)
+        except Exception as parse_error:
+            logger.error(f"Product parsing exception for SKU {sku}: {parse_error}", exc_info=True)
+            return {"status": "error", "error": f"Ошибка парсинга товара: {str(parse_error)}"}
+        
+        if not product_info:
+            logger.error(f"Product info is None for SKU {sku}")
+            return {"status": "error", "error": "Не удалось получить данные о товаре"}
+        
         if product_info.get("status") == "error":
             error_msg = product_info.get("message", "Ошибка парсинга товара")
             logger.error(f"Product parsing error for SKU {sku}: {error_msg}")
@@ -23,12 +32,27 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
         self.update_state(state='PROGRESS', meta={'status': 'ABSA Аналитика (DeepSeek-V3)...'})
         
         reviews = product_info.get('reviews', [])
+        if not isinstance(reviews, list):
+            logger.warning(f"Reviews is not a list for SKU {sku}, got {type(reviews)}")
+            reviews = []
+        
         product_name = product_info.get('name', f"Товар {sku}")
-        ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
+        
+        try:
+            ai_result = analysis_service.analyze_reviews_with_ai(reviews, product_name)
+        except Exception as ai_error:
+            logger.error(f"AI analysis exception for SKU {sku}: {ai_error}", exc_info=True)
+            ai_result = {
+                "_error": f"Ошибка AI анализа: {str(ai_error)}",
+                "aspects": [],
+                "audience_stats": {"rational_percent": 0, "emotional_percent": 0, "skeptic_percent": 0},
+                "global_summary": "Ошибка при анализе отзывов",
+                "strategy": []
+            }
 
         # Проверяем наличие ошибки в AI ответе
         if ai_result.get("_error"):
-            logger.error(f"AI analysis error: {ai_result['_error']}")
+            logger.error(f"AI analysis error for SKU {sku}: {ai_result['_error']}")
             # Не прерываем выполнение, но пометим в результате
 
         final_result = {
@@ -42,12 +66,16 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
         }
 
         if user_id:
-            title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
-            save_history_sync(user_id, sku, 'ai', title, final_result)
+            try:
+                title = f"ABSA: {product_name[:30]} ({len(reviews)} отз.)"
+                save_history_sync(user_id, sku, 'ai', title, final_result)
+            except Exception as save_error:
+                logger.error(f"Failed to save history for SKU {sku}, user {user_id}: {save_error}", exc_info=True)
+                # Не прерываем выполнение, результат все равно возвращаем
 
         return final_result
     except Exception as e:
-        logger.error(f"Analyze reviews task error: {e}", exc_info=True)
+        logger.error(f"Analyze reviews task error for SKU {sku}: {e}", exc_info=True)
         return {"status": "error", "error": str(e)}
 
 @celery_app.task(bind=True, name="generate_seo_task")

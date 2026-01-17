@@ -152,26 +152,52 @@ class WBStatisticsMixin(WBApiBase):
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """Сводная статистика за сегодня для уведомлений"""
+        import logging
+        logger = logging.getLogger("WBStatistics")
+        
         today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
         headers = {"Authorization": token}
         
-        # 1. Заказы и Продажи
-        async with aiohttp.ClientSession() as session:
-            orders_data = await self._get_orders_mixin(session, token, today_start, use_cache=False)
-            sales = await self.get_sales_since(token, today_start)
-        
-        valid_sales = [s for s in sales if not str(s.get('saleID', '')).startswith('R')]
-        
-        # 2. Воронка (Эмуляция, так как требует отдельного API)
-        # В реальности здесь нужен запрос к NM-Report API
-        return {
-            "orders_sum": orders_data.get("sum", 0),
-            "orders_count": orders_data.get("count", 0),
-            "sales_sum": sum(s.get('priceWithDiscount', 0) for s in valid_sales),
-            "sales_count": len(valid_sales),
-            "visitors": 0, # Заглушка до реализации NM-Report
-            "addToCart": 0
-        }
+        # 1. Заказы и Продажи (всегда без кэша для актуальных данных)
+        try:
+            async with aiohttp.ClientSession() as session:
+                orders_data = await self._get_orders_mixin(session, token, today_start, use_cache=False)
+                sales = await self.get_sales_since(token, today_start)
+            
+            valid_sales = [s for s in sales if not str(s.get('saleID', '')).startswith('R')]
+            
+            # Пересчитываем суммы на всякий случай
+            orders_sum = orders_data.get("sum", 0)
+            if not orders_sum and orders_data.get("items"):
+                # Если сумма 0, но есть items, пересчитываем
+                valid_orders = [x for x in orders_data.get("items", []) if not x.get("isCancel")]
+                orders_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            
+            sales_sum = sum(s.get('priceWithDiscount', 0) for s in valid_sales)
+            
+            logger.debug(f"Statistics today: orders_sum={orders_sum}, sales_sum={sales_sum}, orders_count={orders_data.get('count', 0)}, sales_count={len(valid_sales)}")
+            
+            # 2. Воронка (Эмуляция, так как требует отдельного API)
+            # В реальности здесь нужен запрос к NM-Report API
+            return {
+                "orders_sum": int(orders_sum),
+                "orders_count": orders_data.get("count", 0),
+                "sales_sum": int(sales_sum),
+                "sales_count": len(valid_sales),
+                "visitors": 0, # Заглушка до реализации NM-Report
+                "addToCart": 0
+            }
+        except Exception as e:
+            logger.error(f"Error getting statistics today: {e}", exc_info=True)
+            # Возвращаем пустые данные при ошибке
+            return {
+                "orders_sum": 0,
+                "orders_count": 0,
+                "sales_sum": 0,
+                "sales_count": 0,
+                "visitors": 0,
+                "addToCart": 0
+            }
 
     async def get_my_stocks(self, token: str):
         if not token: return []
