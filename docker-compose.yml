@@ -15,7 +15,7 @@ services:
     ports: ["5433:5432"]
     command: postgres -c shared_buffers=1GB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wb_monitor"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -46,8 +46,9 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      # Увеличили start_period и тайм-ауты для надежности
-      test: ["CMD-SHELL", "wget --no-verbose --spider --tries=1 http://localhost:8123/ping || exit 1"]
+      # FIX: Используем встроенный клиент, так как wget нет в образе.
+      # start_period: 60s дает базе время на "разогрев" без пометки unhealthy.
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "123", "--query", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 5
