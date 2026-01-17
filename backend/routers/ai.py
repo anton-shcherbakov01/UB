@@ -43,13 +43,21 @@ async def start_ai_analysis(
     user: User = Depends(QuotaCheck("ai_requests")),
     db: AsyncSession = Depends(get_db)
 ):
-    # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
-    task = analyze_reviews_task.delay(sku, limit, user.id)
-    
-    # Increment usage after task is accepted
-    await increment_usage(user, "ai_requests", amount=1, db=db)
-    
-    return {"status": "accepted", "task_id": task.id}
+    """
+    Start AI analysis of product reviews.
+    Requires ai_requests quota.
+    """
+    try:
+        # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
+        task = analyze_reviews_task.delay(sku, limit, user.id)
+        
+        # Increment usage after task is accepted
+        await increment_usage(user, "ai_requests", amount=1, db=db)
+        
+        return {"status": "accepted", "task_id": task.id}
+    except Exception as e:
+        logger.error(f"Error starting AI analysis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(e)}")
 
 @router.get("/ai/result/{task_id}")
 def get_ai_result(task_id: str):

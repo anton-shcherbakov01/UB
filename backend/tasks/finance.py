@@ -87,8 +87,12 @@ class FinancialSyncProcessor:
 
             records = df.to_dict('records')
             if records:
-                ch_service.insert_reports(records)
-                logger.info(f" flushed {len(records)} records to ClickHouse for user {self.user_id}")
+                try:
+                    ch_service.insert_reports(records)
+                    logger.info(f"✅ Flushed {len(records)} records to ClickHouse for user {self.user_id}")
+                except Exception as e:
+                    # Silently skip if ClickHouse is unavailable (already logged in insert_reports)
+                    pass
             self.buffer = []
         except Exception as e:
             logger.error(f"Failed to flush buffer: {e}")

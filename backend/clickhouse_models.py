@@ -13,6 +13,8 @@ class ClickHouseService:
         self.password = os.getenv("CLICKHOUSE_PASSWORD", "")
         self.database = os.getenv("CLICKHOUSE_DB", "wb_analytics")
         self.client = None
+        self._last_connect_attempt = None
+        self._connect_backoff_seconds = 60  # Don't retry connection more often than once per minute
 
     def connect(self, retry_count=3, retry_delay=5):
         """Establishes connection to ClickHouse and ensures DB exists."""
@@ -51,15 +53,29 @@ class ClickHouseService:
 
     def get_client(self):
         """Get ClickHouse client, connecting if necessary."""
-        if not self.client:
-            try:
-                self.connect()
-            except Exception as e:
-                logger.warning(f"ClickHouse connection failed (will retry on next use): {e}")
-                # Return None to indicate connection is not available
-                # This allows graceful degradation
-                return None
-        return self.client
+        # If client exists, return it
+        if self.client:
+            return self.client
+        
+        # Check if we should attempt connection (backoff to avoid spam)
+        import time
+        now = time.time()
+        if self._last_connect_attempt and (now - self._last_connect_attempt) < self._connect_backoff_seconds:
+            # Too soon to retry, return None without logging
+            return None
+        
+        # Attempt connection
+        self._last_connect_attempt = now
+        try:
+            self.connect()
+            return self.client
+        except Exception as e:
+            # Only log error on first attempt or after backoff period
+            if not self._last_connect_attempt or (now - self._last_connect_attempt) >= self._connect_backoff_seconds:
+                logger.warning(f"ClickHouse connection unavailable (will retry later): {e}")
+            # Return None to indicate connection is not available
+            # This allows graceful degradation
+            return None
 
     def init_schema(self):
         """

@@ -16,6 +16,8 @@ import AdminPage from './pages/AdminPage';
 import AdvancedAnalyticsPage from './pages/AdvancedAnalyticsPage';
 import SlotsPage from './pages/SlotsPage';
 import NotificationsPage from './pages/NotificationsPage';
+import OfferPage from './pages/OfferPage';
+import PrivacyPage from './pages/PrivacyPage';
 
 const AppContent = () => {
   const [user, setUser] = useState(null);
@@ -61,6 +63,8 @@ const AppContent = () => {
             <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} />} />
             <Route path="/notifications" element={<NotificationsPage onNavigate={handleTabChange} />} />
+            <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
+            <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <TabNav active={activeTab} setTab={handleTabChange} isAdmin={user?.is_admin} />
