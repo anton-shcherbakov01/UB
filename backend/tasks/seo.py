@@ -15,17 +15,21 @@ def analyze_reviews_task(self, sku: int, limit: int = 50, user_id: int = None):
     try:
         self.update_state(state='PROGRESS', meta={'status': 'Парсинг карточки и отзывов...'})
         
+        # Wrap parsing in try-except to catch any exceptions
+        product_info = None
         try:
             product_info = parser_service.get_full_product_info(sku, limit)
         except Exception as parse_error:
             logger.error(f"Product parsing exception for SKU {sku}: {parse_error}", exc_info=True)
             return {"status": "error", "error": f"Ошибка парсинга товара: {str(parse_error)}"}
         
-        if not product_info:
+        # Check if product_info is None or empty
+        if product_info is None:
             logger.error(f"Product info is None for SKU {sku}")
             return {"status": "error", "error": "Не удалось получить данные о товаре"}
         
-        if product_info.get("status") == "error":
+        # Check if product_info has error status
+        if isinstance(product_info, dict) and product_info.get("status") == "error":
             error_msg = product_info.get("message", "Ошибка парсинга товара")
             logger.error(f"Product parsing error for SKU {sku}: {error_msg}")
             return {"status": "error", "error": error_msg}

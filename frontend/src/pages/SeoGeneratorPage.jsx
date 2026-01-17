@@ -3,7 +3,7 @@ import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, 
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
-const SeoGeneratorPage = () => {
+const SeoGeneratorPage = ({ user }) => {
     const [step, setStep] = useState(1);
     const [sku, setSku] = useState('');
     const [loading, setLoading] = useState(false);

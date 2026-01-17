@@ -23,6 +23,16 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
     const [error, setError] = useState(null);
 
     useEffect(() => { loadData(); }, []);
+    
+    // Обновляем данные пользователя при фокусе страницы (после использования сервисов)
+    useEffect(() => {
+        const handleFocus = () => {
+            loadData(); // Обновляем данные при возврате на страницу
+        };
+        
+        window.addEventListener('focus', handleFocus);
+        return () => window.removeEventListener('focus', handleFocus);
+    }, []);
 
     const loadData = async () => {
         try {
@@ -39,6 +49,9 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                 setWbToken(uData.wb_token_preview || '');
                 fetchScopes();
             }
+            
+            // Update user state to reflect latest limits
+            setUser(uData);
         } catch (e) {
             console.error(e);
             setError(e.message);

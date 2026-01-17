@@ -33,7 +33,7 @@ class WBStatisticsMixin(WBApiBase):
         "common": "https://common-api.wildberries.ru",
         "content": "https://content-api.wildberries.ru",
         "statistics": "https://statistics-api.wildberries.ru",
-        "advert": "https://advert-api.wb.ru",
+        "advert": "https://advert-api.wildberries.ru",  # Исправлено: правильный URL для advert API
         "marketplace": "https://marketplace-api.wildberries.ru",
         "feedbacks": "https://feedbacks-api.wildberries.ru"
     }
@@ -74,20 +74,25 @@ class WBStatisticsMixin(WBApiBase):
                     raw_res[key] = res if isinstance(res, bool) else False
 
         # Маппинг для UI (13 категорий)
+        # promotion проверяется через advert API
+        promotion_scope = raw_res.get("advert", False)
+        # users проверяется через marketplace API (управление пользователями доступно через marketplace)
+        users_scope = raw_res.get("marketplace", False)
+        
         return {
-            "content": raw_res["content"],
-            "marketplace": raw_res["marketplace"],
-            "analytics": raw_res["stats"],
-            "promotion": raw_res["advert"],
-            "returns": raw_res["marketplace"],
-            "documents": raw_res["content"],
-            "statistics": raw_res["stats"],
-            "finance": raw_res["stats"],
-            "supplies": raw_res["marketplace"] or raw_res["content"],
-            "chat": raw_res["feedbacks"],
-            "questions": raw_res["feedbacks"],
-            "prices": raw_res["prices"] or raw_res["content"],
-            "users": True 
+            "content": raw_res.get("content", False),
+            "marketplace": raw_res.get("marketplace", False),
+            "analytics": raw_res.get("stats", False),
+            "promotion": promotion_scope,  # Исправлено: используем значение из advert
+            "returns": raw_res.get("marketplace", False),
+            "documents": raw_res.get("content", False),
+            "statistics": raw_res.get("stats", False),
+            "finance": raw_res.get("stats", False),
+            "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
+            "chat": raw_res.get("feedbacks", False),
+            "questions": raw_res.get("feedbacks", False),
+            "prices": raw_res.get("prices", False) or raw_res.get("content", False),
+            "users": users_scope  # Исправлено: проверяем через marketplace, а не всегда True
         }
 
     async def _probe(self, session, method, url, headers, params=None) -> bool:
@@ -181,15 +186,20 @@ class WBStatisticsMixin(WBApiBase):
             
             logger.debug(f"Statistics today: orders_sum={orders_sum}, sales_sum={sales_sum}, orders_count={orders_data.get('count', 0)}, sales_count={len(valid_sales)}")
             
-            # 2. Воронка (Эмуляция, так как требует отдельного API)
-            # В реальности здесь нужен запрос к NM-Report API
+            # 2. Воронка продаж (visitors и addToCart)
+            # Примечание: Данные о переходах на карточку и добавлениях в корзину недоступны через стандартный Statistics API
+            # Для получения этих данных требуется доступ к NM-Report API, который требует отдельной авторизации
+            # Пока возвращаем 0 - фронтенд будет отображать "данные недоступны"
+            visitors = 0  # Данные недоступны через текущий API (требуется NM-Report API)
+            addToCart = 0  # Данные недоступны через текущий API (требуется NM-Report API)
+            
             return {
                 "orders_sum": int(orders_sum),
                 "orders_count": orders_data.get("count", 0),
                 "sales_sum": int(sales_sum),
                 "sales_count": len(valid_sales),
-                "visitors": 0, # Заглушка до реализации NM-Report
-                "addToCart": 0
+                "visitors": visitors,
+                "addToCart": addToCart
             }
         except Exception as e:
             logger.error(f"Error getting statistics today: {e}", exc_info=True)

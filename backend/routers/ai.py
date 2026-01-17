@@ -58,13 +58,22 @@ async def start_ai_analysis(
         # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
         task = analyze_reviews_task.delay(sku, limit, user.id)
         
-        # Add task to queue and get position
-        queue_info = queue_service.add_task_to_queue(
-            task_id=task.id,
-            user_id=user.id,
-            user_plan=user.subscription_plan,
-            task_type="ai_analysis"
-        )
+        # Add task to queue and get position (with error handling)
+        queue_info = {
+            "queue": "normal",
+            "position": 0,
+            "is_priority": False
+        }
+        try:
+            queue_info = queue_service.add_task_to_queue(
+                task_id=task.id,
+                user_id=user.id,
+                user_plan=user.subscription_plan,
+                task_type="ai_analysis"
+            )
+        except Exception as queue_error:
+            logger.warning(f"Queue service error (non-critical): {queue_error}")
+            # Continue without queue info if queue service fails
         
         # Increment usage after task is accepted
         await increment_usage(user, "ai_requests", amount=1, db=db)
