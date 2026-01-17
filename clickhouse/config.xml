@@ -25,4 +25,14 @@
     <!-- 5. Фоновые процессы -->
     <background_pool_size>4</background_pool_size>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+
+    <!-- 
+        6. ВАЖНОЕ ИСПРАВЛЕНИЕ:
+        Мы уменьшили background_pool_size до 4.
+        Значит, мы должны уменьшить и требование по резерву слотов для мутаций.
+        (4 * 2 = 8, значит значение должно быть меньше 8. Ставим 2).
+    -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+    </merge_tree>
 </clickhouse>
