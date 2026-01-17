@@ -29,7 +29,8 @@ async def scan_product(sku: int):
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    limits = {"free": 3, "pro": 50, "business": 500}
+    # Лимиты слотов для мониторинга по тарифам
+    limits = {"start": 3, "analyst": 50, "strategist": 500}
     limit = limits.get(user.subscription_plan, 3)
     
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
@@ -102,8 +103,8 @@ def get_status_endpoint(task_id: str):
 
 @router.get("/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Upgrade to PRO")
+    if user.subscription_plan == "start":
+        raise HTTPException(403, "Upgrade to Analyst or Strategist")
 
     item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
     if not item: raise HTTPException(404, "Item not found")

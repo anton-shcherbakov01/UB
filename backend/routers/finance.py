@@ -88,7 +88,7 @@ async def get_stories(user: User = Depends(get_current_user)):
             "id": 1, "title": "API", "val": "Подключи", "color": "bg-slate-400", "subtitle": "Нет данных"
         })
         
-    if user.subscription_plan == "free":
+    if user.subscription_plan == "start":
         stories.append({
             "id": 2, "title": "Биддер", "val": "OFF", "color": "bg-purple-500", "subtitle": "Upgrade"
         })
