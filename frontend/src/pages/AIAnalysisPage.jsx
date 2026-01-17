@@ -68,7 +68,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     const [metaLoading, setMetaLoading] = useState(false);
     
     // Analysis Config
-    const [reviewLimit, setReviewLimit] = useState(30); // Default 30 is safer
+    const [reviewLimit, setReviewLimit] = useState(100);
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
     const [status, setStatus] = useState('');
@@ -78,12 +78,12 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
 
     // СБРОС СОСТОЯНИЯ
     const handleReset = () => {
-        cancelTokenRef.current = true;
+        cancelTokenRef.current = true; // Cancel any ongoing polling
         setSku('');
         setStep('input');
         setProductMeta(null);
         setResult(null);
-        setReviewLimit(30);
+        setReviewLimit(100);
         setStatus('');
         setLoading(false);
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -91,7 +91,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const handleCheckProduct = async () => {
-        if (!sku || sku.length < 5) return;
+        if (!sku) return;
         setMetaLoading(true);
         try {
             const res = await fetch(`${API_URL}/api/ai/check/${sku}`, { 
@@ -107,9 +107,9 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             
             const total = data.total_reviews || 0;
             
-            let safeLimit = 30; // Default
-            if (total > 0 && total < 30) safeLimit = total;
-            // Если отзывов очень много, не ставим сразу 100, чтобы не грузить долгим ожиданием
+            let safeLimit = 100;
+            if (total > 0 && total < 100) safeLimit = total;
+            if (total === 0) safeLimit = 50; 
             
             setReviewLimit(safeLimit);
             setStep('config');
@@ -121,7 +121,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const runAnalysis = async () => {
-        cancelTokenRef.current = false;
+        cancelTokenRef.current = false; // Reset cancel flag
         setLoading(true);
         setStep('analyzing');
         setResult(null);
@@ -133,22 +133,41 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 headers: getTgHeaders() 
             });
             
+            // Проверяем HTTP статус
             if (!res.ok) {
                 let errorData;
                 try { errorData = await res.json(); } catch { errorData = { detail: `Ошибка ${res.status}` }; }
-                throw new Error(errorData.detail || "Не удалось запустить анализ");
+                setLoading(false);
+                setStep('config');
+                alert(errorData.detail || "Не удалось запустить анализ");
+                return; // Exit immediately
             }
             
             const data = await res.json();
             
+            // Проверяем статус в JSON ответе
             if (data.status && data.status !== "accepted" && data.status !== "success") {
-                throw new Error(data.error || data.detail || "Ошибка запуска анализа");
+                setLoading(false);
+                setStep('config');
+                alert(data.error || data.detail || "Ошибка запуска анализа");
+                return; // Exit immediately
             }
             
+            // Проверяем наличие task_id
             const taskId = data.task_id;
-            if (!taskId) throw new Error('Не получен корректный task_id от сервера');
+            if (!taskId || typeof taskId !== 'string') {
+                setLoading(false);
+                setStep('config');
+                alert('Не получен корректный task_id от сервера');
+                return; // Exit immediately
+            }
             
-            // Get initial queue info if available
+            // Update user info after successful task creation
+            if (onUserUpdate) {
+                onUserUpdate();
+            }
+            
+            // Get queue information
             const queueInfo = {
                 queue: data.queue || "normal",
                 position: data.position || 0,
@@ -157,41 +176,48 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
 
             // POLLING LOOP
             let attempts = 0;
-            // Увеличиваем таймаут ожидания до 3-4 минут (для больших отчетов)
             while(attempts < 120 && !cancelTokenRef.current) {
-                if (cancelTokenRef.current) return;
+                // Check cancel flag
+                if (cancelTokenRef.current) {
+                    setLoading(false);
+                    return;
+                }
                 
-                // 1. Check queue position (Твоя логика проверки очереди)
+                // Check queue position
                 try {
                     const queueRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
                     if (queueRes.ok) {
                         const queueData = await queueRes.json();
                         if (queueData.position !== null && queueData.position !== undefined) {
                             queueInfo.position = queueData.position;
+                            queueInfo.queue = queueData.queue || queueInfo.queue;
                             queueInfo.is_priority = queueData.is_priority || queueInfo.is_priority;
                         }
                     }
                 } catch (e) {
-                    // Ignore queue check errors, main task check is more important
+                    // Ignore queue check errors
                 }
                 
-                // Update status UI
+                // Update status with queue info
                 if (queueInfo.is_priority) {
                     setStatus(`⚡ Приоритетная очередь: позиция ${queueInfo.position}... (${attempts*2}s)`);
                 } else if (queueInfo.position > 0) {
                     setStatus(`⏳ Ваше место в очереди: ${queueInfo.position}... (${attempts*2}s)`);
                 } else {
-                    setStatus(`Анализируем отзывы... (${attempts*2}s)`);
+                    setStatus(`Парсинг ${reviewLimit} последних отзывов... (${attempts*2}s)`);
                 }
                 
                 await new Promise(r => setTimeout(r, 2000));
                 
-                if (cancelTokenRef.current) { setLoading(false); return; }
+                // Double-check cancel flag
+                if (cancelTokenRef.current) {
+                    setLoading(false);
+                    return;
+                }
                 
-                // 2. Check Result
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
                 
-                // Обработка 502/500 ошибок при поллинге (не падаем, пробуем еще)
+                // Обработка ошибок сети при поллинге (не падаем, пробуем еще)
                 if (!sRes.ok) {
                     attempts++;
                     continue;
@@ -200,36 +226,47 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 let sData;
                 try { sData = await sRes.json(); } catch { attempts++; continue; }
                 
-                // --- INTEGRATION FIX: Robust Response Handling ---
                 const status = (sData.status || "").toUpperCase();
-
+                
                 if (status === 'SUCCESS') {
-                    // Ищем данные в data ИЛИ result (Celery может вернуть по-разному)
+                    // --- FIX: Robust data extraction ---
+                    // Celery может вернуть данные в result или data
                     const resultData = sData.data || sData.result;
-                    
-                    if (!resultData) throw new Error("Пустой ответ от сервера");
-                    
-                    if (resultData.status === 'error') {
-                        throw new Error(resultData.error || resultData.message || 'Ошибка при анализе');
+
+                    if (!resultData) {
+                        setLoading(false);
+                        setStep('config');
+                        alert('Ошибка: получены пустые данные от сервера');
+                        return;
                     }
                     
-                    // Critical: Check if analysis exists
-                    if (!resultData.ai_analysis) {
-                        // Фаллбэк, чтобы не упасть с белым экраном
+                    if (resultData.status === 'error') {
+                        setLoading(false);
+                        setStep('config');
+                        alert(`Ошибка анализа: ${resultData.error || resultData.message || 'Неизвестная ошибка'}`);
+                        return;
+                    }
+                    
+                    // Убеждаемся, что ai_analysis существует и является объектом
+                    if (!resultData.ai_analysis || typeof resultData.ai_analysis !== 'object') {
                         resultData.ai_analysis = {
-                            _error: 'AI не вернул данные. Возможно, отзывов слишком мало.',
-                            global_summary: 'Не удалось сформировать отчет.',
-                            flaws: [],
-                            strategy: [],
+                            _error: 'Данные анализа отсутствуют',
                             aspects: [],
-                            audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 }
+                            audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 },
+                            global_summary: 'Ошибка при получении данных анализа',
+                            strategy: [],
+                            flaws: []
                         };
+                    }
+                    
+                    if (resultData.ai_analysis?._error) {
+                        setStatus(`⚠️ Ошибка AI: ${resultData.ai_analysis._error}`);
                     }
                     
                     setResult(resultData);
                     setStep('result');
                     setLoading(false);
-                    fetchUser(); // Обновляем лимиты сразу
+                    fetchUser(); // Обновляем баланс
                     return;
                 }
                 
@@ -237,40 +274,50 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                     const errorMsg = sData.error || sData.result?.error || "Ошибка выполнения задачи";
                     throw new Error(errorMsg);
                 }
+                if (sData.info) setStatus(sData.info);
                 
-                // Если задача в процессе (PENDING/STARTED) - продолжаем цикл
                 attempts++;
             }
             
+            // If we exit loop due to attempts limit
             if (attempts >= 120 && !cancelTokenRef.current) {
                 setLoading(false);
                 setStep('config');
-                alert('Превышено время ожидания. Попробуйте позже.');
+                alert('Превышено время ожидания результата анализа');
             }
         } catch(e) {
             setLoading(false);
             setStep('config');
-            console.error("Analysis error:", e);
-            alert(e.message || "Неизвестная ошибка");
+            const errorMsg = e.message || "Неизвестная ошибка при запуске анализа";
+            alert(errorMsg);
+            console.error("Analysis start error:", e);
+        } finally {
+            // Ensure loading is false even if something unexpected happens
+            if (!result) setLoading(false);
         }
     };
 
     const handleDownloadPDF = async () => {
+        if (!sku && !result?.sku) {
+            alert('Ошибка: не указан SKU товара');
+            return;
+        }
         const targetSku = sku || result?.sku;
-        if (!targetSku) return alert('Ошибка: не указан SKU товара');
+        if (!targetSku) {
+            alert('Ошибка: не указан SKU товара');
+            return;
+        }
         
-        // Используем currentUser вместо user
+        // Use currentUser instead of prop user
         if (currentUser?.plan === 'start') {
             alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
             return;
         }
-        
-        setDownloading(true);
         try {
+            setDownloading(true);
             const token = window.Telegram?.WebApp?.initData || "";
-            // Используем window.open для надежности
             const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
-            window.open(downloadUrl, '_blank');
+            window.open(downloadUrl, '_blank'); // Use window.open for reliability
         } catch (e) {
             alert("Ошибка скачивания: " + e.message);
         } finally {
@@ -294,15 +341,9 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const getSliderParams = () => {
-        if (!productMeta) {
-            // Если нет данных о продукте, используем лимит тарифа или 100 по умолчанию
-            const tariffLimit = currentUser?.review_analysis_limit || 100;
-            return { max: tariffLimit, min: 10, step: 10 };
-        }
+        if (!productMeta) return { max: 100, min: 10, step: 10 };
         const total = productMeta.total_reviews || 0;
-        const tariffLimit = currentUser?.review_analysis_limit || 200;
-        // Максимум - минимум из доступных отзывов и лимита тарифа
-        const max = total > 0 ? Math.min(total, tariffLimit) : tariffLimit;
+        const max = total > 0 ? total : 200;
         let min = 10;
         if (max < 10) min = 1;
         let step = 10;
@@ -313,7 +354,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
 
     const sParams = getSliderParams();
 
-    // Если данные пользователя еще грузятся, показываем лоадер, чтобы не мелькал пустой интерфейс
+    // Если данные пользователя еще грузятся, показываем лоадер
     if (userLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-[#F7F9FC]">
@@ -334,23 +375,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 </div>
                 
                 <div className="flex flex-col gap-2 h-full">
-                    <div className="group relative">
-                        <button className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center">
-                            <HelpCircle className="text-white" size={20} />
-                        </button>
-                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-72 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
-                            <div className="font-bold mb-2">AI Анализ отзывов</div>
-                            <p className="mb-2">Сервис анализирует отзывы покупателей с помощью AI и предоставляет:</p>
-                            <ul className="space-y-1 text-[10px] list-disc list-inside">
-                                <li><strong>Аспектный анализ</strong> - оценка качества по ключевым характеристикам товара</li>
-                                <li><strong>Психографика</strong> - определение типа аудитории (рационалы, эмоционалы, скептики)</li>
-                                <li><strong>Стратегия роста</strong> - рекомендации по улучшению товара и маркетинга</li>
-                                <li><strong>Советы для инфографики</strong> - идеи для визуализации преимуществ</li>
-                            </ul>
-                            <p className="mt-2 text-[10px]">Чем больше отзывов проанализировано, тем точнее результат. Лимит зависит от тарифа.</p>
-                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
-                        </div>
-                    </div>
                     <button 
                         onClick={() => navigate('/')} 
                         className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"
@@ -378,17 +402,11 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 </div>
             </div>
 
-            <HistoryModule 
-                type="ai_review" 
-                isOpen={historyOpen} 
-                onClose={() => setHistoryOpen(false)} 
-                userId={currentUser?.id}
-                onSelect={(item) => {
-                    setSku(item.sku);
-                    setHistoryOpen(false);
-                    handleCheckProduct();
-                }}
-            />
+            <HistoryModule type="ai" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={(item) => {
+                setSku(item.sku);
+                setHistoryOpen(false);
+                handleCheckProduct();
+            }} />
 
             {/* MAIN INPUT CARD */}
             {step !== 'result' && (
@@ -422,7 +440,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                 {productMeta.image && <img src={productMeta.image} className="w-16 h-20 object-cover rounded-lg bg-white shadow-sm" alt="product"/>}
                                 <div>
                                     <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
-                                    {productMeta.total_reviews !== undefined && (
+                                    {productMeta.total_reviews > 0 && (
                                         <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
                                             Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
                                         </div>
@@ -431,8 +449,8 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             </div>
 
                             <div className="mb-6 px-2">
-                                {/* Quota Display with Plan Info (Используем currentUser) */}
-                                {currentUser && (
+                                {/* Quota Display with Plan Info - Используем currentUser */}
+                                {currentUser?.ai_requests_limit > 0 && (
                                     <div className="mb-4 p-4 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-xl border-2 border-indigo-100">
                                         <div className="flex items-center justify-between mb-3">
                                             <div className="flex items-center gap-2">
@@ -441,27 +459,24 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                             </div>
                                             <span className="text-xs font-black bg-white px-2 py-1 rounded-lg text-indigo-900 border border-indigo-200">
                                                 {currentUser.ai_requests_used || 0} / {currentUser.ai_requests_limit}
+                                                {currentUser?.extra_ai_balance > 0 && (
+                                                    <span className="text-emerald-600 ml-1">+{currentUser.extra_ai_balance}</span>
+                                                )}
                                             </span>
                                         </div>
                                         <div className="h-2.5 bg-indigo-100 rounded-full overflow-hidden mb-2">
                                             <div 
                                                 className="h-full bg-gradient-to-r from-indigo-600 to-violet-600 transition-all"
                                                 style={{ 
-                                                    width: `${Math.min(100, ((currentUser.ai_requests_used || 0) / (currentUser.ai_requests_limit || 1)) * 100)}%` 
+                                                    width: `${Math.min(100, ((currentUser.ai_requests_used || 0) / currentUser.ai_requests_limit) * 100)}%` 
                                                 }}
                                             />
                                         </div>
                                         {currentUser?.extra_ai_balance > 0 && (
                                             <p className="text-xs text-indigo-600 font-medium">Дополнительный баланс: {currentUser.extra_ai_balance} запросов</p>
                                         )}
-                                        {((currentUser.ai_requests_used || 0) / (currentUser.ai_requests_limit || 1)) >= 0.8 && (
+                                        {((currentUser.ai_requests_used || 0) / currentUser.ai_requests_limit) >= 0.8 && (
                                             <p className="text-xs text-amber-600 font-medium mt-1">⚠️ Осталось мало запросов. Рассмотрите обновление тарифа.</p>
-                                        )}
-                                        {currentUser.plan === 'start' && currentUser.usage_reset_date && (
-                                            <p className="text-[10px] text-amber-600 font-bold mt-1 flex items-center gap-1">
-                                                <Lock size={10} />
-                                                Лимиты обновятся {new Date(currentUser.usage_reset_date).toLocaleDateString()}
-                                            </p>
                                         )}
                                     </div>
                                 )}
@@ -512,11 +527,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                     <span>{sParams.min}</span>
                                     <span>{sParams.max} (Max)</span>
                                 </div>
-                                {currentUser?.review_analysis_limit && (
-                                    <p className="text-[10px] text-amber-600 text-center mt-1 font-medium">
-                                        Лимит тарифа: до {currentUser.review_analysis_limit} отзывов
-                                    </p>
-                                )}
                                 <p className="text-[10px] text-slate-400 text-center mt-2">
                                     Больше отзывов = точнее результат, но дольше ожидание
                                 </p>
@@ -639,7 +649,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                         </div>
                     )}
 
-                    {/* INTEGRATION FIX: Safe map for aspects */}
                     {result?.ai_analysis?.aspects && Array.isArray(result.ai_analysis.aspects) && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
@@ -677,8 +686,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                     )}
 
                      <div className="grid grid-cols-1 gap-4">
-                        {/* Критические зоны - INTEGRATION FIX: Use correct field names and safe map */}
-                        {/* Проверяем и flaws и negatives для совместимости */}
+                        {/* Критические зоны - Проверяем и flaws и negatives */}
                         <div className="bg-red-50 p-5 rounded-3xl border border-red-100">
                             <h3 className="text-red-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <ThumbsDown size={16} /> Критические зоны
@@ -699,7 +707,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             </ul>
                         </div>
 
-                        {/* Точки роста - INTEGRATION FIX: Safe map */}
+                        {/* Точки роста */}
                         <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
                             <h3 className="text-emerald-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <Sparkles size={16} /> Точки роста
