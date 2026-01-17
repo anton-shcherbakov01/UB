@@ -75,7 +75,7 @@ const NotificationsPage = ({ onNavigate }) => {
                     <button className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors">
                         <HelpCircle size={20}/>
                     </button>
-                    <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                    <div className="hidden group-hover:block absolute bottom-full right-0 sm:right-0 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 mb-2 w-64 max-w-[calc(100vw-2rem)] p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
                         <div className="font-bold mb-2">Настройки уведомлений</div>
                         <p className="mb-2">Включите уведомления о важных событиях в вашем бизнесе:</p>
                         <ul className="space-y-1 text-[10px]">
@@ -85,7 +85,7 @@ const NotificationsPage = ({ onNavigate }) => {
                             <li><strong>Воронка продаж</strong> - анализ конверсии по этапам воронки</li>
                         </ul>
                         <p className="mt-2 text-[10px]">Все уведомления приходят в Telegram бот.</p>
-                        <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                        <div className="absolute bottom-0 right-4 sm:right-4 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
                     </div>
                 </div>
             </div>

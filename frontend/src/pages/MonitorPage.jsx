@@ -140,10 +140,10 @@ const MonitorPage = () => {
                         <button className="p-2.5 bg-white border border-slate-100 text-slate-400 hover:text-indigo-600 rounded-xl shadow-sm transition-colors">
                             <HelpCircle size={20}/>
                         </button>
-                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                        <div className="hidden group-hover:block absolute bottom-full right-0 sm:right-0 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 mb-2 w-64 max-w-[calc(100vw-2rem)] p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
                             <div className="font-bold mb-2">Мониторинг цен</div>
                             <p>Отслеживайте изменения цен на товары конкурентов. Система автоматически собирает данные о ценах и строит графики динамики. Вы можете добавить товары конкурентов по SKU и получать уведомления об изменениях цен.</p>
-                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                            <div className="absolute bottom-0 right-4 sm:right-4 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
                         </div>
                     </div>
                     <button onClick={() => setHistoryOpen(true)} className="p-2.5 bg-white border border-slate-100 text-indigo-600 rounded-xl shadow-sm active:scale-95 transition-transform">
@@ -230,7 +230,7 @@ const MonitorPage = () => {
 
             {/* --- Detail Modal (Bottom Sheet style) --- */}
             {itemHistory && (
-                <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
+                <div className="fixed top-0 left-0 right-0 bottom-0 z-[60] bg-black/40 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-200">
                     {/* Клик по фону закрывает */}
                     <div className="absolute inset-0" onClick={() => setItemHistory(null)}></div>
                     

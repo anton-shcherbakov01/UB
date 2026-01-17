@@ -90,7 +90,7 @@ const AppContent = () => {
     <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">
         {/* Модальное окно с офертой при первом запуске */}
         {showOfferModal && (
-          <div className="fixed inset-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed top-0 left-0 right-0 bottom-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
               <OfferPage onBack={null} onAccept={handleAcceptOffer} isModal={true} />
             </div>
@@ -99,7 +99,7 @@ const AppContent = () => {
         
         {/* Модальное окно с политикой конфиденциальности */}
         {showPrivacyModal && (
-          <div className="fixed inset-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="fixed top-0 left-0 right-0 bottom-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
               <PrivacyPage onBack={null} onAccept={handleAcceptPrivacy} isModal={true} />
             </div>

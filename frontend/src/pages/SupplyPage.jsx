@@ -185,7 +185,7 @@ const SupplyPage = () => {
     const HelpModal = () => {
         if (!showHelp) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowHelp(false)}>
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowHelp(false)}>
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -230,7 +230,7 @@ const SupplyPage = () => {
     const CalcHelpModal = () => {
         if (!showCalcHelp) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowCalcHelp(false)}>
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowCalcHelp(false)}>
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -269,7 +269,7 @@ const SupplyPage = () => {
     const SettingsModal = () => {
         if (!showSettings) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -505,10 +505,9 @@ const SupplyPage = () => {
                         <button 
                             onClick={async () => {
                                 try {
-                                    const url = `${API_URL}/api/supply/report/supply-pdf`;
-                                    const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
-                                    const fullUrl = x_tg_data ? `${url}?x_tg_data=${encodeURIComponent(x_tg_data)}` : url;
-                                    window.open(fullUrl, '_blank');
+                                    const token = window.Telegram?.WebApp?.initData || '';
+                                    const url = `${API_URL}/api/supply/report/supply-pdf?x_tg_data=${encodeURIComponent(token)}`;
+                                    window.open(url, '_blank');
                                 } catch (e) {
                                     alert('Не удалось скачать PDF: ' + (e.message || ''));
                                 }

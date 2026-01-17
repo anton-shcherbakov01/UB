@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle, ArrowLeft
+    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle, ArrowLeft, Download
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -17,6 +17,7 @@ const FinancePage = ({ user, onNavigate }) => {
     const [pnlData, setPnlData] = useState(null);
     const [pnlLoading, setPnlLoading] = useState(false);
     const [pnlError, setPnlError] = useState(null);
+    const [pdfLoading, setPdfLoading] = useState(false);
 
     const fetchProducts = async () => {
         setLoading(true);
@@ -169,27 +170,55 @@ const FinancePage = ({ user, onNavigate }) => {
                         <button className="p-2 bg-white rounded-xl shadow-sm border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors">
                             <HelpCircle size={20} />
                         </button>
-                        <div className="hidden group-hover:block absolute bottom-full right-0 mb-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                        <div className="hidden group-hover:block absolute bottom-full right-0 sm:right-0 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 mb-2 w-64 max-w-[calc(100vw-2rem)] p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
                             <div className="font-bold mb-2">P&L (Прибыль и Убытки)</div>
                             <p className="mb-2">Отчет о финансовых результатах: выручка, себестоимость, комиссии, логистика и итоговая прибыль.</p>
                             <div className="font-bold mb-2 mt-3">Unit Экономика</div>
                             <p>Анализ прибыльности каждого товара: ROI, маржа, себестоимость и рекомендации по оптимизации.</p>
-                            <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                            <div className="absolute bottom-0 right-4 sm:right-4 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
                         </div>
                     </div>
                 </div>
-                <div className="flex bg-white rounded-xl p-1 shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2">
+                    <div className="flex bg-white rounded-xl p-1 shadow-sm border border-slate-100">
+                        <button
+                            onClick={() => setViewMode('unit')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'unit' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}
+                        >
+                            Unit
+                        </button>
+                        <button 
+                            onClick={() => setViewMode('pnl')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'pnl' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}
+                        >
+                            P&L
+                        </button>
+                    </div>
                     <button
-                        onClick={() => setViewMode('unit')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'unit' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}
+                        onClick={async () => {
+                            setPdfLoading(true);
+                            try {
+                                const token = window.Telegram?.WebApp?.initData || '';
+                                if (!token) {
+                                    alert('Ошибка авторизации. Перезагрузите страницу.');
+                                    return;
+                                }
+                                const endpoint = viewMode === 'unit' 
+                                    ? '/api/finance/report/unit-economy-pdf'
+                                    : '/api/finance/report/pnl-pdf';
+                                const url = `${API_URL}${endpoint}?x_tg_data=${encodeURIComponent(token)}`;
+                                window.open(url, '_blank');
+                            } catch (e) {
+                                alert('Не удалось скачать PDF: ' + (e.message || ''));
+                            } finally {
+                                setPdfLoading(false);
+                            }
+                        }}
+                        disabled={pdfLoading}
+                        className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                        title={viewMode === 'unit' ? 'Скачать PDF Unit экономики' : 'Скачать PDF P&L'}
                     >
-                        Unit
-                    </button>
-                    <button 
-                        onClick={() => setViewMode('pnl')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'pnl' ? 'bg-slate-900 text-white' : 'text-slate-400'}`}
-                    >
-                        P&L
+                        {pdfLoading ? <Loader2 size={20} className="animate-spin" /> : <Download size={20} />}
                     </button>
                 </div>
             </div>
