@@ -15,7 +15,10 @@ services:
     ports: ["5433:5432"]
     command: postgres -c shared_buffers=1GB
     healthcheck:
-      test: ["NONE"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     logging:
       driver: "json-file"
       options:
@@ -31,7 +34,8 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/memory-config.xml:ro
+      # Раскомментировано. Этот файл будет применен поверх дефолтного конфига.
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/my_custom_config.xml:ro
     environment:
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
@@ -42,11 +46,12 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --password=123 --query='SELECT 1' || exit 1"]
+      # Проверка через wget надежнее для Docker, чем clickhouse-client
+      test: ["CMD", "wget", "--no-verbose", "--spider", "--tries=1", "http://localhost:8123/ping"]
       interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     logging:
       driver: "json-file"
       options:
@@ -59,6 +64,11 @@ services:
     restart: always
     ports: ["6379:6379"]
     command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     logging:
       driver: "json-file"
       options:
@@ -84,19 +94,17 @@ services:
       - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # Явно задаем настройки подключения к ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=123
       - HEADLESS=True
-      # DEBUG_MODE=True  <-- ЗАКОММЕНТИРОВАНО (Нормальный режим)
     depends_on: 
       db:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     logging:
@@ -124,7 +132,6 @@ services:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # И здесь тоже явно задаем настройки ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
@@ -133,9 +140,9 @@ services:
       - HEADLESS=True
     depends_on: 
       db:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     logging:
@@ -172,9 +179,9 @@ services:
       - HEADLESS=True
     depends_on: 
       db:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     logging:
@@ -204,7 +211,7 @@ services:
       - CLICKHOUSE_PASSWORD=123
     depends_on: 
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     logging:
@@ -216,4 +223,3 @@ services:
 volumes:
   postgres_data_final:
   clickhouse_data:
-
