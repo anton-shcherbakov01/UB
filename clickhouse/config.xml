@@ -1,40 +1,28 @@
 <clickhouse>
     <!-- 
-       ОПТИМИЗАЦИЯ ПАМЯТИ ДЛЯ 16GB RAM 
-       (ClickHouse + Postgres + Selenium + Celery)
+       ВАЖНО: Добавляем вывод логов в консоль (stdout), 
+       чтобы видеть ошибки запуска в docker logs 
     -->
+    <logger>
+        <level>information</level>
+        <console>1</console>
+    </logger>
 
-    <!-- 
-        1. ГЛАВНЫЙ ЛИМИТ: Максимум памяти для всего процесса ClickHouse (4GB).
-        Если потребление выйдет за этот предел, сервер начнет сбрасывать кэши.
-    -->
+    <!-- ОПТИМИЗАЦИЯ ПАМЯТИ ДЛЯ 16GB RAM -->
+    
+    <!-- 1. Максимум памяти для процесса ClickHouse (4GB) -->
     <max_server_memory_usage>4294967296</max_server_memory_usage>
     
-    <!-- 
-        2. Кэш "засечек" (индексов). Уменьшаем до 256MB для экономии RAM.
-    -->
+    <!-- 2. Кэш "засечек" (индексов). -->
     <mark_cache_size>268435456</mark_cache_size>
     
-    <!-- 
-        3. Кэш разжатых данных. Уменьшаем до 256MB.
-    -->
+    <!-- 3. Кэш разжатых данных. -->
     <uncompressed_cache_size>268435456</uncompressed_cache_size>
 
-    <!-- 
-        4. Ограничиваем количество одновременных тяжелых запросов (было 100).
-    -->
+    <!-- 4. Лимит одновременных запросов -->
     <max_concurrent_queries>20</max_concurrent_queries>
     
-    <!-- 
-        5. Снижаем активность фоновых процессов при слиянии данных.
-        Помогает снизить пиковую нагрузку на CPU и диск при старте.
-    -->
+    <!-- 5. Фоновые процессы -->
     <background_pool_size>4</background_pool_size>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
-
-    <!-- 
-       УДАЛЕНО: <max_memory_usage> 
-       Причина: Это настройка users.xml, а не config.xml. 
-       Ее наличие здесь вызывало ошибку "Unknown configuration element" и падение сервера.
-    -->
 </clickhouse>
