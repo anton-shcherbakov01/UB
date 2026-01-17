@@ -106,10 +106,10 @@ async def get_current_user(
             logger.error(f"User creation error: {e}")
             raise HTTPException(status_code=500, detail="Database error")
             
-    # Если юзер уже был, обновляем админские права если нужно
-    if user and is_super and (not user.is_admin or user.subscription_plan not in ["strategist"]):
+    # Если юзер уже был, обновляем только админские права (не трогаем тариф - админ может менять его сам)
+    if user and is_super and not user.is_admin:
         user.is_admin = True
-        user.subscription_plan = "strategist"  # Админы получают самый полный тариф
+        # Не меняем subscription_plan - админ может сам выбрать тариф через админ-панель
         db.add(user)
         await db.commit()
     
