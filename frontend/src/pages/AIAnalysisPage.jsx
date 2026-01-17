@@ -192,10 +192,39 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                 const sData = await sRes.json();
                 
                 if (sData.status === 'SUCCESS') {
-                    if (sData.data?.ai_analysis?._error) {
-                        setStatus(`⚠️ Ошибка AI: ${sData.data.ai_analysis._error}`);
+                    // Защитное программирование: проверяем наличие данных
+                    if (!sData.data) {
+                        setLoading(false);
+                        setStep('config');
+                        alert('Ошибка: получены пустые данные от сервера');
+                        return;
                     }
-                    setResult(sData.data);
+                    
+                    // Проверяем структуру данных
+                    const resultData = sData.data;
+                    if (resultData.status === 'error') {
+                        setLoading(false);
+                        setStep('config');
+                        alert(`Ошибка анализа: ${resultData.error || resultData.message || 'Неизвестная ошибка'}`);
+                        return;
+                    }
+                    
+                    // Убеждаемся, что ai_analysis существует и является объектом
+                    if (!resultData.ai_analysis || typeof resultData.ai_analysis !== 'object') {
+                        resultData.ai_analysis = {
+                            _error: 'Данные анализа отсутствуют',
+                            aspects: [],
+                            audience_stats: { rational_percent: 0, emotional_percent: 0, skeptic_percent: 0 },
+                            global_summary: 'Ошибка при получении данных анализа',
+                            strategy: []
+                        };
+                    }
+                    
+                    if (resultData.ai_analysis?._error) {
+                        setStatus(`⚠️ Ошибка AI: ${resultData.ai_analysis._error}`);
+                    }
+                    
+                    setResult(resultData);
                     setStep('result');
                     setLoading(false);
                     // Update user info after successful analysis completion (to reflect updated limits)
@@ -232,8 +261,15 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
     };
 
     const handleDownloadPDF = async () => {
-        if (!sku && !result?.sku) return;
-        const targetSku = sku || result.sku;
+        if (!sku && !result?.sku) {
+            alert('Ошибка: не указан SKU товара');
+            return;
+        }
+        const targetSku = sku || result?.sku;
+        if (!targetSku) {
+            alert('Ошибка: не указан SKU товара');
+            return;
+        }
         if (user?.plan === 'start') {
             alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
             return;
@@ -488,23 +524,23 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                     </div>
 
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                        {result.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
+                        {result?.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
                         <div>
                             <div className="flex items-center gap-1 text-amber-500 font-black mb-1 text-lg">
-                                <Star size={18} fill="currentColor" /> {result.rating}
+                                <Star size={18} fill="currentColor" /> {result?.rating ?? 0}
                             </div>
                             <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">Датасет</p>
-                            <p className="font-bold">{result.reviews_count} отзывов</p>
+                            <p className="font-bold">{result?.reviews_count ?? 0} отзывов</p>
                         </div>
                     </div>
 
-                    {result.ai_analysis.global_summary && (
+                    {result?.ai_analysis?.global_summary && (
                         <div className={`p-5 rounded-2xl text-sm border-l-4 shadow-md ${
-                            result.ai_analysis._error 
+                            result?.ai_analysis?._error 
                                 ? 'bg-red-50 text-red-800 border-red-500' 
                                 : 'bg-slate-800 text-slate-200 border-violet-500 italic'
                         }`}>
-                            {result.ai_analysis._error ? (
+                            {result?.ai_analysis?._error ? (
                                 <div>
                                     <div className="font-bold mb-1">⚠️ Ошибка AI</div>
                                     <div>{result.ai_analysis.global_summary}</div>
@@ -515,7 +551,7 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         </div>
                     )}
 
-                    {result.ai_analysis.audience_stats && (
+                    {result?.ai_analysis?.audience_stats && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
                                 <Users className="text-violet-600" size={20}/> Портрет аудитории
@@ -523,25 +559,25 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                             <div className="grid grid-cols-3 gap-2 mb-6">
                                 <div className="bg-blue-50 p-3 rounded-2xl text-center border border-blue-100">
                                     <BrainCircuit className="mx-auto text-blue-500 mb-1" size={20}/>
-                                    <div className="text-xl font-black text-blue-700">{result.ai_analysis.audience_stats.rational_percent}%</div>
+                                    <div className="text-xl font-black text-blue-700">{result?.ai_analysis?.audience_stats?.rational_percent ?? 0}%</div>
                                     <div className="text-[10px] uppercase font-bold text-blue-400">Рационал</div>
                                 </div>
                                 <div className="bg-pink-50 p-3 rounded-2xl text-center border border-pink-100">
                                     <Heart className="mx-auto text-pink-500 mb-1" size={20}/>
-                                    <div className="text-xl font-black text-pink-700">{result.ai_analysis.audience_stats.emotional_percent}%</div>
+                                    <div className="text-xl font-black text-pink-700">{result?.ai_analysis?.audience_stats?.emotional_percent ?? 0}%</div>
                                     <div className="text-[10px] uppercase font-bold text-pink-400">Эмоционал</div>
                                 </div>
                                 <div className="bg-slate-50 p-3 rounded-2xl text-center border border-slate-200">
                                     <ShieldCheck className="mx-auto text-slate-500 mb-1" size={20}/>
-                                    <div className="text-xl font-black text-slate-700">{result.ai_analysis.audience_stats.skeptic_percent}%</div>
+                                    <div className="text-xl font-black text-slate-700">{result?.ai_analysis?.audience_stats?.skeptic_percent ?? 0}%</div>
                                     <div className="text-[10px] uppercase font-bold text-slate-400">Скептик</div>
                                 </div>
                             </div>
                             
-                            {result.ai_analysis.infographic_recommendation && (
+                            {result?.ai_analysis?.infographic_recommendation && (
                                 <div className="bg-violet-50 border border-violet-100 p-4 rounded-2xl flex gap-3 items-start">
                                     <div className="bg-white p-2 rounded-xl shadow-sm shrink-0">
-                                        {getTypeIcon(result.ai_analysis.dominant_type)}
+                                        {getTypeIcon(result?.ai_analysis?.dominant_type)}
                                     </div>
                                     <div>
                                         <div className="text-xs font-bold text-violet-400 uppercase mb-1">Совет для инфографики</div>
@@ -554,34 +590,38 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                         </div>
                     )}
 
-                    {result.ai_analysis.aspects && result.ai_analysis.aspects.length > 0 && (
+                    {result?.ai_analysis?.aspects && Array.isArray(result.ai_analysis.aspects) && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
                                 <BarChart3 className="text-violet-600" size={20}/> Аспектный анализ
                             </h3>
                             <div className="space-y-6">
-                                {result.ai_analysis.aspects.map((aspect, idx) => (
-                                    <div key={idx} className="relative">
-                                        <div className="flex justify-between items-center mb-1">
-                                            <span className="font-bold text-sm text-slate-700">{aspect.aspect}</span>
-                                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${getScoreColor(aspect.sentiment_score)}`}>
-                                                {aspect.sentiment_score}/9.0
-                                            </span>
-                                        </div>
-                                        <div className="h-2 w-full bg-slate-100 rounded-full mb-2 overflow-hidden">
-                                            <div 
-                                                className={`h-full rounded-full transition-all duration-1000 ${getScoreColor(aspect.sentiment_score).split(' ')[0]}`} 
-                                                style={{width: `${(aspect.sentiment_score / 9) * 100}%`}}
-                                            ></div>
-                                        </div>
-                                        {aspect.actionable_advice && (
-                                            <div className="flex gap-2 items-start text-xs text-slate-500 bg-slate-50 p-2 rounded-lg">
-                                                <div className="min-w-[4px] h-4 bg-amber-400 rounded-full mt-0.5"></div>
-                                                <span className="font-medium">{aspect.actionable_advice}</span>
+                                {result.ai_analysis.aspects.map((aspect, idx) => {
+                                    if (!aspect || typeof aspect !== 'object') return null;
+                                    const sentimentScore = aspect.sentiment_score ?? 0;
+                                    return (
+                                        <div key={idx} className="relative">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="font-bold text-sm text-slate-700">{aspect.aspect ?? 'Неизвестный аспект'}</span>
+                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${getScoreColor(sentimentScore)}`}>
+                                                    {sentimentScore}/9.0
+                                                </span>
                                             </div>
-                                        )}
-                                    </div>
-                                ))}
+                                            <div className="h-2 w-full bg-slate-100 rounded-full mb-2 overflow-hidden">
+                                                <div 
+                                                    className={`h-full rounded-full transition-all duration-1000 ${getScoreColor(sentimentScore).split(' ')[0]}`} 
+                                                    style={{width: `${(sentimentScore / 9) * 100}%`}}
+                                                ></div>
+                                            </div>
+                                            {aspect.actionable_advice && (
+                                                <div className="flex gap-2 items-start text-xs text-slate-500 bg-slate-50 p-2 rounded-lg">
+                                                    <div className="min-w-[4px] h-4 bg-amber-400 rounded-full mt-0.5"></div>
+                                                    <span className="font-medium">{aspect.actionable_advice}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     )}
@@ -593,14 +633,18 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                 <ThumbsDown size={16} /> Критические зоны
                             </h3>
                             <ul className="space-y-2">
-                                {result.ai_analysis.flaws?.map((f, i) => (
-                                    <ExpandableText 
-                                        key={i} 
-                                        text={f} 
-                                        colorClass="text-slate-700" 
-                                        borderClass="border-red-50" 
-                                    />
-                                ))}
+                                {Array.isArray(result?.ai_analysis?.flaws) && result.ai_analysis.flaws.length > 0 ? (
+                                    result.ai_analysis.flaws.map((f, i) => (
+                                        <ExpandableText 
+                                            key={i} 
+                                            text={typeof f === 'string' ? f : String(f)} 
+                                            colorClass="text-slate-700" 
+                                            borderClass="border-red-50" 
+                                        />
+                                    ))
+                                ) : (
+                                    <li className="text-xs text-slate-400 italic">Критические зоны не обнаружены</li>
+                                )}
                             </ul>
                         </div>
 
@@ -610,14 +654,18 @@ const AIAnalysisPage = ({ user, onUserUpdate }) => {
                                 <Sparkles size={16} /> Точки роста
                             </h3>
                             <ul className="space-y-2">
-                                {result.ai_analysis.strategy?.map((s, i) => (
-                                    <ExpandableText 
-                                        key={i} 
-                                        text={s} 
-                                        colorClass="text-slate-700" 
-                                        borderClass="border-emerald-100 border-l-4 border-l-emerald-400" 
-                                    />
-                                ))}
+                                {Array.isArray(result?.ai_analysis?.strategy) && result.ai_analysis.strategy.length > 0 ? (
+                                    result.ai_analysis.strategy.map((s, i) => (
+                                        <ExpandableText 
+                                            key={i} 
+                                            text={typeof s === 'string' ? s : String(s)} 
+                                            colorClass="text-slate-700" 
+                                            borderClass="border-emerald-100 border-l-4 border-l-emerald-400" 
+                                        />
+                                    ))
+                                ) : (
+                                    <li className="text-xs text-slate-400 italic">Точки роста не обнаружены</li>
+                                )}
                             </ul>
                         </div>
                     </div>

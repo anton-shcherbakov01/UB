@@ -357,15 +357,25 @@ class ProductParser:
             except (ValueError, TypeError):
                 rating_value = 0.0
             
-            return {
-                "sku": sku,
-                "name": static_data.get('imt_name') or static_data.get('subj_name') or f"Товар {sku}",
-                "image": static_data.get('image_url') or "",
-                "rating": rating_value,
-                "reviews": reviews,
-                "reviews_count": len(reviews),
+            # Убедиться, что все значения сериализуемы (базовые типы Python)
+            result = {
+                "sku": int(sku),
+                "name": str(static_data.get('imt_name') or static_data.get('subj_name') or f"Товар {sku}"),
+                "image": str(static_data.get('image_url') or ""),
+                "rating": float(rating_value),
+                "reviews": reviews,  # Уже список словарей с базовыми типами
+                "reviews_count": int(len(reviews)),
                 "status": "success"
             }
+            
+            # Проверка сериализуемости перед возвратом
+            try:
+                json.dumps(result)
+            except (TypeError, ValueError) as ser_error:
+                logger.error(f"Result not serializable: {ser_error}")
+                return {"status": "error", "message": "Ошибка сериализации данных"}
+            
+            return result
 
         except Exception as e:
             logger.error(f"get_full_product_info error for SKU {sku}: {e}", exc_info=True)
