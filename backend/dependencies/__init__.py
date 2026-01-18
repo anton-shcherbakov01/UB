@@ -40,11 +40,11 @@ if os.path.exists(_deps_file):
         sys.modules['_deps_file_module_fallback'] = _deps_module
         spec.loader.exec_module(_deps_module)
         
-        get_current_user = _deps_module.get_current_user
-        get_redis_client = _deps_module.get_redis_client
-        auth_manager = _deps_module.auth_manager
-        SUPER_ADMIN_IDS = _deps_module.SUPER_ADMIN_IDS
-        r_client = _deps_module.r_client
+        get_current_user = getattr(_deps_module, 'get_current_user', None)
+        get_redis_client = getattr(_deps_module, 'get_redis_client', None)
+        auth_manager = getattr(_deps_module, 'auth_manager', None)
+        SUPER_ADMIN_IDS = getattr(_deps_module, 'SUPER_ADMIN_IDS', [])
+        r_client = getattr(_deps_module, 'r_client', None)
         check_telegram_auth = getattr(_deps_module, 'check_telegram_auth', None)
 else:
     # Fallback if file doesn't exist - shouldn't happen
