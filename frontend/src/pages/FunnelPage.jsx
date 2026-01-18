@@ -153,14 +153,25 @@ const FunnelPage = ({ onBack }) => {
                             />
                         </div>
 
-                        {data.limit_used < period && (
-                            <div className="mt-4 p-3 bg-amber-50 rounded-xl flex items-start gap-3 border border-amber-100">
-                                <Info size={16} className="text-amber-600 mt-0.5 shrink-0"/>
-                                <div className="text-xs text-amber-800">
-                                    <span className="font-bold">Лимит тарифа:</span> Показаны данные только за {data.limit_used} дн. Обновите тариф для доступа к истории до {data.max_limit} дн.
+                        {/* Инфо о лимитах или усреднении */}
+                        <div className="mt-4 flex flex-col gap-2">
+                            {data.limit_used < period && (
+                                <div className="p-3 bg-amber-50 rounded-xl flex items-start gap-3 border border-amber-100">
+                                    <Info size={16} className="text-amber-600 mt-0.5 shrink-0"/>
+                                    <div className="text-xs text-amber-800">
+                                        <span className="font-bold">Лимит тарифа:</span> Показаны данные только за {data.limit_used} дн. Обновите тариф для доступа к истории до {data.max_limit} дн.
+                                    </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
+                            {data.is_estimated && (
+                                <div className="p-3 bg-indigo-50 rounded-xl flex items-start gap-3 border border-indigo-100">
+                                    <Info size={16} className="text-indigo-600 mt-0.5 shrink-0"/>
+                                    <div className="text-xs text-indigo-800">
+                                        <span className="font-bold">Внимание:</span> Детальная история заказов временно недоступна. График построен на основе средних значений за период. Общие суммы точные.
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* График Динамики */}
