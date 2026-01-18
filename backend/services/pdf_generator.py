@@ -38,7 +38,7 @@ class PDFGenerator:
                 pdf.add_font('DejaVu', '', font_path, uni=True)
                 pdf.set_font('DejaVu', '', 12)
             else:
-                logger.warning("Cyrillic font not found, falling back to Arial")
+                logger.warning(f"Cyrillic font not found at {font_path}, falling back to Arial/Helvetica")
                 pdf.set_font("Arial", size=12)
         except Exception as e:
             logger.error(f"Font loading error: {e}")
@@ -74,6 +74,25 @@ class PDFGenerator:
         pdf.set_font(font_family, '', 12)
         return font_family
     
+    def _safe_cell(self, pdf, w, h, txt, border=0, align='L', fill=False):
+        """
+        Безопасная запись в ячейку. 
+        Если шрифт не поддерживает символ (например, кириллицу в Arial),
+        заменяет текст на безопасный (translit/ascii), чтобы не было 500 ошибки.
+        """
+        try:
+            pdf.cell(w, h, txt=str(txt), border=border, align=align, fill=fill)
+        except Exception as e:
+            # Ловим FPDFUnicodeEncodingException и UnicodeEncodeError
+            try:
+                # Пытаемся сохранить читаемость через простую замену
+                # (в идеале тут нужен полноценный транслит, но пока так)
+                safe_txt = str(txt).encode('ascii', 'replace').decode('ascii')
+                pdf.cell(w, h, txt=safe_txt, border=border, align=align, fill=fill)
+            except Exception:
+                 # Совсем все плохо
+                pdf.cell(w, h, txt="?", border=border, align=align, fill=fill)
+
     def create_pnl_pdf(self, pnl_data: List[Dict[str, Any]], date_from: str, date_to: str) -> bytes:
         """Create P&L PDF report"""
         pdf = FPDF()
@@ -142,8 +161,8 @@ class PDFGenerator:
         
         # Заголовок
         pdf.set_font_size(16)
-        pdf.cell(0, 10, txt=f"Отчет по поставкам (Supply Chain) - {datetime.now().strftime('%d.%m.%Y')}", ln=1, align='C')
-        pdf.ln(5)
+        self._safe_cell(pdf, 0, 10, txt=f"Отчет по поставкам (Supply Chain) - {datetime.now().strftime('%d.%m.%Y')}", align='C')
+        pdf.ln(10)
         
         # Таблица
         pdf.set_font_size(10)
@@ -153,13 +172,13 @@ class PDFGenerator:
         headers = ["Товар", "Остаток", "Скорость", "ABC", "Статус"]
         
         for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 10, txt=h, border=1, align='C')
+            self._safe_cell(pdf, col_widths[i], 10, txt=h, border=1, align='C')
         pdf.ln()
         
         # Rows
         pdf.set_font_size(8)
         for item in analysis_data:
-            name = str(item.get('name', 'Unknown'))[:40] # Truncate long names
+            name = str(item.get('name', 'Unknown'))[:40] # Truncate
             stock = str(item.get('stock', 0))
             velocity = str(round(item.get('velocity', 0), 2))
             abc = f"{item.get('abc', '-')}{item.get('xyz', '-')}"
@@ -169,29 +188,11 @@ class PDFGenerator:
             
             for i, val in enumerate(row):
                 align = 'L' if i == 0 else 'C'
-                # Simple cell, text might overflow if not handled, but sufficient for now
-                try:
-                    pdf.cell(col_widths[i], 8, txt=str(val), border=1, align=align)
-                except UnicodeEncodeError:
-                    # Fallback for characters not in font
-                    pdf.cell(col_widths[i], 8, txt="???", border=1, align=align)
+                self._safe_cell(pdf, col_widths[i], 8, txt=val, border=1, align=align)
             
             pdf.ln()
 
-        # Output
-        try:
-            # FPDF2 returns bytearray/bytes directly for dest='S'
-            # We do NOT need to encode it again if it's already bytes
-            output = pdf.output(dest='S')
-            
-            if isinstance(output, str):
-                return output.encode('latin-1') # Legacy fpdf behavior
-            
-            return bytes(output) # New behavior (bytearray to bytes)
-            
-        except Exception as e:
-            logger.error(f"PDF Output error: {e}")
-            raise e
+        return self._return_bytes(pdf)
     
     def create_seo_tracker_pdf(self, positions: List[Dict[str, Any]], sku: Optional[str] = None, keyword: Optional[str] = None) -> bytes:
         """Create SEO Tracker PDF report with position history"""
@@ -458,6 +459,19 @@ class PDFGenerator:
         
         return pdf.output(dest='S').encode('latin-1')
 
+    def _return_bytes(self, pdf) -> bytes:
+        try:
+            # FPDF2 returns bytearray/bytes directly for dest='S'
+            output = pdf.output(dest='S')
+            
+            if isinstance(output, str):
+                return output.encode('latin-1') # Legacy fpdf behavior
+            
+            return bytes(output) # New behavior (bytearray to bytes)
+            
+        except Exception as e:
+            logger.error(f"PDF Output error: {e}")
+            raise e
 
 # Singleton instance
 pdf_generator = PDFGenerator()

@@ -542,37 +542,38 @@ const SupplyPage = () => {
              <UpgradeModal />
 
              {/* Header */}
-             <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[32px] text-white shadow-xl shadow-orange-200 relative overflow-hidden mb-6">
-                <div className="relative z-10 flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <button onClick={() => navigate('/')} className="bg-white/20 p-2 rounded-xl backdrop-blur-md hover:bg-white/30 transition-colors active:scale-95">
-                            <ArrowLeft size={20} className="text-white"/>
-                        </button>
-                        <div>
-                            <h1 className="text-2xl font-black flex items-center gap-2">
-                                <Truck className="text-white" /> Supply Chain
-                            </h1>
-                            <p className="text-sm opacity-90 mt-1 font-medium">Умное управление запасами</p>
-                        </div>
+             <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card with Gradient */}
+                 <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
+                    <div className="relative z-10">
+                        <h1 className="text-2xl font-black flex items-center gap-2">
+                            <Truck className="text-white" /> Supply Chain
+                        </h1>
+                        <p className="text-sm opacity-90 mt-1 font-medium">Умное управление запасами</p>
                     </div>
-                    
-                    <div className="flex gap-2">
-                        {/* Кнопка скачивания PDF теперь ЗДЕСЬ */}
-                        <button 
+
+                    {/* PDF Download Button INSIDE Header */}
+                    <div className="relative z-10">
+                         <button 
                             onClick={handleDownloadReport}
-                            className="bg-white/20 backdrop-blur-md px-4 py-2 rounded-xl hover:bg-white/30 transition-colors flex items-center gap-2 font-bold text-xs"
+                            className="bg-white/20 backdrop-blur-md px-4 py-3 rounded-xl hover:bg-white/30 transition-colors flex items-center gap-2 font-bold text-xs text-white border border-white/10 active:scale-95 shadow-sm"
                         >
                             <FileDown size={18} /> Скачать PDF
                         </button>
-                        <button 
-                            onClick={() => setShowSettings(true)}
-                            className="bg-white/20 backdrop-blur-md p-3 rounded-xl hover:bg-white/30 transition-colors"
-                        >
-                            <Settings className="text-white" size={20} />
-                        </button>
                     </div>
-                </div>
-                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button onClick={() => navigate('/')} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95" title="На главную">
+                         <ArrowLeft size={24}/>
+                     </button>
+                     <button onClick={() => setShowSettings(true)} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95" title="Настройки">
+                         <Settings size={24} />
+                     </button>
+                 </div>
             </div>
 
             {/* Calculator Section */}
