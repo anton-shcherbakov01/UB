@@ -36,7 +36,7 @@ class WBStatisticsMixin(WBApiBase):
         "advert": "https://advert-api.wildberries.ru",
         "marketplace": "https://marketplace-api.wildberries.ru",
         "feedbacks": "https://feedbacks-api.wildberries.ru",
-        "analytics": "https://seller-analytics-api.wildberries.ru" # Добавлен URL аналитики
+        "analytics": "https://seller-analytics-api.wildberries.ru"
     }
 
     def __init__(self):
@@ -187,7 +187,7 @@ class WBStatisticsMixin(WBApiBase):
     # --- НОВЫЕ МЕТОДЫ ДЛЯ МОНИТОРИНГА ---
 
     async def get_sales_since(self, token: str, date_from: str) -> List[Dict]:
-        """Получение выкупов (продаж) через миксин"""
+        """Получение выкупов (продаж) через миксин (Использует старый API)"""
         url = f"{self.URLS['statistics']}/api/v1/supplier/sales"
         params = {"dateFrom": date_from, "flag": 0}
         headers = {"Authorization": token}
@@ -195,17 +195,13 @@ class WBStatisticsMixin(WBApiBase):
         data = await self._request_with_retry(None, url, headers, params=params)
         return data if isinstance(data, list) else []
 
-    async def get_sales_funnel(self, token: str, date_from: str, date_to: str) -> Dict[str, int]:
+    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
-        Получение данных воронки продаж (просмотры, корзины) через Analytics API.
-        Endpoint: /api/v2/nm-report/detail
-        Исправлено: используется _request_with_retry для обработки 429/504 ошибок.
+        Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
+        через Analytics API. Это заменяет необходимость дергать старый API статистики.
         """
         url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
-        headers = {
-            "Authorization": token
-            # Content-Type: application/json добавляется автоматически при использовании json_data
-        }
+        headers = {"Authorization": token}
         
         payload = {
             "brandNames": [],
@@ -224,8 +220,6 @@ class WBStatisticsMixin(WBApiBase):
             "page": 1
         }
         
-        # Используем встроенный механизм ретраев из Base (handle 429, 500, etc)
-        # Session=None создаст новую сессию внутри _request_with_retry
         try:
             data = await self._request_with_retry(
                 session=None,
@@ -233,80 +227,70 @@ class WBStatisticsMixin(WBApiBase):
                 headers=headers,
                 method="POST",
                 json_data=payload,
-                retries=4  # Analytics API нестабилен, даем больше попыток
+                retries=4
             )
             
             if not data or not isinstance(data, dict):
-                logger.warning(f"Analytics API returned invalid data: {data}")
-                return {"visitors": 0, "addToCart": 0}
+                return {}
                 
             cards = data.get("data", {}).get("cards", [])
             
-            # Суммируем показатели по всем карточкам (страница 1)
-            total_visitors = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("openCardCount", 0) for c in cards)
-            total_cart = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("addToCartCount", 0) for c in cards)
+            # Агрегируем данные по всем карточкам
+            res = {
+                "visitors": 0,
+                "addToCart": 0,
+                "ordersCount": 0,
+                "ordersSum": 0,
+                "buyoutsCount": 0,
+                "buyoutsSum": 0
+            }
             
-            return {"visitors": total_visitors, "addToCart": total_cart}
+            for c in cards:
+                stats = c.get("statistics", {}).get("selectedPeriod", {})
+                res["visitors"] += stats.get("openCardCount", 0)
+                res["addToCart"] += stats.get("addToCartCount", 0)
+                res["ordersCount"] += stats.get("ordersCount", 0)
+                res["ordersSum"] += stats.get("ordersSumRub", 0)
+                res["buyoutsCount"] += stats.get("buyoutsCount", 0)
+                res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+            
+            return res
             
         except Exception as e:
-            logger.error(f"Failed to fetch sales funnel: {e}")
-            return {"visitors": 0, "addToCart": 0}
+            logger.error(f"Failed to fetch full sales funnel: {e}")
+            return {}
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
-        """Сводная статистика за сегодня для уведомлений"""
+        """
+        Сводная статистика за сегодня для уведомлений.
+        ОПТИМИЗАЦИЯ: Теперь использует ТОЛЬКО Analytics API для получения всех цифр.
+        Это устраняет ошибки 429 от старого API статистики.
+        """
         today_date = datetime.now()
-        # Форматы дат для разных API
-        today_start_iso = today_date.strftime("%Y-%m-%dT00:00:00")
-        
-        # Для воронки нужны полные форматы: YYYY-MM-DD HH:mm:ss
         funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
         funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
         
-        headers = {"Authorization": token}
-        
         try:
-            # 1. Заказы и Продажи (Supplier API - самый быстрый для денег)
-            async with aiohttp.ClientSession() as session:
-                orders_data_task = self._get_orders_mixin(session, token, today_start_iso, use_cache=False)
-                sales_task = self.get_sales_since(token, today_start_iso)
-                # 2. Воронка продаж (Analytics API - для просмотров и корзин)
-                funnel_task = self.get_sales_funnel(token, funnel_start, funnel_end)
-                
-                # Запускаем все параллельно
-                orders_data, sales, funnel_res = await asyncio.gather(
-                    orders_data_task, 
-                    sales_task, 
-                    funnel_task,
-                    return_exceptions=True
-                )
+            # Используем один мощный запрос вместо трех слабых
+            funnel_data = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
             
-            # Обработка ошибок gather (если одна таска упала, другие могут выжить)
-            if isinstance(orders_data, Exception): 
-                orders_data = {"count": 0, "sum": 0, "items": []}
-            if isinstance(sales, Exception): 
-                sales = []
-            if isinstance(funnel_res, Exception): 
-                funnel_res = {"visitors": 0, "addToCart": 0}
+            if not funnel_data:
+                # Fallback, если аналитика не ответила (пустые нули)
+                return {
+                    "orders_sum": 0, "orders_count": 0,
+                    "sales_sum": 0, "sales_count": 0,
+                    "visitors": 0, "addToCart": 0
+                }
 
-            valid_sales = [s for s in sales if not str(s.get('saleID', '')).startswith('R')]
-            
-            # Пересчет суммы заказов
-            orders_sum = orders_data.get("sum", 0)
-            if not orders_sum and orders_data.get("items"):
-                valid_orders = [x for x in orders_data.get("items", []) if not x.get("isCancel")]
-                orders_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
-            
-            sales_sum = sum(s.get('priceWithDiscount', 0) for s in valid_sales)
-            
-            logger.debug(f"Statistics today: orders_sum={orders_sum}, sales_sum={sales_sum}, funnel={funnel_res}")
+            logger.info(f"Statistics today (Analytics API): {funnel_data}")
             
             return {
-                "orders_sum": int(orders_sum),
-                "orders_count": orders_data.get("count", 0),
-                "sales_sum": int(sales_sum),
-                "sales_count": len(valid_sales),
-                "visitors": funnel_res.get("visitors", 0),
-                "addToCart": funnel_res.get("addToCart", 0)
+                "orders_sum": int(funnel_data.get("ordersSum", 0)),
+                "orders_count": funnel_data.get("ordersCount", 0),
+                "sales_sum": int(funnel_data.get("buyoutsSum", 0)),
+                "sales_count": funnel_data.get("buyoutsCount", 0),
+                "visitors": funnel_data.get("visitors", 0),
+                "addToCart": funnel_data.get("addToCart", 0)
             }
         except Exception as e:
             logger.error(f"Error getting statistics today: {e}", exc_info=True)
