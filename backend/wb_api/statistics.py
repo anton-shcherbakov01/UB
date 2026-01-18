@@ -46,21 +46,23 @@ class WBStatisticsMixin(WBApiBase):
         """
         headers = {"Authorization": token}
         
-        # Payload for Analytics Probe
+        # Payload for Analytics Probe (using history endpoint as detail is deprecated)
         analytics_payload = {
             "period": {
                 "begin": datetime.now().strftime("%Y-%m-%d"),
                 "end": datetime.now().strftime("%Y-%m-%d")
             },
-            "page": 1
+            "page": 1,
+            "timezone": "Europe/Moscow",
+            "aggregationLevel": "day"
         }
 
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
-                # REPLACED: incomes (v1) -> Analytics V2
-                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/detail", headers, json_data=analytics_payload),
+                # REPLACED: nm-report/detail (deprecated) -> nm-report/detail/history
+                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/detail/history", headers, json_data=analytics_payload),
                 "advert": self._probe(session, "GET", f"{self.URLS['advert']}/adv/v1/promotion/count", headers),
                 "feedbacks": self._probe(session, "GET", f"{self.URLS['feedbacks']}/api/v1/questions/count", headers, params={"isAnswered": "false"}),
                 "prices": self._probe(session, "GET", f"{self.URLS['common']}/public/api/v1/info", headers)
@@ -199,9 +201,10 @@ class WBStatisticsMixin(WBApiBase):
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API. Добавлена пагинация.
+        через Analytics API (history endpoint since detail is deprecated).
         """
-        url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
+        # REPLACED: using /detail/history as /detail is deprecated
+        url = f"{self.URLS['analytics']}/api/v2/nm-report/detail/history"
         headers = {"Authorization": token}
         
         res = {
@@ -232,7 +235,9 @@ class WBStatisticsMixin(WBApiBase):
                         "field": "openCardCount",
                         "mode": "desc"
                     },
-                    "page": page
+                    "page": page,
+                    # Added aggregationLevel for history endpoint compatibility
+                    "aggregationLevel": "day" 
                 }
                 
                 data = await self._request_with_retry(
@@ -254,13 +259,23 @@ class WBStatisticsMixin(WBApiBase):
                     break
                 
                 for c in cards:
-                    stats = c.get("statistics", {}).get("selectedPeriod", {})
-                    res["visitors"] += stats.get("openCardCount", 0)
-                    res["addToCart"] += stats.get("addToCartCount", 0)
-                    res["ordersCount"] += stats.get("ordersCount", 0)
-                    res["ordersSum"] += stats.get("ordersSumRub", 0)
-                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                    # In /detail/history, stats are inside 'days' array, not 'selectedPeriod'
+                    # Or sometimes 'selectedPeriod' exists but 'days' is the detailed one.
+                    # Let's check both or aggregate days.
+                    stats_days = c.get("statistics", {}).get("days", [])
+                    
+                    if not stats_days:
+                        # Fallback to selectedPeriod if available (sometimes returned for single day query)
+                        single_stat = c.get("statistics", {}).get("selectedPeriod", {})
+                        stats_days = [single_stat] if single_stat else []
+
+                    for day_stat in stats_days:
+                        res["visitors"] += day_stat.get("openCardCount", 0)
+                        res["addToCart"] += day_stat.get("addToCartCount", 0)
+                        res["ordersCount"] += day_stat.get("ordersCount", 0)
+                        res["ordersSum"] += day_stat.get("ordersSumRub", 0)
+                        res["buyoutsCount"] += day_stat.get("buyoutsCount", 0)
+                        res["buyoutsSum"] += day_stat.get("buyoutsSumRub", 0)
                 
                 page += 1
                 if page > 100: break
@@ -569,8 +584,8 @@ class WBStatisticsAPI:
         через Analytics API.
         Аргумент token здесь для совместимости, используется self.token.
         """
-        # Analytics API URL (V2)
-        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/detail"
+        # Analytics API URL (V2 history replacement)
+        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/detail/history"
         
         # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
         headers = self.headers 
@@ -603,7 +618,8 @@ class WBStatisticsAPI:
                         "field": "openCardCount",
                         "mode": "desc"
                     },
-                    "page": page
+                    "page": page,
+                    "aggregationLevel": "day"
                 }
                 
                 data = await self._request(
@@ -623,13 +639,21 @@ class WBStatisticsAPI:
                     break
                 
                 for c in cards:
-                    stats = c.get("statistics", {}).get("selectedPeriod", {})
-                    res["visitors"] += stats.get("openCardCount", 0)
-                    res["addToCart"] += stats.get("addToCartCount", 0)
-                    res["ordersCount"] += stats.get("ordersCount", 0)
-                    res["ordersSum"] += stats.get("ordersSumRub", 0)
-                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                    # In /detail/history, stats are inside 'statistics' -> 'days' array
+                    stats_days = c.get("statistics", {}).get("days", [])
+                    
+                    if not stats_days:
+                         # Fallback if 'days' is missing but 'selectedPeriod' exists (rare for history)
+                         single_stat = c.get("statistics", {}).get("selectedPeriod", {})
+                         stats_days = [single_stat] if single_stat else []
+
+                    for day_stat in stats_days:
+                        res["visitors"] += day_stat.get("openCardCount", 0)
+                        res["addToCart"] += day_stat.get("addToCartCount", 0)
+                        res["ordersCount"] += day_stat.get("ordersCount", 0)
+                        res["ordersSum"] += day_stat.get("ordersSumRub", 0)
+                        res["buyoutsCount"] += day_stat.get("buyoutsCount", 0)
+                        res["buyoutsSum"] += day_stat.get("buyoutsSumRub", 0)
                 
                 page += 1
                 if page > 100: break # Safety break
