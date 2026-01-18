@@ -16,7 +16,11 @@ from dependencies import get_current_user
 from wb_api.statistics import WBStatisticsAPI
 from config.plans import get_limit
 
+# Note: Frontend seems to be requesting /api/finance for reports based on logs.
+# Ensure this router is mounted correctly or frontend requests are updated.
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
+
+executor = ThreadPoolExecutor(max_workers=2)
 
 @router.get("/abc-xyz")
 async def get_abc_xyz_stats(
@@ -122,7 +126,7 @@ async def get_cash_gap_forecast(
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="WB API Token required")
 
-    # 1. Получаем настройки поставок из БД (ИСПРАВЛЕНО)
+    # 1. Получаем настройки поставок из БД
     stmt = select(SupplySettings).where(SupplySettings.user_id == user.id)
     settings_res = await db.execute(stmt)
     settings = settings_res.scalars().first()
@@ -168,8 +172,6 @@ async def get_cash_gap_forecast(
     # 5. Считаем разрывы
     result = supply_service.calculate_cash_gap(supply_analysis, costs_map)
     return result
-
-executor = ThreadPoolExecutor(max_workers=2)
 
 @router.get("/report/forensics-pdf")
 async def generate_forensics_pdf(
@@ -228,9 +230,7 @@ async def generate_cashgap_pdf(
         raise HTTPException(status_code=400, detail="WB API Token required")
     
     # Reuse the logic from get_cash_gap_forecast
-    from database import SupplySettings, ProductCost
-    from wb_api.statistics import WBStatisticsAPI
-    from services.supply import supply_service
+    # NOTE: Code duplication kept to preserve file structure/integrity as requested
     
     stmt = select(SupplySettings).where(SupplySettings.user_id == user.id)
     settings_res = await db.execute(stmt)
@@ -253,18 +253,20 @@ async def generate_cashgap_pdf(
     supply_analysis = supply_service.analyze_supply(stocks, orders, config)
     
     if not supply_analysis:
-        return {"status": "error", "message": "Нет данных для анализа"}
-    
-    skus = [i['sku'] for i in supply_analysis]
-    costs_stmt = select(ProductCost).where(
-        ProductCost.user_id == user.id, 
-        ProductCost.sku.in_(skus)
-    )
-    costs_res = await db.execute(costs_stmt)
-    costs = costs_res.scalars().all()
-    costs_map = {c.sku: c.cost_price for c in costs}
-    
-    cashgap_data = supply_service.calculate_cash_gap(supply_analysis, costs_map)
+        # Return a generated PDF saying no data instead of JSON error
+        # to ensure the user gets a file
+        cashgap_data = {"status": "empty", "message": "Нет данных для анализа"}
+    else:
+        skus = [i['sku'] for i in supply_analysis]
+        costs_stmt = select(ProductCost).where(
+            ProductCost.user_id == user.id, 
+            ProductCost.sku.in_(skus)
+        )
+        costs_res = await db.execute(costs_stmt)
+        costs = costs_res.scalars().all()
+        costs_map = {c.sku: c.cost_price for c in costs}
+        
+        cashgap_data = supply_service.calculate_cash_gap(supply_analysis, costs_map)
     
     # Generate PDF in executor
     from services.pdf_generator import pdf_generator

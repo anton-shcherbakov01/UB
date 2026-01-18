@@ -354,86 +354,202 @@ class PDFGenerator:
         return self._return_bytes(pdf)
     
     def create_forensics_pdf(self, forensics_data: Dict[str, Any]) -> bytes:
-        """Create Forensics PDF report"""
-        pdf = FPDF()
-        pdf.add_page()
-        font_family = self._setup_fonts(pdf)
+        """Create Forensics PDF report with Tables"""
+        pdf = self._setup_pdf()
         
-        # Title
-        pdf.set_font(font_family, 'B', 16)
-        pdf.cell(0, 10, txt="Форензика возвратов", ln=1, align='C')
-        pdf.ln(5)
+        # Заголовок
+        pdf.set_font_size(16)
+        try:
+            pdf.set_font('DejaVu', 'B', 16)
+        except:
+            pass
+            
+        self._safe_cell(pdf, 0, 10, txt="Отчет по возвратам (Forensics)", align='C')
+        pdf.ln(10)
         
         if forensics_data.get('status') == 'error':
-            pdf.set_font(font_family, '', 12)
-            pdf.cell(0, 10, txt=f"Ошибка: {forensics_data.get('message', 'Неизвестная ошибка')}", ln=1, align='C')
-            return pdf.output(dest='S').encode('latin-1')
+            try:
+                pdf.set_font('DejaVu', '', 12)
+            except:
+                pdf.set_font_size(12)
+            self._safe_cell(pdf, 0, 10, txt=f"Ошибка: {forensics_data.get('message', 'Неизвестная ошибка')}", align='C')
+            return self._return_bytes(pdf)
         
-        # Summary
-        pdf.set_font(font_family, 'B', 12)
-        pdf.cell(0, 8, txt="Сводка:", ln=1)
-        pdf.set_font(font_family, '', 10)
+        # Сводка
+        try:
+            pdf.set_font('DejaVu', 'B', 12)
+        except:
+            pdf.set_font_size(12)
+        self._safe_cell(pdf, 0, 8, txt="Сводка:")
+        pdf.ln()
+        
+        try:
+            pdf.set_font('DejaVu', '', 10)
+        except:
+            pdf.set_font_size(10)
         
         total_returns = forensics_data.get('total_returns', 0)
+        self._safe_cell(pdf, 0, 6, txt=f"Всего возвратов за период: {total_returns}")
+        pdf.ln(8)
+        
+        # --- Таблица размеров ---
         problem_sizes = forensics_data.get('problem_sizes', {})
-        problem_warehouses = forensics_data.get('problem_warehouses', {})
-        
-        pdf.cell(0, 6, txt=f"Всего возвратов: {total_returns}", ln=1)
-        pdf.ln(5)
-        
-        # Problem sizes
         if problem_sizes:
-            pdf.set_font(font_family, 'B', 11)
-            pdf.cell(0, 8, txt="Проблемные размеры:", ln=1)
-            pdf.set_font(font_family, '', 9)
+            try:
+                pdf.set_font('DejaVu', 'B', 11)
+            except:
+                pass
+            self._safe_cell(pdf, 0, 8, txt="Топ проблемных размеров:")
+            pdf.ln()
+            
+            # Headers
+            col_widths = [60, 40]
+            headers = ["Размер", "Кол-во возвратов"]
+            try:
+                pdf.set_font('DejaVu', 'B', 10)
+            except:
+                pass
+                
+            for i, h in enumerate(headers):
+                self._safe_cell(pdf, col_widths[i], 8, txt=h, border=1, align='C')
+            pdf.ln()
+            
+            # Rows
+            try:
+                pdf.set_font('DejaVu', '', 10)
+            except:
+                pass
+                
             for size, count in list(problem_sizes.items())[:20]:
-                pdf.cell(0, 6, txt=f"  {size}: {count} возвратов", ln=1)
-            pdf.ln(3)
+                self._safe_cell(pdf, col_widths[0], 7, txt=size, border=1, align='L')
+                self._safe_cell(pdf, col_widths[1], 7, txt=str(count), border=1, align='C')
+                pdf.ln()
+            
+            pdf.ln(5)
         
-        # Problem warehouses
+        # --- Таблица складов ---
+        problem_warehouses = forensics_data.get('problem_warehouses', {})
         if problem_warehouses:
-            pdf.set_font(font_family, 'B', 11)
-            pdf.cell(0, 8, txt="Проблемные склады:", ln=1)
-            pdf.set_font(font_family, '', 9)
+            try:
+                pdf.set_font('DejaVu', 'B', 11)
+            except:
+                pass
+            self._safe_cell(pdf, 0, 8, txt="Топ проблемных складов:")
+            pdf.ln()
+            
+            # Headers
+            col_widths = [100, 40]
+            headers = ["Склад", "Кол-во возвратов"]
+            try:
+                pdf.set_font('DejaVu', 'B', 10)
+            except:
+                pass
+                
+            for i, h in enumerate(headers):
+                self._safe_cell(pdf, col_widths[i], 8, txt=h, border=1, align='C')
+            pdf.ln()
+            
+            # Rows
+            try:
+                pdf.set_font('DejaVu', '', 10)
+            except:
+                pass
+                
             for warehouse, count in list(problem_warehouses.items())[:20]:
-                pdf.cell(0, 6, txt=f"  {warehouse}: {count} возвратов", ln=1)
+                self._safe_cell(pdf, col_widths[0], 7, txt=warehouse, border=1, align='L')
+                self._safe_cell(pdf, col_widths[1], 7, txt=str(count), border=1, align='C')
+                pdf.ln()
         
-        return pdf.output(dest='S').encode('latin-1')
+        return self._return_bytes(pdf)
     
     def create_cashgap_pdf(self, cashgap_data: Dict[str, Any]) -> bytes:
-        """Create Cash Gap PDF report"""
-        pdf = FPDF()
-        pdf.add_page()
-        font_family = self._setup_fonts(pdf)
+        """Create Cash Gap PDF report with Tables"""
+        pdf = self._setup_pdf()
         
-        # Title
-        pdf.set_font(font_family, 'B', 16)
-        pdf.cell(0, 10, txt="Прогноз кассовых разрывов", ln=1, align='C')
+        # Заголовок
+        pdf.set_font_size(16)
+        try:
+            pdf.set_font('DejaVu', 'B', 16)
+        except:
+            pass
+            
+        self._safe_cell(pdf, 0, 10, txt="Прогноз кассовых разрывов", align='C')
+        pdf.ln(10)
+        
+        status = cashgap_data.get('status')
+        if status == 'error' or status == 'empty':
+            try:
+                pdf.set_font('DejaVu', '', 12)
+            except:
+                pdf.set_font_size(12)
+            msg = cashgap_data.get('message', 'Неизвестная ошибка')
+            self._safe_cell(pdf, 0, 10, txt=f"Инфо: {msg}", align='C')
+            return self._return_bytes(pdf)
+        
+        # Сводка
+        try:
+            pdf.set_font('DejaVu', 'B', 12)
+        except:
+            pdf.set_font_size(12)
+        self._safe_cell(pdf, 0, 8, txt="Финансовая сводка:")
+        pdf.ln()
+        
+        try:
+            pdf.set_font('DejaVu', '', 10)
+        except:
+            pdf.set_font_size(10)
+            
+        gaps = cashgap_data.get('gaps', [])
+        total_needed = cashgap_data.get('total_needed_soon', 0)
+        nearest_date = cashgap_data.get('nearest_gap_date')
+        
+        self._safe_cell(pdf, 0, 6, txt=f"Общая потребность в средствах: {total_needed:,.0f} ₽")
+        pdf.ln()
+        if nearest_date:
+            self._safe_cell(pdf, 0, 6, txt=f"Ближайший разрыв: {nearest_date}")
+            pdf.ln()
+        
         pdf.ln(5)
         
-        if cashgap_data.get('status') == 'error':
-            pdf.set_font(font_family, '', 12)
-            pdf.cell(0, 10, txt=f"Ошибка: {cashgap_data.get('message', 'Неизвестная ошибка')}", ln=1, align='C')
-            return pdf.output(dest='S').encode('latin-1')
-        
-        # Summary
-        pdf.set_font(font_family, 'B', 12)
-        pdf.cell(0, 8, txt="Прогноз:", ln=1)
-        pdf.set_font(font_family, '', 10)
-        
-        gaps = cashgap_data.get('gaps', [])
+        # Таблица разрывов
         if gaps:
-            pdf.cell(0, 6, txt=f"Найдено потенциальных разрывов: {len(gaps)}", ln=1)
-            pdf.ln(3)
+            try:
+                pdf.set_font('DejaVu', 'B', 11)
+            except:
+                pass
+            self._safe_cell(pdf, 0, 8, txt="Детализация по датам:")
+            pdf.ln()
             
-            for gap in gaps[:20]:
-                date = gap.get('date', '')
+            # Headers
+            col_widths = [50, 60, 50]
+            headers = ["Дата", "Сумма разрыва", "Статус"]
+            try:
+                pdf.set_font('DejaVu', 'B', 10)
+            except:
+                pass
+                
+            for i, h in enumerate(headers):
+                self._safe_cell(pdf, col_widths[i], 8, txt=h, border=1, align='C')
+            pdf.ln()
+            
+            # Rows
+            try:
+                pdf.set_font('DejaVu', '', 10)
+            except:
+                pass
+                
+            for gap in gaps[:50]:
+                date = gap.get('date', '-')
                 amount = gap.get('amount', 0)
-                pdf.cell(0, 6, txt=f"  {date}: {amount:,.0f} ₽", ln=1)
+                
+                self._safe_cell(pdf, col_widths[0], 7, txt=date, border=1, align='C')
+                self._safe_cell(pdf, col_widths[1], 7, txt=f"{amount:,.0f} ₽", border=1, align='R')
+                self._safe_cell(pdf, col_widths[2], 7, txt="Дефицит", border=1, align='C')
+                pdf.ln()
         else:
-            pdf.cell(0, 6, txt="Кассовых разрывов не прогнозируется", ln=1)
+            self._safe_cell(pdf, 0, 10, txt="Кассовых разрывов не прогнозируется.", align='L')
         
-        return pdf.output(dest='S').encode('latin-1')
+        return self._return_bytes(pdf)
     
     def create_slots_pdf(self, slots_data: List[Dict[str, Any]]) -> bytes:
         """Create Slots analysis PDF report"""
