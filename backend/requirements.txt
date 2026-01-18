@@ -28,3 +28,4 @@ plotly
 matplotlib
 httpx
 aiodns
+psutil
