@@ -1,7 +1,7 @@
 <clickhouse>
     <!-- 
-       ВАЖНО: Добавляем вывод логов в консоль (stdout), 
-       чтобы видеть ошибки запуска в docker logs 
+        ВАЖНО: Добавляем вывод логов в консоль (stdout), 
+        чтобы видеть ошибки запуска в docker logs 
     -->
     <logger>
         <level>information</level>
@@ -11,34 +11,39 @@
     <!-- Слушаем только IPv4 (убирает ошибки DNS error на серверах без IPv6) -->
     <listen_host>0.0.0.0</listen_host>
 
-    <!-- ОПТИМИЗАЦИЯ ПАМЯТИ ДЛЯ 16GB RAM -->
+    <!-- ОПТИМИЗАЦИЯ ПАМЯТИ ДЛЯ 8GB (выделенных под ClickHouse) -->
     
-    <!-- 1. Максимум памяти для процесса ClickHouse (4GB) -->
-    <max_server_memory_usage>4294967296</max_server_memory_usage>
+    <!-- 1. Максимум памяти для процесса ClickHouse (8GB) 
+         8 * 1024 * 1024 * 1024 = 8589934592
+    -->
+    <max_server_memory_usage>8589934592</max_server_memory_usage>
     
-    <!-- 2. Кэш "засечек" (индексов). -->
-    <mark_cache_size>268435456</mark_cache_size>
+    <!-- 2. Кэш "засечек" (индексов). Увеличиваем пропорционально до 512MB -->
+    <mark_cache_size>536870912</mark_cache_size>
     
-    <!-- 3. Кэш разжатых данных. -->
-    <uncompressed_cache_size>268435456</uncompressed_cache_size>
+    <!-- 3. Кэш разжатых данных. Увеличиваем пропорционально до 512MB -->
+    <uncompressed_cache_size>536870912</uncompressed_cache_size>
 
-    <!-- 4. Лимит одновременных запросов -->
-    <max_concurrent_queries>20</max_concurrent_queries>
+    <!-- 4. Лимит одновременных запросов (увеличиваем, так как ресурсов стало больше) -->
+    <max_concurrent_queries>40</max_concurrent_queries>
     
-    <!-- 5. Фоновые процессы -->
-    <background_pool_size>4</background_pool_size>
+    <!-- 5. Фоновые процессы 
+         Увеличиваем пул потоков до 8, так как памяти стало больше.
+         Это поможет быстрее разгребать очередь слияний (merges).
+    -->
+    <background_pool_size>8</background_pool_size>
     <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
 
     <!-- 
-        6. ВАЖНОЕ ИСПРАВЛЕНИЕ:
-        Мы уменьшили background_pool_size до 4 (всего 8 потоков с ratio 2).
-        Уменьшаем требования к резервам слотов, чтобы они влезали в лимит 8.
+        6. Настройки MergeTree
+        Так как background_pool_size увеличен до 8, 
+        мы можем позволить себе чуть большие резервы для мутаций и оптимизаций.
     -->
     <merge_tree>
-        <!-- Резерв для мутаций (было 20 по умолчанию) -->
-        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <!-- Резерв для мутаций (подняли с 2 до 4) -->
+        <number_of_free_entries_in_pool_to_execute_mutation>4</number_of_free_entries_in_pool_to_execute_mutation>
         
-        <!-- Резерв для оптимизации партиций (было 25 по умолчанию) -->
-        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+        <!-- Резерв для оптимизации партиций (подняли с 2 до 4) -->
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>4</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
     </merge_tree>
 </clickhouse>

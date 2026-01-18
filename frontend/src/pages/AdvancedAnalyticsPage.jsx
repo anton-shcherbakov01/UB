@@ -59,9 +59,10 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                 alert('Ошибка авторизации. Перезагрузите страницу.');
                 return;
             }
+            // ИСПРАВЛЕНО: URL теперь указывают на /api/analytics, где смонтирован роутер
             const endpoint = activeTab === 'forensics' 
-                ? '/api/finance/report/forensics-pdf'
-                : '/api/finance/report/cashgap-pdf';
+                ? '/api/analytics/report/forensics-pdf'
+                : '/api/analytics/report/cashgap-pdf';
             const url = `${API_URL}${endpoint}?x_tg_data=${encodeURIComponent(token)}`;
             window.open(url, '_blank');
         } catch (e) {
@@ -134,11 +135,11 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                         onClick={onBack} 
                         className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
                         title="Назад"
-                     >
-                         <ArrowLeft size={24}/>
-                     </button>
-                     
-                     <div className="group relative h-full">
+                      >
+                          <ArrowLeft size={24}/>
+                      </button>
+                      
+                      <div className="group relative h-full">
                         <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
                             <HelpCircle size={24}/>
                         </button>
@@ -148,7 +149,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                             <p className="leading-relaxed">{info.text}</p>
                             <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
                         </div>
-                     </div>
+                      </div>
                  </div>
             </div>
 
