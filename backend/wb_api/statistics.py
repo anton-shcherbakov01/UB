@@ -49,7 +49,7 @@ class WBStatisticsMixin(WBApiBase):
         # Payload для проверки v3 API
         analytics_payload = {
             "selectedPeriod": {
-                "begin": datetime.now().strftime("%Y-%m-%d"),
+                "start": datetime.now().strftime("%Y-%m-%d"),
                 "end": datetime.now().strftime("%Y-%m-%d")
             },
             "nmIds": [],
@@ -224,7 +224,7 @@ class WBStatisticsMixin(WBApiBase):
             while is_more:
                 payload = {
                     "selectedPeriod": {
-                        "begin": date_from,
+                        "start": date_from,
                         "end": date_to
                     },
                     "nmIds": [], # Пустой массив = все товары
@@ -532,6 +532,10 @@ class WBStatisticsAPI:
                             error_text = await resp.text()
                             logger.warning(f"WB API 404 (Deprecated/Not Found) at {url}. Response: {error_text}")
                             return []
+                        elif resp.status == 400:
+                             error_text = await resp.text()
+                             logger.error(f"WB API Error 400: {error_text}")
+                             return []
                         else:
                             text = await resp.text()
                             logger.error(f"WB API Error {resp.status}: {text}")
@@ -596,7 +600,7 @@ class WBStatisticsAPI:
             while is_more:
                 payload = {
                     "selectedPeriod": {
-                        "begin": date_from,
+                        "start": date_from,
                         "end": date_to
                     },
                     "nmIds": [], # Пустой массив = все товары
