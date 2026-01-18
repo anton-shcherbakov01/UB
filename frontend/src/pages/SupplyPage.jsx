@@ -546,17 +546,18 @@ const SupplyPage = () => {
                  {/* Main Header Card with Gradient */}
                  <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
                     <div className="relative z-10">
-                        <h1 className="text-2xl font-black flex items-center gap-2">
-                            <Truck className="text-white" /> Supply Chain
+                        {/* Smaller font size for header */}
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Truck className="text-white" size={24} /> Supply Chain
                         </h1>
-                        <p className="text-sm opacity-90 mt-1 font-medium">Умное управление запасами</p>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">Умное управление запасами</p>
                     </div>
 
                     {/* PDF Download Button INSIDE Header (Round Icon) */}
                     <div className="relative z-10">
                          <button 
                             onClick={handleDownloadReport}
-                            className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
                             title="Скачать PDF"
                         >
                             <FileDown size={20} />
