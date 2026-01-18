@@ -217,7 +217,7 @@ class WBStatisticsMixin(WBApiBase):
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100 
+        limit = 100  # Reduced to 100 as per reference doc recommendation
         is_more = True
         
         try:
@@ -232,6 +232,8 @@ class WBStatisticsMixin(WBApiBase):
                     "offset": offset
                 }
                 
+                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
+                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
@@ -261,9 +263,8 @@ class WBStatisticsMixin(WBApiBase):
                     items = response_data.get("cards", [])
                 
                 if not items:
-                    # Log only if really no items found to avoid spam if it's just end of list
-                    if offset == 0:
-                         logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                    # Detailed logging to diagnose "No cards" issue
+                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
@@ -287,7 +288,7 @@ class WBStatisticsMixin(WBApiBase):
                 offset += limit
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages
+                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
                 await asyncio.sleep(5) 
 
             return res
@@ -525,7 +526,7 @@ class WBStatisticsAPI:
             "Accept": "application/json"
         }
 
-    async def _request(self, endpoint: str, params: Dict[str, Any] = None, method: str = "GET", json_data: Any = None, retries: int = 3) -> Any:
+    async def _request(self, endpoint: str, params: Dict[str, Any] = None, method: str = "GET", json_data: Any = None, retries: int = 5) -> Any:
         """
         Универсальный метод запроса. Поддерживает полные URL и POST.
         """
@@ -538,11 +539,12 @@ class WBStatisticsAPI:
         async with aiohttp.ClientSession() as session:
             for attempt in range(retries):
                 try:
-                    async with session.request(method, url, headers=self.headers, params=params, json=json_data, timeout=30) as resp:
+                    async with session.request(method, url, headers=self.headers, params=params, json=json_data, timeout=60) as resp:
                         if resp.status == 200:
                             return await resp.json()
                         elif resp.status == 429:
-                            wait_time = 3 * (attempt + 1) # Increased wait time for strict limits
+                            # Aggressive backoff: 3s, 9s, 27s, 81s, 243s
+                            wait_time = 3 ** (attempt + 1)
                             logger.warning(f"Rate limit 429. Waiting {wait_time}s...")
                             await asyncio.sleep(wait_time)
                             continue
@@ -598,7 +600,6 @@ class WBStatisticsAPI:
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
         # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
-        # This was causing 400 error because of extra time string
         if len(date_from) > 10: date_from = date_from[:10]
         if len(date_to) > 10: date_to = date_to[:10]
 
@@ -616,7 +617,7 @@ class WBStatisticsAPI:
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100  # Reduced to 100 as per reference doc recommendation
+        limit = 100 
         is_more = True
         
         try:
@@ -631,8 +632,6 @@ class WBStatisticsAPI:
                     "offset": offset
                 }
                 
-                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
-                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
@@ -652,7 +651,6 @@ class WBStatisticsAPI:
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
-                     # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
@@ -662,15 +660,13 @@ class WBStatisticsAPI:
                     items = response_data.get("cards", [])
                 
                 if not items:
-                    # Detailed logging to diagnose "No cards" issue
-                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                    if offset == 0:
+                         logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
-                # --- DEBUG LOGGING START ---
                 if offset == 0:
                     logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
-                # --- DEBUG LOGGING END ---
 
                 for c in items:
                     # UPDATED MAPPING FOR V3 BASED ON LOGS
@@ -687,7 +683,6 @@ class WBStatisticsAPI:
                 offset += limit
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
                 await asyncio.sleep(5) 
 
             return res
