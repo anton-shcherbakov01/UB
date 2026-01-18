@@ -13,7 +13,7 @@ from analysis_service import analysis_service
 from services.supply import supply_service
 from database import get_db, User, ProductCost, SupplySettings
 from dependencies import get_current_user
-from wb_api.statistics import WBStatisticsAPI
+from wb_api.statistics import WBStatisticsAPI, WBStatisticsMixin
 from config.plans import get_limit, has_feature, get_plan_config
 
 # Note: Frontend seems to be requesting /api/finance for reports based on logs.
@@ -313,11 +313,12 @@ async def get_sales_funnel(
     date_from_str = date_from.strftime("%Y-%m-%d 00:00:00")
 
     wb_api = WBStatisticsAPI(user.wb_api_token)
+    wb_api_mixin = WBStatisticsMixin(user.wb_api_token)
 
     try:
         # 1. Получаем агрегированные данные воронки (Просмотры, Корзины) из V2
         # Это тяжелый запрос, он дает сумму за период
-        funnel_total = await wb_api.get_sales_funnel_full(user.wb_api_token, date_from_str, date_to_str)
+        funnel_total = await wb_api_mixin.get_sales_funnel_full(user.wb_api_token, date_from_str, date_to_str)
         
         # 2. Получаем исторические данные по заказам и выкупам из V1 (они точные по дням)
         # Нам нужно распределить "Просмотры" и "Корзины" по дням пропорционально заказам,
