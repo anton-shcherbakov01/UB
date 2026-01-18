@@ -39,7 +39,10 @@ async def get_or_create_settings(session: AsyncSession, user_id: int) -> SupplyS
     
     # Executing the statement with await
     result = await session.execute(stmt) 
-    settings = result.scalar_one_or_none()
+    
+    # FIX: Используем scalars().first() вместо scalar_one_or_none()
+    # Это предотвращает краш, если в БД случайно создались дубликаты настроек
+    settings = result.scalars().first()
     
     if not settings:
         settings = SupplySettings(
