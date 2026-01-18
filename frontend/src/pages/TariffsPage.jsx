@@ -19,20 +19,16 @@ const TariffsPage = ({ onBack }) => {
             const res = await fetch(`${API_URL}/api/user/tariffs`, { headers: getTgHeaders() });
             const data = await res.json();
             if (Array.isArray(data)) setTariffs(data);
+            return data; // Возвращаем данные для использования в поллинге
         } catch (e) {
             console.error(e);
+            return [];
         }
     };
 
-    // Конвертация цены в Telegram Stars
-    // Курс: примерно 1 звезда = 1 рубль (или 100 звезд = 100 рублей)
-    // Но нужно учитывать, что Stars обычно дороже, поэтому используем 1₽ = 1 звезда для простоты
     const convertToStars = (priceStr) => {
-        // Извлекаем число из строки типа "1490 ₽" или "1490"
         const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
-        // Для Telegram Stars: 1 звезда ≈ 1 рубль (приблизительно)
-        // Если курс другой, можно изменить множитель
-        return Math.max(1, Math.round(price)); // Минимум 1 звезда
+        return Math.max(1, Math.round(price)); 
     };
 
     const payWithStars = async (plan) => {
@@ -44,7 +40,6 @@ const TariffsPage = ({ onBack }) => {
         setPayLoading(true);
         try {
             const starsAmount = convertToStars(plan.price);
-            console.log('[Pay Stars] Plan price:', plan.price, 'Converted to stars:', starsAmount);
             
             if (starsAmount <= 0) {
                 throw new Error("Неверная сумма для оплаты. Проверьте цену тарифа.");
@@ -60,7 +55,6 @@ const TariffsPage = ({ onBack }) => {
             });
             
             const data = await res.json();
-            console.log('[Pay Stars] Response:', data);
             
             if (!res.ok) {
                 throw new Error(data.detail || "Ошибка создания ссылки оплаты");
@@ -70,28 +64,17 @@ const TariffsPage = ({ onBack }) => {
                 throw new Error("Сервер не вернул ссылку на оплату");
             }
             
-            console.log('[Pay Stars] Opening invoice:', data.invoice_link);
-            
-            // Открываем инвойс в Telegram WebApp
             if (window.Telegram?.WebApp?.openInvoice) {
-                // Рекомендуемый способ - открываем инвойс через Telegram WebApp API
                 window.Telegram.WebApp.openInvoice(data.invoice_link, (status) => {
-                    console.log('[Pay Stars] Invoice status:', status);
                     if (status === 'paid') {
                         alert("Оплата успешна! Подписка активирована.");
-                        // Можно обновить данные пользователя
-                    } else if (status === 'cancelled') {
-                        console.log('[Pay Stars] Payment cancelled by user');
+                        fetchTariffs(); 
                     } else if (status === 'failed') {
                         alert("Оплата не прошла. Попробуйте снова.");
                     }
                 });
-            } else if (window.Telegram?.WebApp?.openLink) {
-                // Fallback: открываем ссылку
-                window.Telegram.WebApp.openLink(data.invoice_link);
             } else {
-                // Последний fallback: открываем в новой вкладке
-                window.open(data.invoice_link, '_blank');
+                window.Telegram.WebApp.openLink(data.invoice_link);
             }
         } catch (e) {
             console.error('[Pay Stars] Error:', e);
@@ -101,31 +84,70 @@ const TariffsPage = ({ onBack }) => {
         }
     };
 
+    // --- ОБНОВЛЕННАЯ ФУНКЦИЯ ОПЛАТЫ ЧЕРЕЗ РОБОКАССУ ---
     const payWithRobokassa = async (plan) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
         try {
+            // 1. Создаем платеж
             const res = await fetch(`${API_URL}/api/payment/robokassa/subscription`, {
                 method: 'POST',
                 headers: getTgHeaders(),
                 body: JSON.stringify({ plan_id: plan.id })
             });
             const data = await res.json();
+            
             if (res.ok && data.payment_url) {
+                // 2. Открываем ссылку
                 if (window.Telegram?.WebApp?.openLink) {
-                    window.Telegram.WebApp.openLink(data.payment_url);
+                    // try_instant_view: false - чтобы открылось в браузере/popup
+                    window.Telegram.WebApp.openLink(data.payment_url, { try_instant_view: false });
                 } else {
                     window.open(data.payment_url, '_blank');
                 }
+
+                // 3. ЗАПУСКАЕМ ПРОВЕРКУ (Polling), пока юзер платит в браузере
+                // Не выключаем лоадер, ждем результата
+                const checkInterval = setInterval(async () => {
+                    try {
+                        // Запрашиваем тарифы заново
+                        const updatedTariffs = await fetchTariffs();
+                        
+                        // Ищем наш тариф в обновленном списке
+                        const targetPlan = updatedTariffs?.find(t => t.id === plan.id);
+                        
+                        // Если он стал активным (current: true)
+                        if (targetPlan && targetPlan.current) {
+                            clearInterval(checkInterval); // Стоп проверка
+                            setPayLoading(false); // Стоп лоадер
+                            
+                            // Уведомление
+                            if (window.Telegram?.WebApp?.showAlert) {
+                                window.Telegram.WebApp.showAlert("Оплата прошла успешно! Тариф активирован.");
+                            } else {
+                                alert("Оплата прошла успешно! Тариф активирован.");
+                            }
+                        }
+                    } catch (err) {
+                        console.error("Polling error:", err);
+                    }
+                }, 3000); // Проверяем каждые 3 секунды
+
+                // Остановим проверку принудительно через 5 минут, если юзер уснул
+                setTimeout(() => {
+                    clearInterval(checkInterval);
+                    setPayLoading(false);
+                }, 300000);
+
             } else {
                 throw new Error(data.detail || "Ошибка инициализации платежа");
             }
         } catch (e) {
             alert(e.message || "Ошибка при создании платежа через Робокассу");
-        } finally {
             setPayLoading(false);
         }
     };
+    // ---------------------------------------------------
 
     const handlePay = (plan) => {
         if (paymentMethod === 'stars') {
@@ -135,7 +157,6 @@ const TariffsPage = ({ onBack }) => {
         }
     };
 
-    // Определение функций для сравнения (Согласно config/plans.py)
     const features = [
         { key: 'history_days', label: 'История продаж', start: '7 дней', analyst: '60 дней', strategist: '365 дней' },
         { key: 'ai_requests', label: 'AI-запросы в месяц', start: '5', analyst: '100', strategist: '1000' },

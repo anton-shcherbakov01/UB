@@ -477,13 +477,9 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
 @router.get("/payment/robokassa/success", response_class=HTMLResponse)
 async def robokassa_success(user_id: int = None):
     """
-    Success URL redirect handler.
+    Страница успеха. Ее единственная задача - сообщить пользователю об успехе
+    и ЗАКРЫТЬСЯ, чтобы пользователь увидел под ней свое основное приложение.
     """
-    # Ссылка на корень твоего веб-приложения (где фронтенд)
-    # Если фронт лежит там же где и апи, то просто "/"
-    # Если фронт отдельно, например на vercel, то "https://my-front.com/"
-    # Для Telegram WebApp часто лучше просто перегрузить страницу.
-    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="ru">
@@ -493,79 +489,48 @@ async def robokassa_success(user_id: int = None):
         <title>Оплата успешна</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                background-color: #f3f4f6;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                min-height: 100vh;
-                padding: 20px;
+                font-family: -apple-system, sans-serif;
+                background-color: #f0fdf4; /* Светло-зеленый фон */
+                display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                height: 100vh; margin: 0; text-align: center; padding: 20px;
             }}
-            .card {{
-                background: white;
-                border-radius: 20px;
-                padding: 30px;
-                text-align: center;
-                max-width: 350px;
-                width: 100%;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            .icon {{ font-size: 60px; margin-bottom: 20px; }}
+            h1 {{ margin-bottom: 10px; color: #166534; }}
+            p {{ color: #4b5563; margin-bottom: 30px; }}
+            button {{
+                background-color: #16a34a; color: white; border: none;
+                padding: 15px 30px; border-radius: 12px; font-size: 18px; font-weight: bold;
+                width: 100%; max-width: 300px; cursor: pointer;
             }}
-            .icon-box {{
-                width: 70px; height: 70px; background: #dcfce7; color: #16a34a;
-                border-radius: 50%; display: flex; align-items: center; justify-content: center;
-                margin: 0 auto 20px; font-size: 32px;
-            }}
-            h1 {{ color: #111827; font-size: 22px; font-weight: 700; margin-bottom: 10px; }}
-            p {{ color: #6b7280; font-size: 15px; line-height: 1.5; margin-bottom: 25px; }}
-            .btn {{
-                background: #2563eb; color: white; border: none;
-                padding: 12px 20px; border-radius: 12px; font-size: 16px; font-weight: 600;
-                cursor: pointer; width: 100%; transition: opacity 0.2s;
-                text-decoration: none; display: inline-block;
-            }}
-            .btn:hover {{ opacity: 0.9; }}
         </style>
     </head>
     <body>
-        <div class="card">
-            <div class="icon-box">✓</div>
-            <h1>Оплата прошла успешно!</h1>
-            <p>Ваш тариф активирован, а лимиты обновлены. Нажмите кнопку ниже, чтобы вернуться к работе.</p>
-            
-            <button class="btn" onclick="goBack()">Вернуться в приложение</button>
-        </div>
+        <div class="icon">✅</div>
+        <h1>Оплата прошла!</h1>
+        <p>Нажмите кнопку ниже, чтобы закрыть это окно и вернуться в приложение.</p>
+        <button onclick="closeMe()">Закрыть и обновить</button>
 
         <script>
-            // Сообщаем Телеграму, что мы готовы (на всякий случай)
+            // Сообщаем Телеграму, что приложение готово
             if (window.Telegram && window.Telegram.WebApp) {{
                 window.Telegram.WebApp.ready();
             }}
 
-            function goBack() {{
-                // Логика:
-                // 1. Если это попап - пытаемся его закрыть.
-                // 2. Если мы в главном окне - перезагружаем его, направляя на главную страницу приложения.
-                
+            function closeMe() {{
                 if (window.Telegram && window.Telegram.WebApp) {{
-                    // Попытка закрыть окно (работает, если оплата открывалась через openLink или popup)
-                    try {{
-                        window.Telegram.WebApp.close();
-                    }} catch (e) {{
-                        console.log("Cannot close", e);
-                    }}
+                    // Эта команда закрывает текущее окно (браузер внутри телеги)
+                    window.Telegram.WebApp.close();
+                }} else {{
+                    // Фоллбэк для обычного браузера (вряд ли сработает, но пусть будет)
+                    window.close();
                 }}
-                
-                // Если окно не закрылось (мы в том же окне), делаем редирект
-                // Вместо t.me ссылки используем window.location.href на корень твоего сайта
-                // Это перезагрузит приложение и обновит данные (лимиты)
-                
-                // ВАЖНО: Укажи здесь URL твоего веб-приложения (фронтенда)
-                // Если бот открывает https://api.juicystat.ru/app, то пиши сюда этот путь
-                window.location.href = "https://api.juicystat.ru/"; 
-                // Или просто window.location.href = "/"; если корень там же.
             }}
+            
+            // ОПЦИОНАЛЬНО: Автоматическое закрытие через 3 секунды, 
+            // если хочешь, чтобы юзер даже кнопку не жал.
+            // setTimeout(closeMe, 3000); 
         </script>
     </body>
     </html>
