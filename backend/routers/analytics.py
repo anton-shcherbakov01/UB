@@ -306,7 +306,7 @@ async def get_sales_funnel(
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="Требуется API токен WB")
 
-    date_to = datetime.now()-timedelta(days=1)
+    date_to = datetime.now()
     date_from = date_to - timedelta(days=days)
     
     date_to_str = date_to.strftime("%Y-%m-%d 23:59:59")

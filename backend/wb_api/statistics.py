@@ -217,7 +217,7 @@ class WBStatisticsMixin(WBApiBase):
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 1000 
+        limit = 100  # Reduced to 100 as per reference doc recommendation
         is_more = True
         
         try:
@@ -242,7 +242,7 @@ class WBStatisticsMixin(WBApiBase):
                 )
                 
                 if not data or not isinstance(data, dict):
-                    logger.warning(f"Empty data received from Funnel API v3. Data: {data}")
+                    logger.warning(f"Empty or invalid data received from Funnel API v3. Data: {data}")
                     break
                 
                 # Check for error in response body structure
@@ -250,10 +250,18 @@ class WBStatisticsMixin(WBApiBase):
                      logger.error(f"Funnel API v3 Error Body: {data}")
                      break
 
-                cards = data.get("data", {}).get("cards", [])
+                # Response structure check: { "data": { "cards": [] } }
+                response_data = data.get("data", {})
+                if not response_data:
+                     # Some APIs return cards directly or in a different wrapper on error/empty
+                     logger.warning(f"No 'data' field in response. Full response: {data}")
+                     break
+
+                cards = response_data.get("cards", [])
                 
                 if not cards:
-                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}")
+                    # Detailed logging to diagnose "No cards" issue
+                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
@@ -279,8 +287,8 @@ class WBStatisticsMixin(WBApiBase):
                 offset += limit
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages
-                await asyncio.sleep(2) 
+                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
+                await asyncio.sleep(5) 
 
             return res
             
@@ -607,7 +615,7 @@ class WBStatisticsAPI:
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 1000 
+        limit = 100  # Reduced to 100 as per reference doc recommendation
         is_more = True
         
         try:
@@ -632,7 +640,7 @@ class WBStatisticsAPI:
                 )
                 
                 if not data or not isinstance(data, dict):
-                    logger.warning(f"Empty data received from Funnel API v3. Data: {data}")
+                    logger.warning(f"Empty or invalid data received from Funnel API v3. Data: {data}")
                     break
                 
                 # Check for error in response body structure
@@ -640,10 +648,18 @@ class WBStatisticsAPI:
                      logger.error(f"Funnel API v3 Error Body: {data}")
                      break
 
-                cards = data.get("data", {}).get("cards", [])
+                # Response structure check: { "data": { "cards": [] } }
+                response_data = data.get("data", {})
+                if not response_data:
+                     # Some APIs return cards directly or in a different wrapper on error/empty
+                     logger.warning(f"No 'data' field in response. Full response: {data}")
+                     break
+
+                cards = response_data.get("cards", [])
                 
                 if not cards:
-                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}")
+                    # Detailed logging to diagnose "No cards" issue
+                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
@@ -669,8 +685,8 @@ class WBStatisticsAPI:
                 offset += limit
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages
-                await asyncio.sleep(2) 
+                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
+                await asyncio.sleep(5) 
 
             return res
             
