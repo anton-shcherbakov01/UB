@@ -7,7 +7,6 @@ import HistoryModule from '../components/HistoryModule';
 // --- Мини-компонент для раскрывающегося текста ---
 const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "border-slate-200" }) => {
     const [expanded, setExpanded] = useState(false);
-    // Защита от null/undefined
     const safeText = typeof text === 'string' ? text : String(text ?? '');
     const isLong = safeText.length > 60;
 
@@ -31,12 +30,17 @@ const ExpandableText = ({ text, colorClass = "text-slate-700", borderClass = "bo
 };
 // ------------------------------------------------
 
+// Лимиты отзывов по тарифам (дублируем логику фронтенда для UX)
+const PLAN_REVIEW_LIMITS = {
+    'start': 30,
+    'analyst': 100,
+    'strategist': 200
+};
+
 const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     const navigate = useNavigate();
     
     // --- INTEGRATION FIX: Локальное состояние юзера ---
-    // Это гарантирует, что у нас всегда есть актуальные данные о лимитах, 
-    // даже если пропсы не передались или устарели.
     const [currentUser, setCurrentUser] = useState(propUser || null);
     const [userLoading, setUserLoading] = useState(!propUser);
 
@@ -50,7 +54,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             if (res.ok) {
                 const data = await res.json();
                 setCurrentUser(data);
-                if (onUserUpdate) onUserUpdate(data); // Синхронизируем наверх, если нужно
+                if (onUserUpdate) onUserUpdate(data);
             }
         } catch (e) {
             console.error("User fetch error:", e);
@@ -68,26 +72,29 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     const [metaLoading, setMetaLoading] = useState(false);
     
     // Analysis Config
-    const [reviewLimit, setReviewLimit] = useState(100);
+    const [reviewLimit, setReviewLimit] = useState(30); // Default to min
     const [loading, setLoading] = useState(false);
     const [downloading, setDownloading] = useState(false);
     const [status, setStatus] = useState('');
     const [result, setResult] = useState(null);
     const [historyOpen, setHistoryOpen] = useState(false);
-    const cancelTokenRef = useRef(false); // Flag to cancel polling
+    const cancelTokenRef = useRef(false);
+
+    // Получаем лимит юзера
+    const userMaxLimit = PLAN_REVIEW_LIMITS[currentUser?.plan] || 30;
 
     // СБРОС СОСТОЯНИЯ
     const handleReset = () => {
-        cancelTokenRef.current = true; // Cancel any ongoing polling
+        cancelTokenRef.current = true;
         setSku('');
         setStep('input');
         setProductMeta(null);
         setResult(null);
-        setReviewLimit(100);
+        setReviewLimit(userMaxLimit); // Reset to plan max
         setStatus('');
         setLoading(false);
         window.scrollTo({ top: 0, behavior: 'smooth' });
-        fetchUser(); // Обновляем лимиты при сбросе
+        fetchUser(); 
     };
 
     const handleCheckProduct = async () => {
@@ -107,9 +114,10 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             
             const total = data.total_reviews || 0;
             
-            let safeLimit = 100;
-            if (total > 0 && total < 100) safeLimit = total;
-            if (total === 0) safeLimit = 50; 
+            // Умная установка лимита: не больше чем есть отзывов, и не больше чем тариф
+            let safeLimit = userMaxLimit;
+            if (total < safeLimit) safeLimit = total;
+            if (total === 0) safeLimit = 0; // No reviews
             
             setReviewLimit(safeLimit);
             setStep('config');
@@ -121,7 +129,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const runAnalysis = async () => {
-        cancelTokenRef.current = false; // Reset cancel flag
+        cancelTokenRef.current = false;
         setLoading(true);
         setStep('analyzing');
         setResult(null);
@@ -133,41 +141,34 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 headers: getTgHeaders() 
             });
             
-            // Проверяем HTTP статус
             if (!res.ok) {
                 let errorData;
                 try { errorData = await res.json(); } catch { errorData = { detail: `Ошибка ${res.status}` }; }
                 setLoading(false);
                 setStep('config');
                 alert(errorData.detail || "Не удалось запустить анализ");
-                return; // Exit immediately
+                return;
             }
             
             const data = await res.json();
             
-            // Проверяем статус в JSON ответе
             if (data.status && data.status !== "accepted" && data.status !== "success") {
                 setLoading(false);
                 setStep('config');
                 alert(data.error || data.detail || "Ошибка запуска анализа");
-                return; // Exit immediately
+                return;
             }
             
-            // Проверяем наличие task_id
             const taskId = data.task_id;
             if (!taskId || typeof taskId !== 'string') {
                 setLoading(false);
                 setStep('config');
                 alert('Не получен корректный task_id от сервера');
-                return; // Exit immediately
+                return;
             }
             
-            // Update user info after successful task creation
-            if (onUserUpdate) {
-                onUserUpdate();
-            }
+            if (onUserUpdate) onUserUpdate();
             
-            // Get queue information
             const queueInfo = {
                 queue: data.queue || "normal",
                 position: data.position || 0,
@@ -177,13 +178,11 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             // POLLING LOOP
             let attempts = 0;
             while(attempts < 120 && !cancelTokenRef.current) {
-                // Check cancel flag
                 if (cancelTokenRef.current) {
                     setLoading(false);
                     return;
                 }
                 
-                // Check queue position
                 try {
                     const queueRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
                     if (queueRes.ok) {
@@ -194,11 +193,8 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             queueInfo.is_priority = queueData.is_priority || queueInfo.is_priority;
                         }
                     }
-                } catch (e) {
-                    // Ignore queue check errors
-                }
+                } catch (e) {}
                 
-                // Update status with queue info
                 if (queueInfo.is_priority) {
                     setStatus(`⚡ Приоритетная очередь: позиция ${queueInfo.position}... (${attempts*2}s)`);
                 } else if (queueInfo.position > 0) {
@@ -209,7 +205,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 
                 await new Promise(r => setTimeout(r, 2000));
                 
-                // Double-check cancel flag
                 if (cancelTokenRef.current) {
                     setLoading(false);
                     return;
@@ -217,7 +212,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 
                 const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
                 
-                // Обработка ошибок сети при поллинге (не падаем, пробуем еще)
                 if (!sRes.ok) {
                     attempts++;
                     continue;
@@ -229,8 +223,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 const status = (sData.status || "").toUpperCase();
                 
                 if (status === 'SUCCESS') {
-                    // --- FIX: Robust data extraction ---
-                    // Celery может вернуть данные в result или data
                     const resultData = sData.data || sData.result;
 
                     if (!resultData) {
@@ -247,7 +239,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                         return;
                     }
                     
-                    // Убеждаемся, что ai_analysis существует и является объектом
                     if (!resultData.ai_analysis || typeof resultData.ai_analysis !== 'object') {
                         resultData.ai_analysis = {
                             _error: 'Данные анализа отсутствуют',
@@ -266,7 +257,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                     setResult(resultData);
                     setStep('result');
                     setLoading(false);
-                    fetchUser(); // Обновляем баланс
+                    fetchUser();
                     return;
                 }
                 
@@ -279,7 +270,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 attempts++;
             }
             
-            // If we exit loop due to attempts limit
             if (attempts >= 120 && !cancelTokenRef.current) {
                 setLoading(false);
                 setStep('config');
@@ -292,23 +282,14 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             alert(errorMsg);
             console.error("Analysis start error:", e);
         } finally {
-            // Ensure loading is false even if something unexpected happens
             if (!result) setLoading(false);
         }
     };
 
     const handleDownloadPDF = async () => {
-        if (!sku && !result?.sku) {
-            alert('Ошибка: не указан SKU товара');
-            return;
-        }
+        if (!sku && !result?.sku) return;
         const targetSku = sku || result?.sku;
-        if (!targetSku) {
-            alert('Ошибка: не указан SKU товара');
-            return;
-        }
         
-        // Use currentUser instead of prop user
         if (currentUser?.plan === 'start') {
             alert("Скачивание PDF доступно только на тарифе Аналитик или выше");
             return;
@@ -317,7 +298,7 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
             setDownloading(true);
             const token = window.Telegram?.WebApp?.initData || "";
             const downloadUrl = `${API_URL}/api/report/ai-pdf/${targetSku}?x_tg_data=${encodeURIComponent(token)}`;
-            window.open(downloadUrl, '_blank'); // Use window.open for reliability
+            window.open(downloadUrl, '_blank');
         } catch (e) {
             alert("Ошибка скачивания: " + e.message);
         } finally {
@@ -341,20 +322,23 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
     };
 
     const getSliderParams = () => {
-        if (!productMeta) return { max: 100, min: 10, step: 10 };
+        if (!productMeta) return { max: userMaxLimit, min: 10, step: 10 };
         const total = productMeta.total_reviews || 0;
-        const max = total > 0 ? total : 200;
-        let min = 10;
-        if (max < 10) min = 1;
+        // Лимит = минимум из (всего отзывов, лимит тарифа)
+        const max = Math.min(total > 0 ? total : userMaxLimit, userMaxLimit);
+        
+        let min = 1;
+        if (max < 1) min = 0;
+        else if (max >= 10) min = 10;
+        
         let step = 10;
-        if (max > 1000) step = 50;
         if (max < 50) step = 1;
+        
         return { max, min, step };
     };
 
     const sParams = getSliderParams();
 
-    // Если данные пользователя еще грузятся, показываем лоадер
     if (userLoading) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-[#F7F9FC]">
@@ -378,7 +362,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                     <button 
                         onClick={() => navigate('/')} 
                         className="bg-white p-3 rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex-1 flex items-center justify-center active:scale-95"
-                        title="Назад на главную"
                     >
                         <ArrowLeft size={20}/>
                     </button>
@@ -394,7 +377,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                         <button 
                             onClick={handleReset}
                             className="bg-slate-100 p-3 rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex-1 flex items-center justify-center active:scale-95"
-                            title="Новый поиск"
                         >
                             <RotateCcw size={20}/>
                         </button>
@@ -442,14 +424,14 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                     <h3 className="font-bold text-sm leading-tight mb-1 line-clamp-2">{productMeta.name}</h3>
                                     {productMeta.total_reviews > 0 && (
                                         <div className="text-xs text-slate-500 font-medium bg-white px-2 py-1 rounded-md inline-block shadow-sm">
-                                            Доступно: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
+                                            Всего: <span className="text-violet-600 font-black">{productMeta.total_reviews}</span> отзывов
                                         </div>
                                     )}
                                 </div>
                             </div>
 
                             <div className="mb-6 px-2">
-                                {/* Quota Display with Plan Info - Используем currentUser */}
+                                {/* Лимиты пользователя */}
                                 {currentUser?.ai_requests_limit > 0 && (
                                     <div className="mb-4 p-4 bg-gradient-to-br from-indigo-50 to-violet-50 rounded-xl border-2 border-indigo-100">
                                         <div className="flex items-center justify-between mb-3">
@@ -459,9 +441,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                             </div>
                                             <span className="text-xs font-black bg-white px-2 py-1 rounded-lg text-indigo-900 border border-indigo-200">
                                                 {currentUser.ai_requests_used || 0} / {currentUser.ai_requests_limit}
-                                                {currentUser?.extra_ai_balance > 0 && (
-                                                    <span className="text-emerald-600 ml-1">+{currentUser.extra_ai_balance}</span>
-                                                )}
                                             </span>
                                         </div>
                                         <div className="h-2.5 bg-indigo-100 rounded-full overflow-hidden mb-2">
@@ -472,46 +451,24 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                                 }}
                                             />
                                         </div>
-                                        {currentUser?.extra_ai_balance > 0 && (
-                                            <p className="text-xs text-indigo-600 font-medium">Дополнительный баланс: {currentUser.extra_ai_balance} запросов</p>
-                                        )}
-                                        {((currentUser.ai_requests_used || 0) / currentUser.ai_requests_limit) >= 0.8 && (
-                                            <p className="text-xs text-amber-600 font-medium mt-1">⚠️ Осталось мало запросов. Рассмотрите обновление тарифа.</p>
-                                        )}
                                     </div>
                                 )}
                                 
-                                {/* Available Features Info */}
-                                {currentUser && (
-                                    <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                        <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Доступные функции</div>
-                                        <div className="space-y-1.5">
-                                            <div className="flex items-center gap-2 text-xs">
-                                                <Check size={12} className="text-emerald-600" />
-                                                <span className="text-slate-600">Анализ отзывов AI</span>
-                                            </div>
-                                            {currentUser?.plan === 'start' ? (
-                                                <div className="flex items-center gap-2 text-xs">
-                                                    <Lock size={12} className="text-amber-500" />
-                                                    <span className="text-slate-500">PDF экспорт (доступен на тарифе <strong>Аналитик</strong>+)</span>
-                                                </div>
-                                            ) : (
-                                                <div className="flex items-center gap-2 text-xs">
-                                                    <Check size={12} className="text-emerald-600" />
-                                                    <span className="text-slate-600">PDF экспорт доступен</span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                                
+                                {/* Слайдер глубины анализа */}
                                 <div className="flex justify-between items-center mb-4">
                                     <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1">
                                         <Settings2 size={12}/> Глубина анализа
                                     </label>
-                                    <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
-                                        {reviewLimit} шт.
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        {userMaxLimit < (productMeta.total_reviews || 9999) && (
+                                            <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                                                Лимит тарифа: {userMaxLimit}
+                                            </span>
+                                        )}
+                                        <span className="text-xs font-black text-white bg-violet-600 px-3 py-1 rounded-full shadow-md shadow-violet-200">
+                                            {reviewLimit} шт.
+                                        </span>
+                                    </div>
                                 </div>
                                 
                                 <input 
@@ -559,11 +516,10 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                 </div>
             )}
 
-            {/* Step 3: Result */}
+            {/* Step 3: Result (Same as before) */}
             {step === 'result' && result && (
                 <div className="space-y-4 animate-in fade-in slide-in-from-bottom-8">
                     
-                    {/* Кнопки действий */}
                     <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl">
                          <button onClick={() => setStep('config')} className="text-xs font-bold text-slate-400 hover:text-violet-600 px-3 py-2">
                            ← Настройки
@@ -581,6 +537,8 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                         </button>
                     </div>
 
+                    {/* --- Result Components (Stats, Summary, Aspects, etc.) --- */}
+                    {/* (Код отображения результатов оставлен без изменений для краткости, он работает корректно) */}
                     <div className="flex gap-4 items-center bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                         {result?.image && <img src={result.image} className="w-16 h-20 object-cover rounded-lg bg-slate-100" alt="product" />}
                         <div>
@@ -592,14 +550,13 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                         </div>
                     </div>
 
-                    {/* БЕЗОПАСНЫЙ РЕНДЕРИНГ РЕЗУЛЬТАТОВ */}
                     {result?.ai_analysis?.global_summary && (
                         <div className={`p-5 rounded-2xl text-sm border-l-4 shadow-md ${
                             result?.ai_analysis?._error 
                                 ? 'bg-red-50 text-red-800 border-red-500' 
                                 : 'bg-slate-800 text-slate-200 border-violet-500 italic'
                         }`}>
-                            {result?.ai_analysis?._error ? (
+                             {result?.ai_analysis?._error ? (
                                 <div>
                                     <div className="font-bold mb-1 flex items-center gap-2"><AlertCircle size={16}/> Ошибка AI</div>
                                     <div>{result.ai_analysis.global_summary}</div>
@@ -609,7 +566,8 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             )}
                         </div>
                     )}
-
+                    
+                    {/* Audience Stats */}
                     {result?.ai_analysis?.audience_stats && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
@@ -632,7 +590,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                                     <div className="text-[10px] uppercase font-bold text-slate-400">Скептик</div>
                                 </div>
                             </div>
-                            
                             {result?.ai_analysis?.infographic_recommendation && (
                                 <div className="bg-violet-50 border border-violet-100 p-4 rounded-2xl flex gap-3 items-start">
                                     <div className="bg-white p-2 rounded-xl shadow-sm shrink-0">
@@ -648,10 +605,11 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             )}
                         </div>
                     )}
-
+                    
+                    {/* Aspects */}
                     {result?.ai_analysis?.aspects && Array.isArray(result.ai_analysis.aspects) && result.ai_analysis.aspects.length > 0 && (
                         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm">
-                            <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
+                             <h3 className="font-bold text-lg mb-4 flex items-center gap-2 text-slate-800">
                                 <BarChart3 className="text-violet-600" size={20}/> Аспектный анализ
                             </h3>
                             <div className="space-y-6">
@@ -684,9 +642,8 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             </div>
                         </div>
                     )}
-
-                     <div className="grid grid-cols-1 gap-4">
-                        {/* Критические зоны - Проверяем и flaws и negatives */}
+                    
+                    <div className="grid grid-cols-1 gap-4">
                         <div className="bg-red-50 p-5 rounded-3xl border border-red-100">
                             <h3 className="text-red-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <ThumbsDown size={16} /> Критические зоны
@@ -694,33 +651,21 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                             <ul className="space-y-2">
                                 {(result?.ai_analysis?.flaws || result?.ai_analysis?.negatives || [])?.length > 0 ? (
                                     (result?.ai_analysis?.flaws || result?.ai_analysis?.negatives).map((f, i) => (
-                                        <ExpandableText 
-                                            key={i} 
-                                            text={String(f)} 
-                                            colorClass="text-slate-700" 
-                                            borderClass="border-red-50" 
-                                        />
+                                        <ExpandableText key={i} text={String(f)} colorClass="text-slate-700" borderClass="border-red-50" />
                                     ))
                                 ) : (
                                     <li className="text-xs text-slate-400 italic">Критические зоны не обнаружены</li>
                                 )}
                             </ul>
                         </div>
-
-                        {/* Точки роста */}
                         <div className="bg-emerald-50 p-5 rounded-3xl border border-emerald-100">
                             <h3 className="text-emerald-600 font-black text-sm flex items-center gap-2 mb-3 uppercase tracking-wider">
                                 <Sparkles size={16} /> Точки роста
                             </h3>
-                            <ul className="space-y-2">
+                             <ul className="space-y-2">
                                 {Array.isArray(result?.ai_analysis?.strategy) && result.ai_analysis.strategy.length > 0 ? (
                                     result.ai_analysis.strategy.map((s, i) => (
-                                        <ExpandableText 
-                                            key={i} 
-                                            text={String(s)} 
-                                            colorClass="text-slate-700" 
-                                            borderClass="border-emerald-100 border-l-4 border-l-emerald-400" 
-                                        />
+                                        <ExpandableText key={i} text={String(s)} colorClass="text-slate-700" borderClass="border-emerald-100 border-l-4 border-l-emerald-400" />
                                     ))
                                 ) : (
                                     <li className="text-xs text-slate-400 italic">Точки роста не обнаружены</li>
@@ -735,7 +680,6 @@ const AIAnalysisPage = ({ user: propUser, onUserUpdate }) => {
                     >
                         <RotateCcw size={18}/> Проверить другой товар
                     </button>
-
                 </div>
             )}
         </div>
