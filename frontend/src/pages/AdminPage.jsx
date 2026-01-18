@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     ChevronLeft, Loader2, RefreshCw, Users, DollarSign, Activity, 
     TrendingUp, TrendingDown, Server, BarChart3, PieChart, LineChart,
-    ArrowUp, ArrowDown, Minus, Search, Filter
+    ArrowUp, ArrowDown, Minus, Search, Filter, Check, Settings
 } from 'lucide-react';
 import { 
     BarChart, Bar, LineChart as RechartsLineChart, Line, PieChart as RechartsPieChart, 
@@ -15,12 +15,16 @@ const AdminPage = ({ onBack }) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     
-    // Data states
+    // Data states (New Admin Panel)
     const [usersStats, setUsersStats] = useState(null);
     const [servicesStats, setServicesStats] = useState(null);
     const [servicesDetailed, setServicesDetailed] = useState(null);
     const [serverMetrics, setServerMetrics] = useState(null);
     const [analytics, setAnalytics] = useState(null);
+    
+    // Data states (Old Admin Panel - User Management)
+    const [currentUser, setCurrentUser] = useState(null);
+    const [planChanging, setPlanChanging] = useState(false);
     
     // Table sorting
     const [sortField, setSortField] = useState('total_usage');
@@ -46,7 +50,8 @@ const AdminPage = ({ onBack }) => {
                 fetchServicesStats(),
                 fetchServicesDetailed(),
                 fetchServerMetrics(),
-                fetchAnalytics()
+                fetchAnalytics(),
+                fetchCurrentUser() // Added from old version
             ]);
         } catch (e) {
             console.error('Error fetching admin data:', e);
@@ -60,6 +65,8 @@ const AdminPage = ({ onBack }) => {
         await fetchAllData();
         setRefreshing(false);
     };
+
+    // --- API Fetchers ---
 
     const fetchUsersStats = async () => {
         const res = await fetch(`${API_URL}/api/admin/users/stats`, { headers: getTgHeaders() });
@@ -85,6 +92,73 @@ const AdminPage = ({ onBack }) => {
         const res = await fetch(`${API_URL}/api/admin/analytics/overview`, { headers: getTgHeaders() });
         if (res.ok) setAnalytics(await res.json());
     };
+
+    // Added from old version
+    const fetchCurrentUser = async () => {
+        const res = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
+        if (res.ok) setCurrentUser(await res.json());
+    };
+
+    // --- Old Admin Panel Logic (Plan Changing) ---
+
+    const plans = [
+        { id: 'start', name: 'Старт', color: 'bg-slate-900' },
+        { id: 'analyst', name: 'Аналитик', color: 'bg-indigo-600' },
+        { id: 'strategist', name: 'Стратег', color: 'bg-slate-700' }
+    ];
+
+    const getPlanDisplayName = (planId) => {
+        switch(planId) {
+            case 'analyst': return 'Аналитик';
+            case 'strategist': return 'Стратег';
+            case 'start': return 'Старт';
+            default: return planId || 'Не определено';
+        }
+    };
+
+    const changePlan = async (planId) => {
+        setPlanChanging(true);
+        try {
+            const res = await fetch(`${API_URL}/api/admin/set-plan`, {
+                method: 'POST',
+                headers: {
+                    ...getTgHeaders(),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ plan_id: planId })
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                
+                // Сразу обновляем локальное состояние из ответа сервера
+                if (data.plan) {
+                    setCurrentUser(prev => prev ? { ...prev, plan: data.plan } : null);
+                }
+                
+                // Затем обновляем полную информацию о пользователе с небольшой задержкой
+                setTimeout(async () => {
+                    try {
+                        await fetchCurrentUser();
+                    } catch (e) {
+                        console.error('Failed to refresh user data:', e);
+                    }
+                }, 500);
+                
+                alert(`✅ Тариф изменен на: ${data.plan_name || planId}`);
+            } else {
+                const error = await res.json().catch(() => ({ detail: 'Ошибка изменения тарифа' }));
+                alert(`❌ ${error.detail || 'Ошибка изменения тарифа'}`);
+            }
+        } catch (e) {
+            console.error('Plan change error:', e);
+            alert(`❌ Ошибка: ${e.message}`);
+        } finally {
+            setPlanChanging(false);
+        }
+    };
+
+    // --- Sorting & Helpers ---
 
     const handleSort = (field) => {
         if (sortField === field) {
@@ -185,7 +259,8 @@ const AdminPage = ({ onBack }) => {
                     { id: 'users', label: 'Пользователи', icon: Users },
                     { id: 'services', label: 'Сервисы', icon: Activity },
                     { id: 'load', label: 'Нагрузка', icon: Server },
-                    { id: 'analytics', label: 'Аналитика', icon: PieChart }
+                    { id: 'analytics', label: 'Аналитика', icon: PieChart },
+                    { id: 'testing', label: 'Тестирование', icon: Settings } // New tab for plan switching
                 ].map(tab => {
                     const Icon = tab.icon;
                     return (
@@ -689,6 +764,61 @@ const AdminPage = ({ onBack }) => {
                                 <p className="text-xs text-emerald-600 mb-1">Конверсия</p>
                                 <p className="text-2xl font-black text-emerald-700">{analytics.conversion_rate || 0}%</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Testing Tab (Imported from Old Version) */}
+            {activeTab === 'testing' && (
+                <div className="space-y-4 animate-in fade-in">
+                    <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
+                        <div className="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-800">Тестирование тарифов</h3>
+                                <p className="text-xs text-slate-500 mt-1">Текущий тариф: <strong className="text-slate-800">{getPlanDisplayName(currentUser?.plan)}</strong></p>
+                            </div>
+                            <button 
+                                onClick={fetchCurrentUser}
+                                className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 active:scale-95 transition-transform"
+                                title="Обновить информацию"
+                            >
+                                <RefreshCw size={18} className="text-slate-600" />
+                            </button>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {plans.map((plan) => (
+                                <button
+                                    key={plan.id}
+                                    onClick={() => changePlan(plan.id)}
+                                    disabled={planChanging || currentUser?.plan === plan.id}
+                                    className={`
+                                        p-4 rounded-2xl font-bold text-sm text-white shadow-lg active:scale-95 transition-all
+                                        ${planChanging ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-xl'}
+                                        ${currentUser?.plan === plan.id ? `${plan.color} ring-4 ring-offset-2 ring-offset-white ring-indigo-300` : plan.color}
+                                        ${currentUser?.plan === plan.id ? '' : 'hover:opacity-90'}
+                                    `}
+                                >
+                                    {planChanging && currentUser?.plan === plan.id ? (
+                                        <Loader2 className="animate-spin mx-auto" size={20} />
+                                    ) : currentUser?.plan === plan.id ? (
+                                        <div className="flex flex-col items-center gap-2">
+                                            <Check size={20} className="text-white" />
+                                            <span>{plan.name}</span>
+                                            <span className="text-[10px] opacity-80">Активен</span>
+                                        </div>
+                                    ) : (
+                                        <span>{plan.name}</span>
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                        
+                        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                            <p className="text-xs text-amber-800 leading-relaxed">
+                                <strong>⚠️ Для тестирования:</strong> Выберите тариф для немедленного применения. Квоты будут сброшены, срок подписки установлен на 30 дней для платных тарифов.
+                            </p>
                         </div>
                     </div>
                 </div>
