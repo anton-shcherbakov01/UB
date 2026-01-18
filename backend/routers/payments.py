@@ -40,14 +40,22 @@ class RobokassaAddonRequest(BaseModel):
 
 @router.post("/payment/stars_link")
 async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_current_user)):
+    if not req.amount or req.amount <= 0:
+        logger.error(f"Invalid amount for Stars payment: {req.amount} (plan: {req.plan_id})")
+        raise HTTPException(400, detail=f"Неверная сумма для оплаты: {req.amount}")
+    
     title = f"Подписка {req.plan_id.upper()}"
     desc = f"Активация тарифа {req.plan_id} на 1 месяц"
     payload = json.dumps({"user_id": user.id, "plan": req.plan_id})
     
+    logger.info(f"Creating Stars payment link for user {user.id}, plan {req.plan_id}, amount {req.amount} stars")
+    
     link = await bot_service.create_invoice_link(title, desc, payload, req.amount)
     if not link:
-        raise HTTPException(500, "Ошибка создания ссылки")
-        
+        logger.error(f"Failed to create invoice link for user {user.id}, plan {req.plan_id}, amount {req.amount}")
+        raise HTTPException(500, "Ошибка создания ссылки на оплату")
+    
+    logger.info(f"Successfully created Stars payment link for user {user.id}: {link[:50]}...")
     return {"invoice_link": link}
 
 @router.post("/webhook/telegram")
