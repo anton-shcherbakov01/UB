@@ -46,23 +46,23 @@ class WBStatisticsMixin(WBApiBase):
         """
         headers = {"Authorization": token}
         
-        # Payload for Analytics Probe (using grouped endpoint as detail might be deprecated)
+        # Payload for Analytics Probe
         analytics_payload = {
             "period": {
                 "begin": datetime.now().strftime("%Y-%m-%d"),
                 "end": datetime.now().strftime("%Y-%m-%d")
             },
             "page": 1,
-            "timezone": "Europe/Moscow",
-            "aggregationLevel": "day"
+            "timezone": "Europe/Moscow"
         }
 
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            # Optimized tasks: Removed direct stats probe to avoid 429 on login
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
-                # Using grouped endpoint as a probe
-                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/grouped", headers, json_data=analytics_payload),
+                # Using standard detail endpoint
+                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/detail", headers, json_data=analytics_payload),
                 "advert": self._probe(session, "GET", f"{self.URLS['advert']}/adv/v1/promotion/count", headers),
                 "feedbacks": self._probe(session, "GET", f"{self.URLS['feedbacks']}/api/v1/questions/count", headers, params={"isAnswered": "false"}),
                 "prices": self._probe(session, "GET", f"{self.URLS['common']}/public/api/v1/info", headers)
@@ -90,8 +90,7 @@ class WBStatisticsMixin(WBApiBase):
             "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
-            # Map Statistics/Finance to Analytics access or if analytics failed, default to True if basic stats work
-            "statistics": True, # Assume statistics V1 works if we have a token generally
+            "statistics": True, # Assume true if others work, to avoid 429 on check
             "finance": True,
             "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
             "chat": raw_res.get("feedbacks", False),
@@ -105,8 +104,6 @@ class WBStatisticsMixin(WBApiBase):
             async with session.request(method, url, headers=headers, params=params, json=json_data) as resp:
                 # 401/403 = Access Denied. 
                 if resp.status in [401, 403]: return False
-                # 404 usually means endpoint changed, but token is likely valid if we didn't get 401
-                # However, strictly for 'access' check, we assume if we get 404/200/429/500 the token was processed.
                 return True
         except:
             return False
@@ -153,10 +150,10 @@ class WBStatisticsMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            orders_task = self._get_orders_mixin(session, token, today_str, use_cache=True)
-            stocks_task = self._get_stocks_mixin(session, token, today_str, use_cache=True)
-            
-            orders_res, stocks_res = await asyncio.gather(orders_task, stocks_task)
+            # Sequential execution to avoid 429
+            orders_res = await self._get_orders_mixin(session, token, today_str, use_cache=True)
+            await asyncio.sleep(0.5) # Tiny pause
+            stocks_res = await self._get_stocks_mixin(session, token, today_str, use_cache=True)
             
             return {
                 "orders_today": orders_res,
@@ -200,10 +197,9 @@ class WBStatisticsMixin(WBApiBase):
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API (history endpoint).
+        через Analytics API (standard detail endpoint).
         """
-        # Trying grouped endpoint as detail is 404ing
-        url = f"{self.URLS['analytics']}/api/v2/nm-report/grouped"
+        url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
         headers = {"Authorization": token}
         
         res = {
@@ -234,8 +230,7 @@ class WBStatisticsMixin(WBApiBase):
                         "field": "openCardCount",
                         "mode": "desc"
                     },
-                    "page": page,
-                    "aggregationLevel": "day"
+                    "page": page
                 }
                 
                 data = await self._request_with_retry(
@@ -257,8 +252,6 @@ class WBStatisticsMixin(WBApiBase):
                     break
                 
                 for c in cards:
-                    # In grouped/history, stats structure might vary.
-                    # We look for selectedPeriod first, then aggregated
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
                     res["visitors"] += stats.get("openCardCount", 0)
                     res["addToCart"] += stats.get("addToCartCount", 0)
@@ -273,7 +266,7 @@ class WBStatisticsMixin(WBApiBase):
             return res
             
         except Exception as e:
-            logger.error(f"Failed to fetch full sales funnel: {e}")
+            logger.error(f"Failed to fetch full sales funnel in API class: {e}")
             return {}
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
@@ -288,14 +281,13 @@ class WBStatisticsMixin(WBApiBase):
         
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Запрашиваем V1 (Финансы) - Reliable
-                orders_task = self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
-                sales_task = self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
+                # 1. Запрашиваем V1 (Финансы) - SEQUENTIAL to avoid 429
+                orders_res = await self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
+                await asyncio.sleep(0.5) 
+                sales_res = await self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
                 
-                # 2. Запрашиваем V2 (Воронка) - Flaky
-                funnel_task = self.get_sales_funnel_full(token, funnel_start, funnel_end)
-                
-                orders_res, sales_res, funnel_res = await asyncio.gather(orders_task, sales_task, funnel_task, return_exceptions=True)
+                # 2. Запрашиваем V2 (Воронка) - Parallel is fine for V2 as it's a different API host
+                funnel_res = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
                 
                 # Обработка результатов (V1)
                 orders_sum = 0
@@ -317,9 +309,6 @@ class WBStatisticsMixin(WBApiBase):
                 if isinstance(funnel_res, dict):
                     visitors = funnel_res.get("visitors", 0)
                     addToCart = funnel_res.get("addToCart", 0)
-                else:
-                    # If funnel failed (404/Exception), we still return Orders/Sales
-                    pass
             
             return {
                 "orders_sum": orders_sum,
@@ -351,7 +340,6 @@ class WBStatisticsMixin(WBApiBase):
                  data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              else:
                  async with session.get(url, headers=headers, params=params) as resp:
-                     # Check status to avoid crashing on 404/429 inside mixin logic
                      if resp.status == 200:
                         data = await resp.json()
                      else:
@@ -437,7 +425,6 @@ class WBStatisticsMixin(WBApiBase):
                 if resp.status == 200:
                     data = await resp.json() 
                 else: 
-                    # If 404 or other error, return empty without crashing
                     data = []
         
         if not data:
@@ -575,8 +562,8 @@ class WBStatisticsAPI:
         через Analytics API.
         Аргумент token здесь для совместимости, используется self.token.
         """
-        # Analytics API URL (V2 grouped replacement)
-        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/grouped"
+        # Analytics API URL (standard detail)
+        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/detail"
         
         # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
         headers = self.headers 
@@ -609,8 +596,7 @@ class WBStatisticsAPI:
                         "field": "openCardCount",
                         "mode": "desc"
                     },
-                    "page": page,
-                    "aggregationLevel": "day"
+                    "page": page
                 }
                 
                 data = await self._request(
@@ -630,9 +616,7 @@ class WBStatisticsAPI:
                     break
                 
                 for c in cards:
-                    # In grouped/history, stats are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
-                    
                     res["visitors"] += stats.get("openCardCount", 0)
                     res["addToCart"] += stats.get("addToCartCount", 0)
                     res["ordersCount"] += stats.get("ordersCount", 0)
