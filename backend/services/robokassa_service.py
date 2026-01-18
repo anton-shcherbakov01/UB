@@ -22,8 +22,8 @@ class RobokassaService:
         self.test_mode = os.getenv("ROBOKASSA_TEST_MODE", "false").lower() == "true"
         
         # URLs
-        self.success_url = os.getenv("ROBOKASSA_SUCCESS_URL", "https://t.me/WbAnalyticsBot/app")
-        self.fail_url = os.getenv("ROBOKASSA_FAIL_URL", "https://t.me/WbAnalyticsBot/app")
+        self.success_url = os.getenv("ROBOKASSA_SUCCESS_URL", "https://t.me/juicystat_bot/juicystat")
+        self.fail_url = os.getenv("ROBOKASSA_FAIL_URL", "https://t.me/juicystat_bot/app/juicystat")
         self.result_url = os.getenv("ROBOKASSA_RESULT_URL", "")
         
         # Base URLs
