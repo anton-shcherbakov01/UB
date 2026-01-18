@@ -25,6 +25,27 @@ class PDFGenerator:
             './fonts/DejaVuSans-Bold.ttf',
             '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
         ]
+
+    def _setup_pdf(self):
+        pdf = FPDF()
+        pdf.add_page()
+        
+        # Попытка загрузить шрифт для кириллицы
+        try:
+            # Путь к шрифту должен быть корректным внутри контейнера
+            font_path = os.path.join(os.path.dirname(__file__), '../fonts/DejaVuSans.ttf')
+            if os.path.exists(font_path):
+                pdf.add_font('DejaVu', '', font_path, uni=True)
+                pdf.set_font('DejaVu', '', 12)
+            else:
+                logger.warning("Cyrillic font not found, falling back to Arial")
+                pdf.set_font("Arial", size=12)
+        except Exception as e:
+            logger.error(f"Font loading error: {e}")
+            pdf.set_font("Arial", size=12)
+            
+        return pdf
+
     
     def _setup_fonts(self, pdf: FPDF) -> str:
         """Setup Cyrillic fonts for PDF. Returns font family name."""
@@ -113,75 +134,64 @@ class PDFGenerator:
         
         return pdf.output(dest='S').encode('latin-1')
     
-    def create_supply_pdf(self, supply_data: List[Dict[str, Any]]) -> bytes:
-        """Create Supply analysis PDF report with ABC, velocity, ROP"""
-        pdf = FPDF()
-        pdf.add_page()
-        font_family = self._setup_fonts(pdf)
+    def create_supply_pdf(self, analysis_data: list) -> bytes:
+        """
+        Генерация PDF отчета по поставкам (ABC/XYZ, ROP).
+        """
+        pdf = self._setup_pdf()
         
-        # Title
-        pdf.set_font(font_family, 'B', 16)
-        pdf.cell(0, 10, txt="Анализ поставок", ln=1, align='C')
+        # Заголовок
+        pdf.set_font_size(16)
+        pdf.cell(0, 10, txt=f"Отчет по поставкам (Supply Chain) - {datetime.now().strftime('%d.%m.%Y')}", ln=1, align='C')
         pdf.ln(5)
         
-        if not supply_data:
-            pdf.set_font(font_family, '', 12)
-            pdf.cell(0, 10, txt="Нет данных для анализа", ln=1, align='C')
-            return pdf.output(dest='S').encode('latin-1')
+        # Таблица
+        pdf.set_font_size(10)
         
-        # Summary statistics
-        total_items = len(supply_data)
-        out_of_stock = sum(1 for item in supply_data if item.get('status') == 'out_of_stock')
-        warnings = sum(1 for item in supply_data if item.get('status') == 'warning')
-        overstock = sum(1 for item in supply_data if item.get('status') == 'overstock')
+        # Headers
+        col_widths = [80, 25, 25, 20, 30] # Name, Stock, Velocity, ABC, Status
+        headers = ["Товар", "Остаток", "Скорость", "ABC", "Статус"]
         
-        pdf.set_font(font_family, 'B', 11)
-        pdf.cell(0, 8, txt="Сводка:", ln=1)
-        pdf.set_font(font_family, '', 9)
-        pdf.cell(0, 6, txt=f"Всего товаров: {total_items}", ln=1)
-        pdf.cell(0, 6, txt=f"Нет в наличии: {out_of_stock}", ln=1)
-        pdf.cell(0, 6, txt=f"Требуется заказ: {warnings}", ln=1)
-        pdf.cell(0, 6, txt=f"Избыток: {overstock}", ln=1)
-        pdf.ln(5)
-        
-        # Table header
-        pdf.set_font(font_family, 'B', 9)
-        pdf.cell(30, 7, "Артикул", 1)
-        pdf.cell(50, 7, "Название", 1)
-        pdf.cell(20, 7, "Остаток", 1)
-        pdf.cell(20, 7, "ABC", 1)
-        pdf.cell(25, 7, "Скорость", 1)
-        pdf.cell(20, 7, "ROP", 1)
-        pdf.cell(25, 7, "Рекомендация", 1)
+        for i, h in enumerate(headers):
+            pdf.cell(col_widths[i], 10, txt=h, border=1, align='C')
         pdf.ln()
         
-        # Table rows
-        pdf.set_font(font_family, '', 8)
-        for item in supply_data[:100]:  # Limit to 100 rows
-            sku = str(item.get('sku', ''))
-            name = str(item.get('name', ''))[:35]
-            stock = item.get('stock', 0)
-            abc = item.get('abc', 'C')
-            velocity = item.get('velocity', 0)
-            rop = item.get('rop', 0)
-            recommendation = str(item.get('recommendation', ''))[:20]
+        # Rows
+        pdf.set_font_size(8)
+        for item in analysis_data:
+            name = str(item.get('name', 'Unknown'))[:40] # Truncate long names
+            stock = str(item.get('stock', 0))
+            velocity = str(round(item.get('velocity', 0), 2))
+            abc = f"{item.get('abc', '-')}{item.get('xyz', '-')}"
+            status = item.get('recommendation', '-')
             
-            pdf.cell(30, 5, sku, 1)
-            pdf.cell(50, 5, name, 1)
-            pdf.cell(20, 5, str(stock), 1)
-            pdf.cell(20, 5, abc, 1)
-            pdf.cell(25, 5, f"{velocity:.1f}", 1)
-            pdf.cell(20, 5, str(rop), 1)
-            pdf.cell(25, 5, recommendation, 1)
+            row = [name, stock, velocity, abc, status]
+            
+            for i, val in enumerate(row):
+                align = 'L' if i == 0 else 'C'
+                # Simple cell, text might overflow if not handled, but sufficient for now
+                try:
+                    pdf.cell(col_widths[i], 8, txt=str(val), border=1, align=align)
+                except UnicodeEncodeError:
+                    # Fallback for characters not in font
+                    pdf.cell(col_widths[i], 8, txt="???", border=1, align=align)
+            
             pdf.ln()
-        
-        # Footer
-        pdf.set_y(-30)
-        pdf.set_font(font_family, '', 8)
-        pdf.set_text_color(128)
-        pdf.cell(0, 10, f"Сгенерировано: {datetime.now().strftime('%Y-%m-%d %H:%M')}", align='C')
-        
-        return pdf.output(dest='S').encode('latin-1')
+
+        # Output
+        try:
+            # FPDF2 returns bytearray/bytes directly for dest='S'
+            # We do NOT need to encode it again if it's already bytes
+            output = pdf.output(dest='S')
+            
+            if isinstance(output, str):
+                return output.encode('latin-1') # Legacy fpdf behavior
+            
+            return bytes(output) # New behavior (bytearray to bytes)
+            
+        except Exception as e:
+            logger.error(f"PDF Output error: {e}")
+            raise e
     
     def create_seo_tracker_pdf(self, positions: List[Dict[str, Any]], sku: Optional[str] = None, keyword: Optional[str] = None) -> bytes:
         """Create SEO Tracker PDF report with position history"""
