@@ -232,8 +232,6 @@ class WBStatisticsMixin(WBApiBase):
                     "offset": offset
                 }
                 
-                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
-                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
@@ -253,6 +251,7 @@ class WBStatisticsMixin(WBApiBase):
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
+                     # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
@@ -262,7 +261,9 @@ class WBStatisticsMixin(WBApiBase):
                     items = response_data.get("cards", [])
                 
                 if not items:
-                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                    # Log only if really no items found to avoid spam if it's just end of list
+                    if offset == 0:
+                         logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
@@ -272,26 +273,21 @@ class WBStatisticsMixin(WBApiBase):
                 # --- DEBUG LOGGING END ---
 
                 for c in items:
-                    # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
-                    stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    # UPDATED MAPPING FOR V3 BASED ON LOGS
+                    # 'statistic' (singular) -> 'selected'
+                    stats = c.get("statistic", {}).get("selected", {})
                     
-                    res["visitors"] += stats.get("openCardCount", 0)
-                    res["addToCart"] += stats.get("addToCartCount", 0)
-                    res["ordersCount"] += stats.get("ordersCount", 0)
-                    
-                    # Пытаемся найти сумму заказов
-                    res["ordersSum"] += stats.get("ordersSumRub", 0) 
-                    if stats.get("ordersSumRub") is None:
-                         res["ordersSum"] += stats.get("ordersSum", 0)
-
-                    # v3 uses buyoutCount/buyoutSum (singular)
-                    res["buyoutsCount"] += stats.get("buyoutCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutSum", 0)
+                    res["visitors"] += stats.get("openCount", 0)       # V3: openCount
+                    res["addToCart"] += stats.get("cartCount", 0)      # V3: cartCount
+                    res["ordersCount"] += stats.get("orderCount", 0)   # V3: orderCount
+                    res["ordersSum"] += stats.get("orderSum", 0)       # V3: orderSum
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # V3: buyoutCount
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
                 
                 offset += limit
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
+                # Safety sleep to respect rate limits between pages
                 await asyncio.sleep(5) 
 
             return res
@@ -677,21 +673,16 @@ class WBStatisticsAPI:
                 # --- DEBUG LOGGING END ---
 
                 for c in items:
-                    # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
-                    stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    # UPDATED MAPPING FOR V3 BASED ON LOGS
+                    # 'statistic' (singular) -> 'selected'
+                    stats = c.get("statistic", {}).get("selected", {})
                     
-                    res["visitors"] += stats.get("openCardCount", 0)
-                    res["addToCart"] += stats.get("addToCartCount", 0)
-                    res["ordersCount"] += stats.get("ordersCount", 0)
-                    
-                    # Пытаемся найти сумму заказов
-                    res["ordersSum"] += stats.get("ordersSumRub", 0) 
-                    if stats.get("ordersSumRub") is None:
-                         res["ordersSum"] += stats.get("ordersSum", 0)
-
-                    # v3 uses buyoutCount/buyoutSum (singular)
-                    res["buyoutsCount"] += stats.get("buyoutCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutSum", 0)
+                    res["visitors"] += stats.get("openCount", 0)       # V3: openCount
+                    res["addToCart"] += stats.get("cartCount", 0)      # V3: cartCount
+                    res["ordersCount"] += stats.get("orderCount", 0)   # V3: orderCount
+                    res["ordersSum"] += stats.get("orderSum", 0)       # V3: orderSum
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # V3: buyoutCount
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
                 
                 offset += limit
                 if offset > 5000: break # Safety break
