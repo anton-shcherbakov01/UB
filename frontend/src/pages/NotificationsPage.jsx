@@ -60,34 +60,57 @@ const NotificationsPage = ({ onNavigate }) => {
 
     const update = (key, val) => setSettings(prev => ({ ...prev, [key]: val }));
 
-    if (loading) return <div className="h-screen flex items-center justify-center bg-[#F4F4F9]"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
+    if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
 
     return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
-            <div className="flex items-center gap-3">
-                <button onClick={() => onNavigate('profile')} className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm"><ArrowLeft size={20} className="text-slate-500"/></button>
-                <div className="flex-1">
-                    <h1 className="text-2xl font-black text-slate-900 leading-none">Уведомления</h1>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase mt-1 tracking-wider">Настройка Telegram бота</p>
-                    <p className="text-[9px] text-amber-600 font-medium mt-1">⏰ Все время указано в часовом поясе МСК (UTC+3)</p>
-                </div>
-                <div className="group relative">
-                    <button className="p-2 bg-white rounded-xl border border-slate-200 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors">
-                        <HelpCircle size={20}/>
-                    </button>
-                    <div className="hidden group-hover:block absolute bottom-full right-0 sm:right-0 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 mb-2 w-64 max-w-[calc(100vw-2rem)] p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
-                        <div className="font-bold mb-2">Настройки уведомлений</div>
-                        <p className="mb-2">Включите уведомления о важных событиях в вашем бизнесе:</p>
-                        <ul className="space-y-1 text-[10px]">
-                            <li><strong>Новые заказы</strong> - мгновенные уведомления при поступлении заказа</li>
-                            <li><strong>Изменение цен</strong> - отслеживание динамики цен на ваши товары</li>
-                            <li><strong>Продажи</strong> - ежедневные отчеты о продажах</li>
-                            <li><strong>Воронка продаж</strong> - анализ конверсии по этапам воронки</li>
-                        </ul>
-                        <p className="mt-2 text-[10px]">Все уведомления приходят в Telegram бот.</p>
-                        <div className="absolute bottom-0 right-4 sm:right-4 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-right-4">
+            
+            {/* Unified Header */}
+            <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
+                 <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-5 rounded-[28px] text-white shadow-xl shadow-indigo-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500">
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Bell size={24} className="text-white"/>
+                            Уведомления
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
+                            Настройка Telegram бота
+                        </p>
+                        <p className="text-[10px] opacity-75 mt-1 font-medium text-white/80 flex items-center gap-1">
+                            <Clock size={10} /> МСК (UTC+3)
+                        </p>
                     </div>
-                </div>
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => onNavigate('profile')} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
+                      >
+                          <ArrowLeft size={24}/>
+                      </button>
+                      
+                      <div className="group relative h-full">
+                        <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
+                            <HelpCircle size={24}/>
+                        </button>
+                        {/* Tooltip */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-4 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2 text-indigo-300">Настройки уведомлений</div>
+                            <p className="mb-2">Включите уведомления о важных событиях:</p>
+                            <ul className="space-y-1 text-[10px] list-disc pl-3">
+                                <li><strong>Новые заказы</strong> - мгновенно при поступлении</li>
+                                <li><strong>Выкупы</strong> - фиксация прибыли</li>
+                                <li><strong>Сводка</strong> - отчеты по расписанию</li>
+                            </ul>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
+                        </div>
+                      </div>
+                 </div>
             </div>
 
             <div className="space-y-4">
