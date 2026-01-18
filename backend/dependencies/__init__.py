@@ -28,6 +28,10 @@ if os.path.exists(_deps_file):
         auth_manager = _deps_module.auth_manager
         SUPER_ADMIN_IDS = _deps_module.SUPER_ADMIN_IDS
         r_client = _deps_module.r_client
+        
+        # Try to export check_telegram_auth if it exists (for PDF downloads)
+        check_telegram_auth = getattr(_deps_module, 'check_telegram_auth', None)
+        
     except Exception as e:
         # If direct import fails, try using importlib with different approach
         # We need to use a different name to avoid circular import
@@ -35,11 +39,13 @@ if os.path.exists(_deps_file):
         _deps_module = importlib.util.module_from_spec(spec)
         sys.modules['_deps_file_module_fallback'] = _deps_module
         spec.loader.exec_module(_deps_module)
+        
         get_current_user = _deps_module.get_current_user
         get_redis_client = _deps_module.get_redis_client
         auth_manager = _deps_module.auth_manager
         SUPER_ADMIN_IDS = _deps_module.SUPER_ADMIN_IDS
         r_client = _deps_module.r_client
+        check_telegram_auth = getattr(_deps_module, 'check_telegram_auth', None)
 else:
     # Fallback if file doesn't exist - shouldn't happen
     raise ImportError("dependencies.py file not found")
@@ -63,7 +69,8 @@ __all__ = [
     'SUPER_ADMIN_IDS',
     'r_client',
     'QuotaCheck',
-    'increment_usage'
+    'increment_usage',
+    'check_telegram_auth'
 ]
 
 # Import quota module at the end (after all exports are defined)
