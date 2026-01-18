@@ -200,7 +200,6 @@ class WBStatisticsMixin(WBApiBase):
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
         # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
-        # This was causing 400 error because of extra time string
         if len(date_from) > 10: date_from = date_from[:10]
         if len(date_to) > 10: date_to = date_to[:10]
 
@@ -218,7 +217,7 @@ class WBStatisticsMixin(WBApiBase):
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100  # Reduced to 100 as per reference doc recommendation
+        limit = 100 
         is_more = True
         
         try:
@@ -254,7 +253,6 @@ class WBStatisticsMixin(WBApiBase):
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
-                     # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
@@ -264,12 +262,14 @@ class WBStatisticsMixin(WBApiBase):
                     items = response_data.get("cards", [])
                 
                 if not items:
-                    # Detailed logging to diagnose "No cards" issue
                     logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
-                # logger.info(f"Funnel V3: Fetched {len(items)} items (Offset {offset})")
+                # --- DEBUG LOGGING START ---
+                if offset == 0:
+                    logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
+                # --- DEBUG LOGGING END ---
 
                 for c in items:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
@@ -602,6 +602,7 @@ class WBStatisticsAPI:
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
         # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
+        # This was causing 400 error because of extra time string
         if len(date_from) > 10: date_from = date_from[:10]
         if len(date_to) > 10: date_to = date_to[:10]
 
@@ -619,7 +620,7 @@ class WBStatisticsAPI:
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100 
+        limit = 100  # Reduced to 100 as per reference doc recommendation
         is_more = True
         
         try:
@@ -670,7 +671,10 @@ class WBStatisticsAPI:
                     is_more = False
                     break
                 
-                # logger.info(f"Funnel V3: Fetched {len(items)} items (Offset {offset})")
+                # --- DEBUG LOGGING START ---
+                if offset == 0:
+                    logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
+                # --- DEBUG LOGGING END ---
 
                 for c in items:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
