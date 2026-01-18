@@ -232,22 +232,33 @@ class WBStatisticsMixin(WBApiBase):
                     "offset": offset
                 }
                 
+                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
+                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
                     json_data=payload,
-                    retries=3
+                    retries=4
                 )
                 
                 if not data or not isinstance(data, dict):
+                    logger.warning(f"Empty data received from Funnel API v3. Data: {data}")
                     break
                 
+                # Check for error in response body structure
+                if "error" in data:
+                     logger.error(f"Funnel API v3 Error Body: {data}")
+                     break
+
                 cards = data.get("data", {}).get("cards", [])
                 
                 if not cards:
+                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}")
                     is_more = False
                     break
                 
+                # logger.info(f"Funnel V3: Fetched {len(cards)} cards (Offset {offset})")
+
                 for c in cards:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
@@ -267,6 +278,9 @@ class WBStatisticsMixin(WBApiBase):
                 
                 offset += limit
                 if offset > 5000: break # Safety break
+                
+                # Safety sleep to respect rate limits between pages
+                await asyncio.sleep(2) 
 
             return res
             
@@ -520,7 +534,7 @@ class WBStatisticsAPI:
                         if resp.status == 200:
                             return await resp.json()
                         elif resp.status == 429:
-                            wait_time = 2 ** attempt
+                            wait_time = 3 * (attempt + 1) # Increased wait time for strict limits
                             logger.warning(f"Rate limit 429. Waiting {wait_time}s...")
                             await asyncio.sleep(wait_time)
                             continue
@@ -608,22 +622,33 @@ class WBStatisticsAPI:
                     "offset": offset
                 }
                 
+                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
+                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
                     json_data=payload,
-                    retries=3
+                    retries=4
                 )
                 
                 if not data or not isinstance(data, dict):
+                    logger.warning(f"Empty data received from Funnel API v3. Data: {data}")
                     break
                 
+                # Check for error in response body structure
+                if "error" in data:
+                     logger.error(f"Funnel API v3 Error Body: {data}")
+                     break
+
                 cards = data.get("data", {}).get("cards", [])
                 
                 if not cards:
+                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}")
                     is_more = False
                     break
                 
+                # logger.info(f"Funnel V3: Fetched {len(cards)} cards (Offset {offset})")
+
                 for c in cards:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
@@ -643,6 +668,9 @@ class WBStatisticsAPI:
                 
                 offset += limit
                 if offset > 5000: break # Safety break
+                
+                # Safety sleep to respect rate limits between pages
+                await asyncio.sleep(2) 
 
             return res
             
