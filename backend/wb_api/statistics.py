@@ -8,8 +8,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException
 
-# Попытка импорта базы. Если запускаем изолированно - создаем заглушку, 
-# чтобы код не падал при проверке синтаксиса.
 try:
     from .base import WBApiBase
 except ImportError:
@@ -26,7 +24,7 @@ logger = logging.getLogger("WB-API-Stats")
 class WBStatisticsMixin(WBApiBase):
     """
     Mixin containing business logic for Statistics API.
-    Used by the main WBApiService (Legacy & General features).
+    Used by the main WBApiService.
     """
 
     URLS = {
@@ -40,7 +38,6 @@ class WBStatisticsMixin(WBApiBase):
     }
 
     def __init__(self):
-        # Короткий таймаут, чтобы проверка профиля не висела долго
         self.timeout = aiohttp.ClientTimeout(total=10)
     
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
@@ -50,7 +47,6 @@ class WBStatisticsMixin(WBApiBase):
         headers = {"Authorization": token}
         
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            # Формируем задачи
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
@@ -60,21 +56,17 @@ class WBStatisticsMixin(WBApiBase):
                 "prices": self._probe(session, "GET", f"{self.URLS['common']}/public/api/v1/info", headers)
             }
             
-            # Запускаем параллельно
             results_list = await asyncio.gather(*tasks.values(), return_exceptions=True)
             
-            # Собираем результаты
             keys = list(tasks.keys())
             raw_res = {}
             for i, key in enumerate(keys):
                 res = results_list[i]
-                # Если результат - исключение, считаем что доступа нет
                 if isinstance(res, Exception):
                     raw_res[key] = False
                 else:
                     raw_res[key] = res if isinstance(res, bool) else False
 
-        # Маппинг для UI (13 категорий)
         promotion_scope = raw_res.get("advert", False)
         users_scope = False
         
@@ -97,16 +89,12 @@ class WBStatisticsMixin(WBApiBase):
     async def _probe(self, session, method, url, headers, params=None) -> bool:
         try:
             async with session.request(method, url, headers=headers, params=params) as resp:
-                # 401/403 = Доступа нет. Всё остальное (200, 429, 404, 500) = Доступ есть (токен принят)
                 if resp.status in [401, 403]: return False
                 return True
         except:
             return False
     
     async def get_api_mode(self, token: str) -> str:
-        """
-        Определяет режим работы API токена: только чтение или чтение и запись.
-        """
         if not token:
             return "read_only"
         
@@ -118,7 +106,6 @@ class WBStatisticsMixin(WBApiBase):
                 f"{self.URLS['marketplace']}/api/v3/warehouses",
             ]
             
-            # Сначала проверяем, работает ли GET (чтение)
             read_works = False
             for url in test_urls:
                 try:
@@ -132,7 +119,6 @@ class WBStatisticsMixin(WBApiBase):
             if not read_works:
                 return "read_only"
             
-            # Теперь проверяем, работает ли запись (пробуем безопасный POST запрос)
             write_test_url = f"{self.URLS['content']}/content/v2/cards/limits"
             try:
                 async with session.post(write_test_url, headers=headers, json={}) as resp:
@@ -150,7 +136,6 @@ class WBStatisticsMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            # Используем внутренние методы с кэшированием
             orders_task = self._get_orders_mixin(session, token, today_str, use_cache=True)
             stocks_task = self._get_stocks_mixin(session, token, today_str, use_cache=True)
             
@@ -198,62 +183,74 @@ class WBStatisticsMixin(WBApiBase):
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API. Это заменяет необходимость дергать старый API статистики.
+        через Analytics API. Добавлена пагинация для получения данных по всем карточкам.
         """
         url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
         headers = {"Authorization": token}
         
-        payload = {
-            "brandNames": [],
-            "objectIDs": [],
-            "tagIDs": [],
-            "nmIDs": [],
-            "timezone": "Europe/Moscow",
-            "period": {
-                "begin": date_from,
-                "end": date_to
-            },
-            "orderBy": {
-                "field": "openCardCount",
-                "mode": "desc"
-            },
-            "page": 1
+        res = {
+            "visitors": 0,
+            "addToCart": 0,
+            "ordersCount": 0,
+            "ordersSum": 0,
+            "buyoutsCount": 0,
+            "buyoutsSum": 0
         }
+
+        page = 1
+        is_more = True
         
         try:
-            data = await self._request_with_retry(
-                session=None,
-                url=url,
-                headers=headers,
-                method="POST",
-                json_data=payload,
-                retries=4
-            )
-            
-            if not data or not isinstance(data, dict):
-                return {}
+            while is_more:
+                payload = {
+                    "brandNames": [],
+                    "objectIDs": [],
+                    "tagIDs": [],
+                    "nmIDs": [],
+                    "timezone": "Europe/Moscow",
+                    "period": {
+                        "begin": date_from,
+                        "end": date_to
+                    },
+                    "orderBy": {
+                        "field": "openCardCount",
+                        "mode": "desc"
+                    },
+                    "page": page
+                }
                 
-            cards = data.get("data", {}).get("cards", [])
-            
-            # Агрегируем данные по всем карточкам
-            res = {
-                "visitors": 0,
-                "addToCart": 0,
-                "ordersCount": 0,
-                "ordersSum": 0,
-                "buyoutsCount": 0,
-                "buyoutsSum": 0
-            }
-            
-            for c in cards:
-                stats = c.get("statistics", {}).get("selectedPeriod", {})
-                res["visitors"] += stats.get("openCardCount", 0)
-                res["addToCart"] += stats.get("addToCartCount", 0)
-                res["ordersCount"] += stats.get("ordersCount", 0)
-                res["ordersSum"] += stats.get("ordersSumRub", 0)
-                res["buyoutsCount"] += stats.get("buyoutsCount", 0)
-                res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
-            
+                data = await self._request_with_retry(
+                    session=None,
+                    url=url,
+                    headers=headers,
+                    method="POST",
+                    json_data=payload,
+                    retries=4
+                )
+                
+                if not data or not isinstance(data, dict):
+                    break
+                
+                cards = data.get("data", {}).get("cards", [])
+                
+                if not cards:
+                    is_more = False
+                    break
+                
+                for c in cards:
+                    stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    res["visitors"] += stats.get("openCardCount", 0)
+                    res["addToCart"] += stats.get("addToCartCount", 0)
+                    res["ordersCount"] += stats.get("ordersCount", 0)
+                    res["ordersSum"] += stats.get("ordersSumRub", 0)
+                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
+                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                
+                page += 1
+                # Безопасный лимит страниц, чтобы не зациклиться
+                if page > 100:
+                    break
+
             return res
             
         except Exception as e:
@@ -263,10 +260,9 @@ class WBStatisticsMixin(WBApiBase):
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """
         Сводная статистика за сегодня для уведомлений.
-        ОПТИМИЗАЦИЯ: Теперь использует ТОЛЬКО Analytics API для получения всех цифр.
-        Это устраняет ошибки 429 от старого API статистики.
         """
         today_date = datetime.now()
+        # Analytics API требует формат YYYY-MM-DD HH:mm:ss
         funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
         funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
         
@@ -275,7 +271,6 @@ class WBStatisticsMixin(WBApiBase):
             funnel_data = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
             
             if not funnel_data:
-                # Fallback, если аналитика не ответила (пустые нули)
                 return {
                     "orders_sum": 0, "orders_count": 0,
                     "sales_sum": 0, "sales_count": 0,
@@ -318,7 +313,6 @@ class WBStatisticsMixin(WBApiBase):
              return data if isinstance(data, list) else []
 
     async def get_warehouse_coeffs(self, token: str):
-        """Получение реальных коэффициентов приемки."""
         url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
         headers = {"Authorization": token} if token else {}
         today = datetime.now().strftime("%Y-%m-%d")
@@ -336,7 +330,6 @@ class WBStatisticsMixin(WBApiBase):
             return []
     
     async def get_all_commissions(self, token: str) -> Dict[str, float]:
-        """Получает тарифы комиссий по всем категориям."""
         url = "https://common-api.wildberries.ru/api/v1/tariffs/commission"
         headers = {"Authorization": token}
         
@@ -357,7 +350,6 @@ class WBStatisticsMixin(WBApiBase):
         return commissions
 
     async def get_box_tariffs(self, token: str, date_str: str) -> Dict[str, Dict]:
-        """Получает коэффициенты и базовые ставки логистики коробов."""
         url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
         params = {"date": date_str}
         headers = {"Authorization": token}
@@ -469,16 +461,13 @@ class WBStatisticsAPI:
     async def get_stocks(self) -> List[Dict[str, Any]]:
         """
         Метод «Склад». Возвращает остатки товаров на складах.
-        Endpoint: /api/v1/supplier/stocks
         """
         date_from = "2023-01-01T00:00:00"
-        # date_from = datetime.utcnow().strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/stocks", params={"dateFrom": date_from})
 
     async def get_orders(self, days: int = 30) -> List[Dict[str, Any]]:
         """
         Метод «Заказы». Возвращает заказы.
-        Endpoint: /api/v1/supplier/orders
         """
         date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/orders", params={"dateFrom": date_from, "flag": 0})
@@ -486,7 +475,6 @@ class WBStatisticsAPI:
     async def get_sales(self, days: int = 30) -> List[Dict[str, Any]]:
         """
         Метод «Продажи». Возвращает продажи (факты выкупа).
-        Endpoint: /api/v1/supplier/sales
         """
         date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/sales", params={"dateFrom": date_from, "flag": 0})

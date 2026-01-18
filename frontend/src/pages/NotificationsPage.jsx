@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
-// Карта цветов для Tailwind, чтобы избежать динамических строк, которые Tailwind не компилирует
+// Карта цветов для Tailwind
 const COLOR_MAPS = {
     indigo: { bg: 'bg-indigo-500', light: 'bg-indigo-100', text: 'text-indigo-600' },
     emerald: { bg: 'bg-emerald-500', light: 'bg-emerald-100', text: 'text-emerald-600' },
@@ -13,7 +13,7 @@ const COLOR_MAPS = {
 const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) => {
     const colors = COLOR_MAPS[color] || COLOR_MAPS.indigo;
     return (
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm transition-all hover:shadow-md">
             <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-xl ${checked ? colors.light + ' ' + colors.text : 'bg-slate-100 text-slate-400'}`}>
                     <Icon size={20} />
@@ -60,10 +60,10 @@ const NotificationsPage = ({ onNavigate }) => {
 
     const update = (key, val) => setSettings(prev => ({ ...prev, [key]: val }));
 
-    if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
+    if (loading) return <div className="h-screen flex items-center justify-center bg-[#F4F4F9]"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
 
     return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-right-4">
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
             
             {/* Unified Header */}
             <div className="flex justify-between items-stretch h-24 mb-6">
@@ -77,11 +77,14 @@ const NotificationsPage = ({ onNavigate }) => {
                         <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
                             Настройка Telegram бота
                         </p>
-                        <p className="text-[10px] opacity-75 mt-1 font-medium text-white/80 flex items-center gap-1">
-                            <Clock size={10} /> МСК (UTC+3)
-                        </p>
                     </div>
                     
+                    <div className="relative z-10 hidden sm:block text-right">
+                        <p className="text-[10px] opacity-75 font-medium text-white/80 flex items-center gap-1 justify-end">
+                            <Clock size={12} /> МСК (UTC+3)
+                        </p>
+                    </div>
+
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
                  </div>
                  
@@ -170,7 +173,7 @@ const NotificationsPage = ({ onNavigate }) => {
 
             <button 
                 onClick={handleSave} disabled={saving}
-                className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all sticky bottom-4"
+                className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl active:scale-95 transition-all sticky bottom-4 hover:bg-slate-800"
             >
                 {saving ? <Loader2 className="animate-spin" size={20}/> : <Save size={20}/>}
                 Сохранить настройки
