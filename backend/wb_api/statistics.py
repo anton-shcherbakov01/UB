@@ -220,82 +220,94 @@ class WBStatisticsMixin(WBApiBase):
         limit = 100 
         is_more = True
         
-        try:
-            while is_more:
-                payload = {
-                    "selectedPeriod": {
-                        "start": date_from,
-                        "end": date_to
-                    },
-                    "nmIds": nm_ids if nm_ids else [], 
-                    "limit": limit,
-                    "offset": offset
-                }
-                
-                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
-                # We need to be very patient with retries.
-                data = await self._request(
-                    endpoint=url,
-                    method="POST",
-                    json_data=payload,
-                    retries=4
-                )
-                
-                if not data or not isinstance(data, dict):
-                    logger.warning(f"Empty or invalid data received from Funnel API v3. Data: {data}")
-                    break
-                
-                # Check for error in response body structure
-                if "error" in data:
-                      logger.error(f"Funnel API v3 Error Body: {data}")
-                      break
-
-                # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
-                response_data = data.get("data", {})
-                if not response_data:
-                      # Some APIs return cards directly or in a different wrapper on error/empty
-                      logger.warning(f"No 'data' field in response. Full response: {data}")
-                      break
-
-                # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
-                items = response_data.get("products", [])
-                if not items:
-                    items = response_data.get("cards", [])
-                
-                if not items:
-                    # Detailed logging to diagnose "No cards" issue
-                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
-                    is_more = False
-                    break
-                
-                # --- DEBUG LOGGING START ---
-                if offset == 0:
-                    logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
-                # --- DEBUG LOGGING END ---
-
-                for c in items:
-                    # UPDATED MAPPING FOR V3 BASED ON LOGS
-                    # 'statistic' (singular) -> 'selected'
-                    stats = c.get("statistic", {}).get("selected", {})
+        async with aiohttp.ClientSession() as session:
+            try:
+                while is_more:
+                    payload = {
+                        "selectedPeriod": {
+                            "start": date_from,
+                            "end": date_to
+                        },
+                        "nmIds": nm_ids if nm_ids else [], 
+                        "limit": limit,
+                        "offset": offset
+                    }
                     
-                    res["visitors"] += stats.get("openCount", 0)       # V3: openCount
-                    res["addToCart"] += stats.get("cartCount", 0)      # V3: cartCount
-                    res["ordersCount"] += stats.get("orderCount", 0)   # V3: orderCount
-                    res["ordersSum"] += stats.get("orderSum", 0)       # V3: orderSum
-                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # V3: buyoutCount
-                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
-                
-                offset += limit
-                if offset > 5000: break # Safety break
-                
-                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
-                await asyncio.sleep(5) 
+                    # Manual request logic (mixin lacks _request)
+                    data = None
+                    for attempt in range(5):
+                        try:
+                            async with session.post(url, headers=headers, json=payload, timeout=30) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    break
+                                elif resp.status == 429:
+                                    wait_time = 3 ** (attempt + 1)
+                                    logger.warning(f"Rate limit 429 in Mixin Funnel. Waiting {wait_time}s...")
+                                    await asyncio.sleep(wait_time)
+                                    continue
+                                else:
+                                    logger.warning(f"Funnel API Error {resp.status}")
+                                    break
+                        except Exception as req_err:
+                            logger.error(f"Funnel request error attempt {attempt}: {req_err}")
+                            await asyncio.sleep(1)
+                    
+                    if not data or not isinstance(data, dict):
+                        logger.warning(f"Empty or invalid data received from Funnel API v3. Data: {data}")
+                        break
+                    
+                    # Check for error in response body structure
+                    if "error" in data:
+                          logger.error(f"Funnel API v3 Error Body: {data}")
+                          break
 
-            return res
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch full sales funnel in API class: {e}")
-            return {}
+                    # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
+                    response_data = data.get("data", {})
+                    if not response_data:
+                          # Some APIs return cards directly or in a different wrapper on error/empty
+                          logger.warning(f"No 'data' field in response. Full response: {data}")
+                          break
+
+                    # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
+                    items = response_data.get("products", [])
+                    if not items:
+                        items = response_data.get("cards", [])
+                    
+                    if not items:
+                        # Detailed logging to diagnose "No cards" issue
+                        logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                        is_more = False
+                        break
+                    
+                    # --- DEBUG LOGGING START ---
+                    if offset == 0:
+                        logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
+                    # --- DEBUG LOGGING END ---
+
+                    for c in items:
+                        # UPDATED MAPPING FOR V3 BASED ON LOGS
+                        # 'statistic' (singular) -> 'selected'
+                        stats = c.get("statistic", {}).get("selected", {})
+                        
+                        res["visitors"] += stats.get("openCount", 0)       # V3: openCount
+                        res["addToCart"] += stats.get("cartCount", 0)      # V3: cartCount
+                        res["ordersCount"] += stats.get("orderCount", 0)   # V3: orderCount
+                        res["ordersSum"] += stats.get("orderSum", 0)       # V3: orderSum
+                        res["buyoutsCount"] += stats.get("buyoutCount", 0) # V3: buyoutCount
+                        res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
+                    
+                    offset += limit
+                    if offset > 5000: break # Safety break
+                    
+                    # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
+                    await asyncio.sleep(5) 
+
+                return res
+                
+            except Exception as e:
+                logger.error(f"Failed to fetch full sales funnel in API class: {e}")
+                return {}
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """
