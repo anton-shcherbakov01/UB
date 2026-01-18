@@ -230,25 +230,49 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-            <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3 flex-1 mr-4">
-                    <button 
-                        onClick={() => window.history.length > 1 ? window.history.back() : window.location.href = '/'} 
-                        className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors"
-                    >
-                        <ArrowLeft size={20} />
-                    </button>
-                    <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200 flex-1">
-                        <h1 className="text-2xl font-black flex items-center gap-2"><Wand2 className="text-yellow-200" /> SEO Gen</h1>
-                        <p className="text-sm opacity-90 mt-2">GEO-оптимизация 2026</p>
+            
+            {/* Header styled like SupplyPage */}
+            <div className="flex justify-between items-stretch h-20 mb-6">
+                 {/* Main Header Card */}
+                 <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
+                    {/* Title Area */}
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Wand2 className="text-yellow-200" size={24} /> SEO Gen
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">GEO-оптимизация 2026</p>
                     </div>
-                </div>
-                <div className="flex gap-2">
-                    <div className="group relative">
-                        <button className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors">
+
+                    {/* History Button inside Header */}
+                    <div className="relative z-10">
+                         <button 
+                            onClick={() => setHistoryOpen(true)}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="История"
+                        >
+                            <Clock size={20} />
+                        </button>
+                    </div>
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => window.history.length > 1 ? window.history.back() : window.location.href = '/'} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
+                        title="Назад"
+                     >
+                         <ArrowLeft size={24}/>
+                     </button>
+                     
+                     <div className="group relative h-full">
+                        <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
                             <HelpCircle size={24}/>
                         </button>
-                        <div className="hidden group-hover:block absolute bottom-full right-0 sm:right-0 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 mb-2 w-72 max-w-[calc(100vw-2rem)] p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
+                        {/* Tooltip positioned to the left of the sidebar */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-72 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
                             <div className="font-bold mb-2">SEO Генератор</div>
                             <p className="mb-2">Создавайте оптимизированные описания товаров с помощью AI:</p>
                             <ul className="space-y-1 text-[10px] list-disc list-inside">
@@ -258,11 +282,10 @@ const SeoGeneratorPage = ({ user, onUserUpdate }) => {
                                 <li><strong>Настройка длины</strong> - контроль размера заголовка и описания</li>
                             </ul>
                             <p className="mt-2 text-[10px]">Используйте кластеризацию для лучшей структуры ключевых слов перед генерацией.</p>
-                            <div className="absolute bottom-0 right-4 sm:right-4 sm:left-auto left-1/2 sm:left-auto sm:translate-x-0 -translate-x-1/2 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
                         </div>
-                    </div>
-                    <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors"><Clock size={24}/></button>
-                </div>
+                     </div>
+                 </div>
             </div>
             
             <HistoryModule type="seo" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
