@@ -89,7 +89,7 @@ class WBStatisticsMixin(WBApiBase):
             "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
-            "statistics": analytics_access, # Если работает аналитика v3, то и статистика скорее всего
+            "statistics": analytics_access, 
             "finance": analytics_access,
             "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
             "chat": raw_res.get("feedbacks", False),
@@ -191,7 +191,7 @@ class WBStatisticsMixin(WBApiBase):
         data = await self._request_with_retry(None, url, headers, params=params)
         return data if isinstance(data, list) else []
 
-    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
+    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str, nm_ids: List[int] = None) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
         через Analytics API v3.
@@ -199,11 +199,10 @@ class WBStatisticsMixin(WBApiBase):
         # Analytics API URL (V3 Standard replacement)
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
-        # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
+        # API v3 требует формат YYYY-MM-DD
         if len(date_from) > 10: date_from = date_from[:10]
         if len(date_to) > 10: date_to = date_to[:10]
 
-        # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
         headers = self.headers 
         
         res = {
@@ -217,7 +216,7 @@ class WBStatisticsMixin(WBApiBase):
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100  # Reduced to 100 as per reference doc recommendation
+        limit = 100 
         is_more = True
         
         try:
@@ -227,13 +226,11 @@ class WBStatisticsMixin(WBApiBase):
                         "start": date_from,
                         "end": date_to
                     },
-                    "nmIds": [], # Пустой массив = все товары
+                    "nmIds": nm_ids if nm_ids else [], 
                     "limit": limit,
                     "offset": offset
                 }
                 
-                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
-                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
@@ -242,54 +239,52 @@ class WBStatisticsMixin(WBApiBase):
                 )
                 
                 if not data or not isinstance(data, dict):
-                    logger.warning(f"Empty or invalid data received from Funnel API v3. Data: {data}")
+                    # Only log warning if it's the first page failure
+                    if offset == 0:
+                        logger.warning(f"Empty/Invalid data from Funnel API v3. Data: {data}")
                     break
                 
-                # Check for error in response body structure
                 if "error" in data:
                      logger.error(f"Funnel API v3 Error Body: {data}")
                      break
 
-                # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
-                     # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
-                # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
+                # Try to get items from 'products' (new v3) or 'cards' (old docs)
                 items = response_data.get("products", [])
                 if not items:
                     items = response_data.get("cards", [])
                 
                 if not items:
-                    # Detailed logging to diagnose "No cards" issue
-                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
-                
-                # --- DEBUG LOGGING START ---
-                if offset == 0:
-                    logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
-                # --- DEBUG LOGGING END ---
 
                 for c in items:
-                    # UPDATED MAPPING FOR V3 BASED ON LOGS
-                    # 'statistic' (singular) -> 'selected'
+                    # Parsing V3 response structure: statistic -> selected
                     stats = c.get("statistic", {}).get("selected", {})
                     
-                    res["visitors"] += stats.get("openCount", 0)       # V3: openCount
-                    res["addToCart"] += stats.get("cartCount", 0)      # V3: cartCount
-                    res["ordersCount"] += stats.get("orderCount", 0)   # V3: orderCount
-                    res["ordersSum"] += stats.get("orderSum", 0)       # V3: orderSum
-                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # V3: buyoutCount
-                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
+                    res["visitors"] += stats.get("openCount", 0)
+                    res["addToCart"] += stats.get("cartCount", 0)
+                    res["ordersCount"] += stats.get("orderCount", 0)
+                    
+                    # Prices
+                    res["ordersSum"] += stats.get("orderSum", 0) 
+
+                    # Buyouts
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0)
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)
                 
                 offset += limit
+                # If we got fewer items than limit, we reached the end
+                if len(items) < limit:
+                    is_more = False
+                
                 if offset > 5000: break # Safety break
                 
-                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
-                await asyncio.sleep(5) 
+                await asyncio.sleep(2) # Throttle
 
             return res
             
@@ -304,19 +299,17 @@ class WBStatisticsMixin(WBApiBase):
         today_date = datetime.now()
         today_str_v1 = today_date.strftime("%Y-%m-%dT00:00:00")
         
-        # Для v3 нужно YYYY-MM-DD
         funnel_start = today_date.strftime("%Y-%m-%d")
         funnel_end = today_date.strftime("%Y-%m-%d")
         
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Запрашиваем V1 (Финансы) - Быстро
+                # 1. Запрашиваем V1 (Финансы)
                 orders_res = await self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
                 await asyncio.sleep(0.5) 
                 sales_res = await self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
                 
                 # 2. Запрашиваем V3 (Воронка)
-                # Используем метод класса, а не self, чтобы передать правильный токен
                 funnel_res = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
                 
                 # Обработка результатов (V1)
@@ -591,10 +584,11 @@ class WBStatisticsAPI:
         return {"stocks": stocks, "orders": orders}
 
     # --- Метод для воронки (перенесен из Mixin для использования в WBStatisticsAPI) ---
-    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
+    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str, nm_ids: List[int] = None) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
         через Analytics API v3.
+        Аргумент token здесь для совместимости, используется self.token.
         """
         # Analytics API URL (V3 Standard replacement)
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
@@ -617,7 +611,7 @@ class WBStatisticsAPI:
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100 
+        limit = 100  # Reduced to 100 as per reference doc recommendation
         is_more = True
         
         try:
@@ -627,11 +621,13 @@ class WBStatisticsAPI:
                         "start": date_from,
                         "end": date_to
                     },
-                    "nmIds": [], # Пустой массив = все товары
+                    "nmIds": nm_ids if nm_ids else [], 
                     "limit": limit,
                     "offset": offset
                 }
                 
+                # IMPORTANT: Analytics API v3 has a strict 3req/min limit.
+                # We need to be very patient with retries.
                 data = await self._request(
                     endpoint=url,
                     method="POST",
@@ -651,6 +647,7 @@ class WBStatisticsAPI:
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
+                     # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
@@ -660,14 +657,12 @@ class WBStatisticsAPI:
                     items = response_data.get("cards", [])
                 
                 if not items:
+                    # Log only if really no items found to avoid spam if it's just end of list
                     if offset == 0:
                          logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
-                if offset == 0:
-                    logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
-
                 for c in items:
                     # UPDATED MAPPING FOR V3 BASED ON LOGS
                     # 'statistic' (singular) -> 'selected'
@@ -681,8 +676,13 @@ class WBStatisticsAPI:
                     res["buyoutsSum"] += stats.get("buyoutSum", 0)     # V3: buyoutSum
                 
                 offset += limit
+                # If we got fewer items than limit, we reached the end
+                if len(items) < limit:
+                    is_more = False
+                
                 if offset > 5000: break # Safety break
                 
+                # Safety sleep to respect rate limits between pages (3 req/min = 1 req / 20s ideally, but let's try 5s)
                 await asyncio.sleep(5) 
 
             return res
