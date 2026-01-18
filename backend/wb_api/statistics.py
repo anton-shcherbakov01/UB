@@ -528,8 +528,9 @@ class WBStatisticsAPI:
                             logger.error("WB API Unauthorized.")
                             raise HTTPException(status_code=401, detail="Invalid WB Token")
                         elif resp.status == 404:
-                            # V1 Deprecated or just no data. Warning instead of Error to reduce spam.
-                            logger.warning(f"WB API 404 (Deprecated/Not Found) at {url}")
+                            # Log the body to understand why it is 404
+                            error_text = await resp.text()
+                            logger.warning(f"WB API 404 (Deprecated/Not Found) at {url}. Response: {error_text}")
                             return []
                         else:
                             text = await resp.text()
