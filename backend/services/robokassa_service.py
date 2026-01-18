@@ -1,10 +1,10 @@
 """
-Robokassa Payment Service (Fixed)
+Robokassa Payment Service (Final Fix)
 """
 import os
 import hashlib
 import logging
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urlencode
 
 logger = logging.getLogger("RobokassaService")
@@ -17,41 +17,40 @@ class RobokassaService:
     
     def __init__(self):
         self.merchant_login = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "")
-        self.password1 = os.getenv("ROBOKASSA_PASSWORD1", "")  # For payment URL generation
-        self.password2 = os.getenv("ROBOKASSA_PASSWORD2", "")  # For callback verification
+        self.password1 = os.getenv("ROBOKASSA_PASSWORD1", "")
+        self.password2 = os.getenv("ROBOKASSA_PASSWORD2", "")
         self.test_mode = os.getenv("ROBOKASSA_TEST_MODE", "false").lower() == "true"
         
         # URLs
-        self.success_url = os.getenv("ROBOKASSA_SUCCESS_URL", "https://t.me/juicystat_bot/juicystat")
-        self.fail_url = os.getenv("ROBOKASSA_FAIL_URL", "https://t.me/juicystat_bot/app/juicystat")
+        self.success_url = os.getenv("ROBOKASSA_SUCCESS_URL", "")
+        self.fail_url = os.getenv("ROBOKASSA_FAIL_URL", "")
         self.result_url = os.getenv("ROBOKASSA_RESULT_URL", "")
         
         self.base_url = "https://auth.robokassa.ru/Merchant/Index.aspx"
     
     def _generate_signature(
         self, 
-        out_sum: float, 
+        out_sum: Union[float, str], 
         inv_id: int, 
         password: str, 
         shp_params: Optional[dict] = None,
-        is_init: bool = True  # <--- ДОБАВЛЕН ФЛАГ
+        is_init: bool = True
     ) -> str:
         """
         Generate MD5 signature for Robokassa.
-        
-        Args:
-            out_sum: Payment amount
-            inv_id: Invoice ID
-            password: Password (Password1 for URL, Password2 for callback)
-            shp_params: Optional dictionary of shp_ parameters
-            is_init: True if generating URL for payment (includes MerchantLogin), 
-                     False if verifying callback (excludes MerchantLogin).
         """
-        # Format amount with 2 decimal places
-        amount_str = f"{out_sum:.2f}"
         
-        # For payment URL (Init): MerchantLogin:OutSum:InvId:Password1[:Shp_x=value...]
-        # For callback (Result): OutSum:InvId:Password2[:Shp_x=value...]
+        # ЛОГИКА ИСПРАВЛЕНА ЗДЕСЬ:
+        if is_init:
+            # При создании ссылки мы ОБЯЗАНЫ передавать сумму с точностью до копеек
+            amount_str = f"{float(out_sum):.2f}"
+        else:
+            # При проверке ответа (Callback) мы должны использовать строку ТОЧНО как прислала Робокасса.
+            # Если она прислала "1490", мы хэшируем "1490". Если "1490.00" — то "1490.00".
+            amount_str = str(out_sum)
+        
+        # 1. Init:   Login:OutSum:InvId:Pass1[:Shp...]
+        # 2. Result: OutSum:InvId:Pass2[:Shp...]
         
         if is_init:
             signature_string = f"{self.merchant_login}:{amount_str}:{inv_id}:{password}"
@@ -81,7 +80,7 @@ class RobokassaService:
         if user_id is not None:
             shp_params["user_id"] = user_id
         
-        # Генерируем подпись для Инициализации (is_init=True)
+        # Генерируем подпись (is_init=True -> добавит .00 к сумме)
         signature = self._generate_signature(
             amount, inv_id, self.password1, shp_params, is_init=True
         )
@@ -120,19 +119,18 @@ class RobokassaService:
             return False
         
         try:
-            amount = float(out_sum)
             inv_id_int = int(inv_id)
             
             callback_shp = {}
             if shp_params:
                 for key, value in shp_params.items():
-                    # Очищаем ключи от префикса Shp_ перед передачей в генератор
                     clean_key = key.replace("Shp_", "") if key.startswith("Shp_") else key
                     callback_shp[clean_key] = value
             
-            # Генерируем ожидаемую подпись для RESULT URL (is_init=False)
+            # Генерируем ожидаемую подпись (is_init=False -> НЕ трогает формат суммы)
+            # Передаем out_sum прямо строкой, как она пришла от Робокассы ("1490")
             expected_signature = self._generate_signature(
-                amount, inv_id_int, self.password2, 
+                out_sum, inv_id_int, self.password2, 
                 callback_shp if callback_shp else None, 
                 is_init=False
             )
@@ -140,14 +138,11 @@ class RobokassaService:
             is_valid = expected_signature.upper() == signature_value.upper()
             
             if not is_valid:
-                # Логируем, чтобы видеть разницу
-                # ВАЖНО: Не логируйте пароли в продакшене, но для дебага структуры полезно
-                debug_shp = callback_shp if callback_shp else "None"
                 logger.warning(
                     f"Signature mismatch!\n"
                     f"Expected (calc): {expected_signature}\n"
                     f"Received (robo): {signature_value}\n"
-                    f"Inputs: Sum={amount}, Inv={inv_id_int}, Shp={debug_shp}"
+                    f"Data: Sum='{out_sum}', Inv={inv_id_int}"
                 )
             
             return is_valid
