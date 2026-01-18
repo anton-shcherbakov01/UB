@@ -193,12 +193,18 @@ class WBStatisticsMixin(WBApiBase):
 
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
-        Получение ПОЛНОЙ воронки через API v3 (Analytics).
-        Исправлено согласно документу: End-of-Life v2.
+        Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
+        через Analytics API v3.
         """
-        # Новый эндпоинт v3
+        # Analytics API URL (V3 Standard replacement)
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
-        headers = {"Authorization": token}
+        
+        # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
+        if len(date_from) > 10: date_from = date_from[:10]
+        if len(date_to) > 10: date_to = date_to[:10]
+
+        # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
+        headers = self.headers 
         
         res = {
             "visitors": 0,
@@ -209,9 +215,9 @@ class WBStatisticsMixin(WBApiBase):
             "buyoutsSum": 0
         }
 
-        # v3 использует offset/limit и selectedPeriod
+        # v3 uses limit/offset instead of page
         offset = 0
-        limit = 1000 # Документация упоминает 100 или 1000. Берем 1000 для скорости.
+        limit = 1000 
         is_more = True
         
         try:
@@ -221,7 +227,7 @@ class WBStatisticsMixin(WBApiBase):
                         "begin": date_from,
                         "end": date_to
                     },
-                    "nmIds": [], # Пустой массив = все товары (с пагинацией)
+                    "nmIds": [], # Пустой массив = все товары
                     "limit": limit,
                     "offset": offset
                 }
@@ -236,7 +242,6 @@ class WBStatisticsMixin(WBApiBase):
                 if not data or not isinstance(data, dict):
                     break
                 
-                # В v3 данные лежат в data -> cards
                 cards = data.get("data", {}).get("cards", [])
                 
                 if not cards:
@@ -244,35 +249,29 @@ class WBStatisticsMixin(WBApiBase):
                     break
                 
                 for c in cards:
-                    # В v3 статистика внутри 'statistics' -> 'selectedPeriod'
+                    # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
                     
-                    # Маппинг полей согласно v3 (см. таблицу в документе)
                     res["visitors"] += stats.get("openCardCount", 0)
                     res["addToCart"] += stats.get("addToCartCount", 0)
                     res["ordersCount"] += stats.get("ordersCount", 0)
                     
-                    # Цены. В документе указан buyoutSum, но ordersSum не указан явно.
-                    # Обычно есть парные поля. Пытаемся найти сумму заказов.
-                    # Если нет - считаем 0.
-                    res["ordersSum"] += stats.get("ordersSumRub", 0) # Попытка v2 стиля
+                    # Пытаемся найти сумму заказов
+                    res["ordersSum"] += stats.get("ordersSumRub", 0) 
                     if stats.get("ordersSumRub") is None:
-                         res["ordersSum"] += stats.get("ordersSum", 0) # Попытка v3 стиля
+                         res["ordersSum"] += stats.get("ordersSum", 0)
 
-                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # Внимание: buyoutCount (ед.ч)
-                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # Внимание: buyoutSum (ед.ч)
+                    # v3 uses buyoutCount/buyoutSum (singular)
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0)
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)
                 
-                # Увеличиваем смещение
                 offset += limit
-                
-                # Безопасный лимит циклов (5000 товаров максимум для дашборда)
-                if offset > 5000: 
-                    break
+                if offset > 5000: break # Safety break
 
             return res
             
         except Exception as e:
-            logger.error(f"Failed to fetch v3 sales funnel: {e}")
+            logger.error(f"Failed to fetch full sales funnel in API class: {e}")
             return {}
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
@@ -572,6 +571,10 @@ class WBStatisticsAPI:
         # Analytics API URL (V3 Standard replacement)
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
+        # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
+        if len(date_from) > 10: date_from = date_from[:10]
+        if len(date_to) > 10: date_to = date_to[:10]
+
         # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
         headers = self.headers 
         
