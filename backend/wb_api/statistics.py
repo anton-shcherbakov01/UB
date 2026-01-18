@@ -33,14 +33,15 @@ class WBStatisticsMixin(WBApiBase):
         "common": "https://common-api.wildberries.ru",
         "content": "https://content-api.wildberries.ru",
         "statistics": "https://statistics-api.wildberries.ru",
-        "advert": "https://advert-api.wildberries.ru",  # Исправлено: правильный URL для advert API
+        "advert": "https://advert-api.wildberries.ru",
         "marketplace": "https://marketplace-api.wildberries.ru",
-        "feedbacks": "https://feedbacks-api.wildberries.ru"
+        "feedbacks": "https://feedbacks-api.wildberries.ru",
+        "analytics": "https://seller-analytics-api.wildberries.ru" # Добавлен URL аналитики
     }
 
     def __init__(self):
         # Короткий таймаут, чтобы проверка профиля не висела долго
-        self.timeout = aiohttp.ClientTimeout(total=8)
+        self.timeout = aiohttp.ClientTimeout(total=10)
     
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
         """
@@ -74,18 +75,14 @@ class WBStatisticsMixin(WBApiBase):
                     raw_res[key] = res if isinstance(res, bool) else False
 
         # Маппинг для UI (13 категорий)
-        # promotion проверяется через advert API
         promotion_scope = raw_res.get("advert", False)
-        # users - это административная функция, не связанная с WB API
-        # Управление пользователями требует специальных прав, которые не проверяются через стандартные API
-        # Поэтому всегда возвращаем False, так как это административная функция платформы
         users_scope = False
         
         return {
             "content": raw_res.get("content", False),
             "marketplace": raw_res.get("marketplace", False),
             "analytics": raw_res.get("stats", False),
-            "promotion": promotion_scope,  # Исправлено: используем значение из advert
+            "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
             "statistics": raw_res.get("stats", False),
@@ -94,7 +91,7 @@ class WBStatisticsMixin(WBApiBase):
             "chat": raw_res.get("feedbacks", False),
             "questions": raw_res.get("feedbacks", False),
             "prices": raw_res.get("prices", False) or raw_res.get("content", False),
-            "users": users_scope  # Исправлено: всегда False, так как это административная функция платформы
+            "users": users_scope
         }
 
     async def _probe(self, session, method, url, headers, params=None) -> bool:
@@ -109,27 +106,16 @@ class WBStatisticsMixin(WBApiBase):
     async def get_api_mode(self, token: str) -> str:
         """
         Определяет режим работы API токена: только чтение или чтение и запись.
-        
-        Returns:
-            "read_only" - только чтение
-            "read_write" - чтение и запись
         """
         if not token:
             return "read_only"
         
         headers = {"Authorization": token}
         
-        # Пробуем выполнить безопасную операцию записи для определения режима
-        # Используем endpoint для проверки прав на запись (например, проверка лимитов карточек)
-        # Если можем получить информацию о лимитах через POST или можем выполнить операцию записи - режим read_write
-        # Если только GET работает - режим read_only
-        
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            # Пробуем выполнить операцию, которая требует прав записи
-            # Используем безопасный endpoint для проверки (например, проверка лимитов через POST)
             test_urls = [
-                f"{self.URLS['content']}/content/v2/cards/limits",  # Проверка лимитов (требует прав записи для некоторых операций)
-                f"{self.URLS['marketplace']}/api/v3/warehouses",  # Проверка складов
+                f"{self.URLS['content']}/content/v2/cards/limits",
+                f"{self.URLS['marketplace']}/api/v3/warehouses",
             ]
             
             # Сначала проверяем, работает ли GET (чтение)
@@ -147,19 +133,13 @@ class WBStatisticsMixin(WBApiBase):
                 return "read_only"
             
             # Теперь проверяем, работает ли запись (пробуем безопасный POST запрос)
-            # Используем endpoint, который не изменяет данные, но требует прав записи
             write_test_url = f"{self.URLS['content']}/content/v2/cards/limits"
             try:
-                # Пробуем POST запрос (даже если он вернет ошибку, главное - не 403/401)
                 async with session.post(write_test_url, headers=headers, json={}) as resp:
-                    # Если получили 403/401 - только чтение
-                    # Если получили другую ошибку (400, 422 и т.д.) - значит запись возможна, но данные неверные
                     if resp.status in [401, 403]:
                         return "read_only"
-                    # Если получили 400, 422 или другой код ошибки (не 401/403) - значит запись возможна
                     return "read_write"
             except:
-                # Если запрос упал, но GET работает - вероятно только чтение
                 return "read_only"
 
     async def get_dashboard_stats(self, token: str):
@@ -197,7 +177,6 @@ class WBStatisticsMixin(WBApiBase):
             for order in orders_data["items"]:
                 try:
                     order_date = datetime.strptime(order["date"][:19], "%Y-%m-%dT%H:%M:%S")
-                    # Remove timezone info if present for comparison
                     last_check_normalized = last_check.replace(tzinfo=None) if last_check.tzinfo else last_check
                     if order_date > last_check_normalized:
                         new_orders.append(order)
@@ -213,68 +192,129 @@ class WBStatisticsMixin(WBApiBase):
         params = {"dateFrom": date_from, "flag": 0}
         headers = {"Authorization": token}
         
-        # Используем базовый метод запроса с ретраями
         data = await self._request_with_retry(None, url, headers, params=params)
         return data if isinstance(data, list) else []
 
+    async def get_sales_funnel(self, token: str, date_from: str, date_to: str) -> Dict[str, int]:
+        """
+        Получение данных воронки продаж (просмотры, корзины) через Analytics API.
+        Endpoint: /api/v2/nm-report/detail
+        """
+        url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "brandNames": [],
+            "objectIDs": [],
+            "tagIDs": [],
+            "nmIDs": [],
+            "timezone": "Europe/Moscow",
+            "period": {
+                "begin": date_from,
+                "end": date_to
+            },
+            "orderBy": {
+                "field": "openCardCount",
+                "mode": "desc"
+            },
+            "page": 1
+        }
+        
+        try:
+            # Для воронки лучше не использовать кэш, данные динамичные, 
+            # но API тяжелый, поэтому нужен retry
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=20) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        cards = data.get("data", {}).get("cards", [])
+                        
+                        # Суммируем показатели по всем карточкам
+                        total_visitors = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("openCardCount", 0) for c in cards)
+                        total_cart = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("addToCartCount", 0) for c in cards)
+                        
+                        return {"visitors": total_visitors, "addToCart": total_cart}
+                    elif resp.status == 429:
+                        logger.warning("Analytics API Rate Limit (429)")
+                        return {"visitors": 0, "addToCart": 0}
+                    else:
+                        text = await resp.text()
+                        logger.warning(f"Analytics API Error {resp.status}: {text[:200]}")
+                        return {"visitors": 0, "addToCart": 0}
+        except Exception as e:
+            logger.error(f"Failed to fetch sales funnel: {e}")
+            return {"visitors": 0, "addToCart": 0}
+
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """Сводная статистика за сегодня для уведомлений"""
-        import logging
-        logger = logging.getLogger("WBStatistics")
+        today_date = datetime.now()
+        # Форматы дат для разных API
+        today_start_iso = today_date.strftime("%Y-%m-%dT00:00:00")
         
-        today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+        # Для воронки нужны полные форматы: YYYY-MM-DD HH:mm:ss
+        funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
+        funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
+        
         headers = {"Authorization": token}
         
-        # 1. Заказы и Продажи (всегда без кэша для актуальных данных)
         try:
+            # 1. Заказы и Продажи (Supplier API - самый быстрый для денег)
             async with aiohttp.ClientSession() as session:
-                orders_data = await self._get_orders_mixin(session, token, today_start, use_cache=False)
-                sales = await self.get_sales_since(token, today_start)
+                orders_data_task = self._get_orders_mixin(session, token, today_start_iso, use_cache=False)
+                sales_task = self.get_sales_since(token, today_start_iso)
+                # 2. Воронка продаж (Analytics API - для просмотров и корзин)
+                funnel_task = self.get_sales_funnel(token, funnel_start, funnel_end)
+                
+                # Запускаем все параллельно
+                orders_data, sales, funnel_res = await asyncio.gather(
+                    orders_data_task, 
+                    sales_task, 
+                    funnel_task,
+                    return_exceptions=True
+                )
             
+            # Обработка ошибок gather (если одна таска упала, другие могут выжить)
+            if isinstance(orders_data, Exception): 
+                orders_data = {"count": 0, "sum": 0, "items": []}
+            if isinstance(sales, Exception): 
+                sales = []
+            if isinstance(funnel_res, Exception): 
+                funnel_res = {"visitors": 0, "addToCart": 0}
+
             valid_sales = [s for s in sales if not str(s.get('saleID', '')).startswith('R')]
             
-            # Пересчитываем суммы на всякий случай
+            # Пересчет суммы заказов
             orders_sum = orders_data.get("sum", 0)
             if not orders_sum and orders_data.get("items"):
-                # Если сумма 0, но есть items, пересчитываем
                 valid_orders = [x for x in orders_data.get("items", []) if not x.get("isCancel")]
                 orders_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
             
             sales_sum = sum(s.get('priceWithDiscount', 0) for s in valid_sales)
             
-            logger.debug(f"Statistics today: orders_sum={orders_sum}, sales_sum={sales_sum}, orders_count={orders_data.get('count', 0)}, sales_count={len(valid_sales)}")
-            
-            # 2. Воронка продаж (visitors и addToCart)
-            # Примечание: Данные о переходах на карточку и добавлениях в корзину недоступны через стандартный Statistics API
-            # Для получения этих данных требуется доступ к NM-Report API, который требует отдельной авторизации
-            # Пока возвращаем 0 - фронтенд будет отображать "данные недоступны"
-            visitors = 0  # Данные недоступны через текущий API (требуется NM-Report API)
-            addToCart = 0  # Данные недоступны через текущий API (требуется NM-Report API)
+            logger.debug(f"Statistics today: orders_sum={orders_sum}, sales_sum={sales_sum}, funnel={funnel_res}")
             
             return {
                 "orders_sum": int(orders_sum),
                 "orders_count": orders_data.get("count", 0),
                 "sales_sum": int(sales_sum),
                 "sales_count": len(valid_sales),
-                "visitors": visitors,
-                "addToCart": addToCart
+                "visitors": funnel_res.get("visitors", 0),
+                "addToCart": funnel_res.get("addToCart", 0)
             }
         except Exception as e:
             logger.error(f"Error getting statistics today: {e}", exc_info=True)
-            # Возвращаем пустые данные при ошибке
             return {
-                "orders_sum": 0,
-                "orders_count": 0,
-                "sales_sum": 0,
-                "sales_count": 0,
-                "visitors": 0,
-                "addToCart": 0
+                "orders_sum": 0, "orders_count": 0,
+                "sales_sum": 0, "sales_count": 0,
+                "visitors": 0, "addToCart": 0
             }
 
     async def get_my_stocks(self, token: str):
         if not token: return []
         
-        today = datetime.now().strftime("%Y-%m-%dT00:00:00")
         url = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
         date_from = "2023-01-01T00:00:00"
         params = {"dateFrom": date_from}
