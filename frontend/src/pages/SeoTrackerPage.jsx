@@ -50,63 +50,49 @@ const SEOTrackerPage = ({ onNavigate }) => {
     };
 
     return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 bg-[#F4F4F9] min-h-screen">
             
-            {/* HEADER (В едином стиле с AI Стратегом) */}
-            <div className="flex justify-between items-stretch h-20">
-                <div className="flex items-center gap-3 flex-1 mr-3">
-                    {onNavigate && (
-                        <button 
-                            onClick={() => onNavigate('home')} 
-                            className="p-2 bg-white rounded-xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"
-                        >
-                            <ArrowLeft size={20} />
-                        </button>
-                    )}
-                    <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-200 flex-1 flex flex-col justify-center">
-                        <h1 className="text-xl font-black flex items-center gap-2">
-                            <Rocket className="text-cyan-300" size={20} /> SEO Радар
+            {/* Unified Header */}
+            <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
+                 <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-5 rounded-[28px] text-white shadow-xl shadow-indigo-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500">
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Rocket size={24} className="text-cyan-300"/>
+                            SEO Радар
                         </h1>
-                        <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider font-bold">Real-time Rank Tracking</p>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
+                            Real-time Rank Tracking
+                        </p>
                     </div>
-                </div>
-                
-                <div className="flex flex-col gap-2 h-full">
-                    <button 
-                        onClick={async () => {
-                            try {
-                                const params = new URLSearchParams();
-                                if (sku) params.append('sku', sku);
-                                if (query) params.append('keyword', query);
-                                const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
-                                if (x_tg_data) params.append('x_tg_data', x_tg_data);
-                                const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
-                                window.open(url, '_blank');
-                            } catch (e) {
-                                alert('Не удалось скачать PDF: ' + (e.message || ''));
-                            }
-                        }}
-                        className="bg-indigo-50 border-indigo-200 text-indigo-600 p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border"
-                        title="Скачать PDF отчёт"
-                    >
-                        <FileDown size={20}/>
-                    </button>
-                    <button 
-                        onClick={() => setShowGeoInfo(!showGeoInfo)}
-                        className={`p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400'}`}
-                    >
-                        <HelpCircle size={20}/>
-                    </button>
+
+                    <div className="relative z-10">
+                        {/* Можно добавить доп. иконку или статус здесь */}
+                        <Globe size={24} className="text-white/20" />
+                    </div>
                     
-                    {result && (
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => onNavigate('home')} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100"
+                        title="Назад"
+                      >
+                          <ArrowLeft size={24}/>
+                      </button>
+                      
+                      <div className="group relative h-full">
                         <button 
-                            onClick={handleReset}
-                            className="bg-slate-100 p-3 rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                            onClick={() => setShowGeoInfo(!showGeoInfo)}
+                            className={`h-full w-full rounded-2xl shadow-sm transition-colors flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400 hover:text-indigo-600'}`}
                         >
-                            <RotateCcw size={20}/>
+                            <HelpCircle size={24}/>
                         </button>
-                    )}
-                </div>
+                      </div>
+                 </div>
             </div>
 
             {/* ГЕО-ПОДСКАЗКА (Выпадающая) */}
@@ -237,6 +223,26 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                     <b>Совет:</b> Если вы видите рекламную пометку, значит текущая позиция удерживается за счет ставок. Чтобы расти органически, работайте над CTR карточки и скоростью доставки в выбранном ГЕО.
                                 </div>
                             </div>
+                            
+                            {/* Кнопка PDF */}
+                            <button 
+                                onClick={async () => {
+                                    try {
+                                        const params = new URLSearchParams();
+                                        if (sku) params.append('sku', sku);
+                                        if (query) params.append('keyword', query);
+                                        const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
+                                        if (x_tg_data) params.append('x_tg_data', x_tg_data);
+                                        const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
+                                        window.open(url, '_blank');
+                                    } catch (e) {
+                                        alert('Не удалось скачать PDF: ' + (e.message || ''));
+                                    }
+                                }}
+                                className="w-full py-4 bg-white text-indigo-600 border-2 border-indigo-100 rounded-2xl font-bold flex justify-center items-center gap-2 shadow-sm active:scale-95 transition-all hover:bg-indigo-50"
+                            >
+                                <FileDown size={20}/> Скачать PDF отчет
+                            </button>
 
                             {/* Блок изменения региона */}
                             <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
@@ -287,7 +293,7 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                 </button>
                                 
                                 {/* Блок изменения региона для случая "не найдено" */}
-                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left mt-4">
                                     <div className="flex items-center gap-2 mb-3">
                                         <MapPin className="text-indigo-600" size={16}/>
                                         <span className="text-xs font-bold text-slate-700">Попробовать другой регион</span>
