@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle } from 'lucide-react';
+import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle, AlertTriangle, Lock } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
 // Карта цветов для Tailwind
@@ -10,7 +10,7 @@ const COLOR_MAPS = {
     violet: { bg: 'bg-violet-500', light: 'bg-violet-100', text: 'text-violet-600' },
 };
 
-const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) => {
+const Toggle = ({ label, description, checked, onChange, icon: Icon, color, badge, badgeColor }) => {
     const colors = COLOR_MAPS[color] || COLOR_MAPS.indigo;
     return (
         <div className="bg-white p-4 rounded-2xl border border-slate-200 flex items-center justify-between shadow-sm transition-all hover:shadow-md">
@@ -19,7 +19,14 @@ const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) =>
                     <Icon size={20} />
                 </div>
                 <div>
-                    <div className="font-bold text-slate-800 text-sm">{label}</div>
+                    <div className="flex items-center gap-2">
+                        <div className="font-bold text-slate-800 text-sm">{label}</div>
+                        {badge && (
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider ${badgeColor || 'bg-slate-100 text-slate-500'}`}>
+                                {badge}
+                            </span>
+                        )}
+                    </div>
                     {description && <div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{description}</div>}
                 </div>
             </div>
@@ -33,17 +40,27 @@ const Toggle = ({ label, description, checked, onChange, icon: Icon, color }) =>
     );
 };
 
-const NotificationsPage = ({ onNavigate }) => {
+const NotificationsPage = ({ onNavigate, user }) => {
     const [settings, setSettings] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
+    // Определяем лимиты на основе плана пользователя
+    const userPlan = user?.plan || 'start';
+    const minInterval = userPlan === 'strategist' ? 1 : (userPlan === 'analyst' ? 3 : 24);
+
     useEffect(() => {
         fetch(`${API_URL}/api/notifications/settings`, { headers: getTgHeaders() })
             .then(r => r.json())
-            .then(setSettings)
+            .then(data => {
+                // Если с сервера пришел интервал меньше допустимого для текущего плана (например, при даунгрейде), визуально ставим минимально разрешенный
+                if (data.summary_interval < minInterval) {
+                    data.summary_interval = minInterval;
+                }
+                setSettings(data);
+            })
             .finally(() => setLoading(false));
-    }, []);
+    }, [minInterval]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -53,7 +70,12 @@ const NotificationsPage = ({ onNavigate }) => {
                 headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify(settings)
             });
-            if (res.ok) alert("Настройки успешно сохранены!");
+            if (res.ok) {
+                alert("Настройки успешно сохранены!");
+            } else {
+                const err = await res.json();
+                alert(`Ошибка: ${err.detail || 'Не удалось сохранить'}`);
+            }
         } catch (e) { alert("Ошибка при сохранении"); }
         finally { setSaving(false); }
     };
@@ -120,21 +142,23 @@ const NotificationsPage = ({ onNavigate }) => {
                 <section className="space-y-3">
                     <h3 className="font-bold text-slate-400 text-[10px] uppercase tracking-widest px-2">События</h3>
                     <Toggle 
-                        label="Новые заказы" description="Мгновенно при поступлении заказа"
+                        label="Новые заказы" description="Уведомление сразу при поступлении"
                         checked={settings.notify_new_orders} onChange={v => update('notify_new_orders', v)}
                         icon={ShoppingCart} color="indigo"
+                        badge="Мгновенно" badgeColor="bg-emerald-100 text-emerald-600"
                     />
                     <Toggle 
                         label="Выкупы" description="Когда клиент оплатил и забрал товар"
                         checked={settings.notify_buyouts} onChange={v => update('notify_buyouts', v)}
                         icon={DollarSign} color="emerald"
+                        badge="Быстро" badgeColor="bg-emerald-100 text-emerald-600"
                     />
                 </section>
 
                 <section className="space-y-3">
                     <h3 className="font-bold text-slate-400 text-[10px] uppercase tracking-widest px-2">Аналитика и Расписание</h3>
                     <Toggle 
-                        label="Периодическая сводка" description="Отчет по выручке и воронке за день"
+                        label="Периодическая сводка" description="Отчет по выручке, заказам и воронке"
                         checked={settings.notify_hourly_stats} onChange={v => update('notify_hourly_stats', v)}
                         icon={BarChart3} color="violet"
                     />
@@ -142,30 +166,51 @@ const NotificationsPage = ({ onNavigate }) => {
                     {settings.notify_hourly_stats && (
                         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4 animate-in slide-in-from-top-2">
                             <div>
-                                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2 mb-2">
-                                    <Clock size={12}/> Частота отправки сводки
+                                <label className="text-[10px] font-black text-slate-400 uppercase flex items-center gap-2 mb-2 justify-between">
+                                    <span className="flex items-center gap-2"><Clock size={12}/> Частота отправки сводки</span>
+                                    {minInterval > 1 && <span className="text-[9px] text-amber-500 bg-amber-50 px-2 py-0.5 rounded">Лимит тарифа</span>}
                                 </label>
                                 <div className="grid grid-cols-3 gap-2">
-                                    {[1, 3, 6, 12, 24].map(h => (
-                                        <button 
-                                            key={h}
-                                            onClick={() => update('summary_interval', h)}
-                                            className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                                                settings.summary_interval === h 
-                                                ? 'bg-violet-600 border-violet-600 text-white shadow-lg shadow-violet-100' 
-                                                : 'bg-slate-50 border-slate-100 text-slate-500'
-                                            }`}
-                                        >
-                                            {h === 1 ? 'Раз в час' : h === 24 ? 'Раз в день' : `Каждые ${h}ч`}
-                                        </button>
-                                    ))}
+                                    {[1, 3, 6, 12, 24].map(h => {
+                                        const isDisabled = h < minInterval;
+                                        return (
+                                            <button 
+                                                key={h}
+                                                onClick={() => !isDisabled && update('summary_interval', h)}
+                                                disabled={isDisabled}
+                                                className={`py-2 rounded-xl text-xs font-bold border transition-all relative overflow-hidden ${
+                                                    settings.summary_interval === h 
+                                                    ? 'bg-violet-600 border-violet-600 text-white shadow-lg shadow-violet-100' 
+                                                    : isDisabled 
+                                                        ? 'bg-slate-100 border-slate-100 text-slate-300 cursor-not-allowed'
+                                                        : 'bg-slate-50 border-slate-100 text-slate-500 hover:bg-slate-100'
+                                                }`}
+                                            >
+                                                {h === 1 ? 'Раз в час' : h === 24 ? 'Раз в день' : `Каждые ${h}ч`}
+                                                {isDisabled && (
+                                                    <div className="absolute inset-0 flex items-center justify-center bg-slate-100/50">
+                                                        <Lock size={12} className="text-slate-400"/>
+                                                    </div>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
                             <Toggle 
                                 label="Воронка продаж" description="Добавить данные о просмотрах и корзинах"
                                 checked={settings.show_funnel} onChange={v => update('show_funnel', v)}
                                 icon={Filter} color="blue"
+                                badge="Задержка ~24ч" badgeColor="bg-amber-100 text-amber-600"
                             />
+                            
+                            {/* Информационная плашка */}
+                            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex gap-3 text-[10px] text-slate-500 leading-relaxed">
+                                <AlertTriangle className="text-amber-500 shrink-0" size={16} />
+                                <div>
+                                    <span className="font-bold text-slate-700">Важно:</span> Wildberries обновляет данные о просмотрах и корзинах раз в сутки. В утренних отчетах эти поля могут быть пустыми или показывать вчерашние данные. Заказы и выкупы приходят без задержек.
+                                </div>
+                            </div>
                         </div>
                     )}
                 </section>

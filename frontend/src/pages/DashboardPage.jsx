@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
     PieChart, Truck, TrendingUp, Wand2, Lock, Microscope, 
-    Gavel, ScanBarcode, Calendar, Brain, HelpCircle
+    Gavel, ScanBarcode, Calendar, Brain, HelpCircle, Filter
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
@@ -105,6 +105,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                                 <li><strong>Слоты</strong> - мониторинг доступности слотов на складах</li>
                                 <li><strong>SEO генератор</strong> - создание оптимизированных описаний</li>
                                 <li><strong>AI Стратег</strong> - анализ отзывов и психографика</li>
+                                <li><strong>Воронка</strong> - визуализация конверсии и динамика</li>
                                 <li><strong>Форензика</strong> - анализ возвратов и проблем</li>
                             </ul>
                             <p className="mt-2 text-[10px]">Доступность сервисов зависит от вашего тарифа.</p>
@@ -167,7 +168,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* 4. AI Analysis (NEW LOCATION) */}
+                    {/* 4. AI Analysis (Full Width) */}
                     <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
@@ -181,7 +182,21 @@ const DashboardPage = ({ onNavigate, user }) => {
                          </div>
                     </div>
 
-                    {/* 5. Analytics (Full Width) */}
+                    {/* 5. Funnel (Full Width - NEW) */}
+                    <div onClick={() => onNavigate('funnel')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
+                        <div className="flex justify-between items-start">
+                            <div className="bg-rose-100 w-12 h-12 rounded-2xl flex items-center justify-center text-rose-600">
+                                <Filter size={24} />
+                            </div>
+                            <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">NEW</span>
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">Воронка продаж</span>
+                            <span className="text-xs text-slate-400">Конверсии: Просмотры → Корзина → Заказ</span>
+                        </div>
+                    </div>
+
+                    {/* 6. Advanced Analytics (Full Width) */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
