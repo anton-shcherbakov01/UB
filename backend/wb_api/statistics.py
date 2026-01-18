@@ -46,23 +46,22 @@ class WBStatisticsMixin(WBApiBase):
         """
         headers = {"Authorization": token}
         
-        # Payload for Analytics Probe
+        # Payload для проверки v3 API
         analytics_payload = {
-            "period": {
+            "selectedPeriod": {
                 "begin": datetime.now().strftime("%Y-%m-%d"),
                 "end": datetime.now().strftime("%Y-%m-%d")
             },
-            "page": 1,
-            "timezone": "Europe/Moscow"
+            "nmIds": [],
+            "limit": 1
         }
 
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            # Optimized tasks: Removed direct stats probe to avoid 429 on login
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
-                # Using standard detail endpoint
-                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/detail", headers, json_data=analytics_payload),
+                # Обновлено на v3 согласно документу
+                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/analytics/v3/sales-funnel/products", headers, json_data=analytics_payload),
                 "advert": self._probe(session, "GET", f"{self.URLS['advert']}/adv/v1/promotion/count", headers),
                 "feedbacks": self._probe(session, "GET", f"{self.URLS['feedbacks']}/api/v1/questions/count", headers, params={"isAnswered": "false"}),
                 "prices": self._probe(session, "GET", f"{self.URLS['common']}/public/api/v1/info", headers)
@@ -90,8 +89,8 @@ class WBStatisticsMixin(WBApiBase):
             "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
-            "statistics": True, # Assume true if others work, to avoid 429 on check
-            "finance": True,
+            "statistics": analytics_access, # Если работает аналитика v3, то и статистика скорее всего
+            "finance": analytics_access,
             "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
             "chat": raw_res.get("feedbacks", False),
             "questions": raw_res.get("feedbacks", False),
@@ -102,7 +101,6 @@ class WBStatisticsMixin(WBApiBase):
     async def _probe(self, session, method, url, headers, params=None, json_data=None) -> bool:
         try:
             async with session.request(method, url, headers=headers, params=params, json=json_data) as resp:
-                # 401/403 = Access Denied. 
                 if resp.status in [401, 403]: return False
                 return True
         except:
@@ -150,9 +148,8 @@ class WBStatisticsMixin(WBApiBase):
         async with aiohttp.ClientSession() as session:
             today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
             
-            # Sequential execution to avoid 429
             orders_res = await self._get_orders_mixin(session, token, today_str, use_cache=True)
-            await asyncio.sleep(0.5) # Tiny pause
+            await asyncio.sleep(0.5) 
             stocks_res = await self._get_stocks_mixin(session, token, today_str, use_cache=True)
             
             return {
@@ -196,10 +193,11 @@ class WBStatisticsMixin(WBApiBase):
 
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
-        Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API (standard detail endpoint).
+        Получение ПОЛНОЙ воронки через API v3 (Analytics).
+        Исправлено согласно документу: End-of-Life v2.
         """
-        url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
+        # Новый эндпоинт v3
+        url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         headers = {"Authorization": token}
         
         res = {
@@ -211,40 +209,34 @@ class WBStatisticsMixin(WBApiBase):
             "buyoutsSum": 0
         }
 
-        page = 1
+        # v3 использует offset/limit и selectedPeriod
+        offset = 0
+        limit = 1000 # Документация упоминает 100 или 1000. Берем 1000 для скорости.
         is_more = True
         
         try:
             while is_more:
                 payload = {
-                    "brandNames": [],
-                    "objectIDs": [],
-                    "tagIDs": [],
-                    "nmIDs": [],
-                    "timezone": "Europe/Moscow",
-                    "period": {
+                    "selectedPeriod": {
                         "begin": date_from,
                         "end": date_to
                     },
-                    "orderBy": {
-                        "field": "openCardCount",
-                        "mode": "desc"
-                    },
-                    "page": page
+                    "nmIds": [], # Пустой массив = все товары (с пагинацией)
+                    "limit": limit,
+                    "offset": offset
                 }
                 
-                data = await self._request_with_retry(
-                    session=None,
-                    url=url,
-                    headers=headers,
+                data = await self._request(
+                    endpoint=url,
                     method="POST",
                     json_data=payload,
-                    retries=2
+                    retries=3
                 )
                 
                 if not data or not isinstance(data, dict):
                     break
                 
+                # В v3 данные лежат в data -> cards
                 cards = data.get("data", {}).get("cards", [])
                 
                 if not cards:
@@ -252,21 +244,35 @@ class WBStatisticsMixin(WBApiBase):
                     break
                 
                 for c in cards:
+                    # В v3 статистика внутри 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    
+                    # Маппинг полей согласно v3 (см. таблицу в документе)
                     res["visitors"] += stats.get("openCardCount", 0)
                     res["addToCart"] += stats.get("addToCartCount", 0)
                     res["ordersCount"] += stats.get("ordersCount", 0)
-                    res["ordersSum"] += stats.get("ordersSumRub", 0)
-                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                    
+                    # Цены. В документе указан buyoutSum, но ordersSum не указан явно.
+                    # Обычно есть парные поля. Пытаемся найти сумму заказов.
+                    # Если нет - считаем 0.
+                    res["ordersSum"] += stats.get("ordersSumRub", 0) # Попытка v2 стиля
+                    if stats.get("ordersSumRub") is None:
+                         res["ordersSum"] += stats.get("ordersSum", 0) # Попытка v3 стиля
+
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0) # Внимание: buyoutCount (ед.ч)
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)     # Внимание: buyoutSum (ед.ч)
                 
-                page += 1
-                if page > 100: break
+                # Увеличиваем смещение
+                offset += limit
+                
+                # Безопасный лимит циклов (5000 товаров максимум для дашборда)
+                if offset > 5000: 
+                    break
 
             return res
             
         except Exception as e:
-            logger.error(f"Failed to fetch full sales funnel in API class: {e}")
+            logger.error(f"Failed to fetch v3 sales funnel: {e}")
             return {}
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
@@ -276,17 +282,19 @@ class WBStatisticsMixin(WBApiBase):
         today_date = datetime.now()
         today_str_v1 = today_date.strftime("%Y-%m-%dT00:00:00")
         
-        funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
-        funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
+        # Для v3 нужно YYYY-MM-DD
+        funnel_start = today_date.strftime("%Y-%m-%d")
+        funnel_end = today_date.strftime("%Y-%m-%d")
         
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Запрашиваем V1 (Финансы) - SEQUENTIAL to avoid 429
+                # 1. Запрашиваем V1 (Финансы) - Быстро
                 orders_res = await self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
                 await asyncio.sleep(0.5) 
                 sales_res = await self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
                 
-                # 2. Запрашиваем V2 (Воронка) - Parallel is fine for V2 as it's a different API host
+                # 2. Запрашиваем V3 (Воронка)
+                # Используем метод класса, а не self, чтобы передать правильный токен
                 funnel_res = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
                 
                 # Обработка результатов (V1)
@@ -303,7 +311,7 @@ class WBStatisticsMixin(WBApiBase):
                     sales_sum = sales_res.get("sum", 0)
                     sales_count = sales_res.get("count", 0)
 
-                # Обработка результатов (V2)
+                # Обработка результатов (V3)
                 visitors = 0
                 addToCart = 0
                 if isinstance(funnel_res, dict):
@@ -559,11 +567,10 @@ class WBStatisticsAPI:
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API.
-        Аргумент token здесь для совместимости, используется self.token.
+        через Analytics API v3.
         """
-        # Analytics API URL (standard detail)
-        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/detail"
+        # Analytics API URL (V3 Standard replacement)
+        url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
         # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
         headers = self.headers 
@@ -577,26 +584,21 @@ class WBStatisticsAPI:
             "buyoutsSum": 0
         }
 
-        page = 1
+        # v3 uses limit/offset instead of page
+        offset = 0
+        limit = 1000 
         is_more = True
         
         try:
             while is_more:
                 payload = {
-                    "brandNames": [],
-                    "objectIDs": [],
-                    "tagIDs": [],
-                    "nmIDs": [],
-                    "timezone": "Europe/Moscow",
-                    "period": {
+                    "selectedPeriod": {
                         "begin": date_from,
                         "end": date_to
                     },
-                    "orderBy": {
-                        "field": "openCardCount",
-                        "mode": "desc"
-                    },
-                    "page": page
+                    "nmIds": [], # Пустой массив = все товары
+                    "limit": limit,
+                    "offset": offset
                 }
                 
                 data = await self._request(
@@ -616,16 +618,24 @@ class WBStatisticsAPI:
                     break
                 
                 for c in cards:
+                    # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    
                     res["visitors"] += stats.get("openCardCount", 0)
                     res["addToCart"] += stats.get("addToCartCount", 0)
                     res["ordersCount"] += stats.get("ordersCount", 0)
-                    res["ordersSum"] += stats.get("ordersSumRub", 0)
-                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
-                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                    
+                    # Пытаемся найти сумму заказов
+                    res["ordersSum"] += stats.get("ordersSumRub", 0) 
+                    if stats.get("ordersSumRub") is None:
+                         res["ordersSum"] += stats.get("ordersSum", 0)
+
+                    # v3 uses buyoutCount/buyoutSum (singular)
+                    res["buyoutsCount"] += stats.get("buyoutCount", 0)
+                    res["buyoutsSum"] += stats.get("buyoutSum", 0)
                 
-                page += 1
-                if page > 100: break # Safety break
+                offset += limit
+                if offset > 5000: break # Safety break
 
             return res
             
