@@ -37,8 +37,7 @@ class WBStatisticsMixin(WBApiBase):
         "analytics": "https://seller-analytics-api.wildberries.ru"
     }
 
-    def __init__(self, token: str):
-        self.token = token
+    def __init__(self):
         self.timeout = aiohttp.ClientTimeout(total=10)
     
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
@@ -259,13 +258,9 @@ class WBStatisticsMixin(WBApiBase):
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """
         Сводная статистика за сегодня.
-        Гибридный подход:
-        1. Деньги/Заказы -> API V1 (Statistics) - Быстро и точно.
-        2. Воронка (просмотры/корзины) -> API V2 (Analytics) - С задержкой, но безальтернативно.
         """
         today_date = datetime.now()
         today_str_v1 = today_date.strftime("%Y-%m-%dT00:00:00")
-        today_iso = today_date.strftime("%Y-%m-%d")
         
         funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
         funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
@@ -273,7 +268,6 @@ class WBStatisticsMixin(WBApiBase):
         try:
             async with aiohttp.ClientSession() as session:
                 # 1. Запрашиваем V1 (Финансы)
-                # Берем кэш False, так как нужны свежие данные для уведомления
                 orders_task = self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
                 sales_task = self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
                 
@@ -292,9 +286,6 @@ class WBStatisticsMixin(WBApiBase):
                 if isinstance(orders_res, dict):
                     orders_sum = orders_res.get("sum", 0)
                     orders_count = orders_res.get("count", 0)
-                elif not isinstance(orders_res, Exception) and orders_res:
-                    # Fallback structure logic if return differs
-                    pass
 
                 # Sales V1
                 if isinstance(sales_res, dict):
@@ -444,8 +435,7 @@ class WBStatisticsMixin(WBApiBase):
             return {"count": 0, "sum": 0, "items": []}
         
         if isinstance(data, list):
-            # Фильтруем только продажи (без возвратов, если они есть с отрицательной ценой, хотя flag=0 обычно продажи)
-            valid_sales = [x for x in data if not x.get("isStorno")] # Пример фильтрации, если нужна
+            valid_sales = [x for x in data if not x.get("isStorno")]
             total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_sales)
             return {"count": len(valid_sales), "sum": int(total_sum), "items": valid_sales}
         return {"count": 0, "sum": 0, "items": []}
@@ -471,7 +461,7 @@ class WBStatisticsMixin(WBApiBase):
 class WBStatisticsAPI:
     """
     Standalone Client for Wildberries Statistics API.
-    Used by Supply Service (New Logic).
+    Used by Supply Service (New Logic) and Analytics Service.
     """
     BASE_URL = "https://statistics-api.wildberries.ru"
 
@@ -483,12 +473,20 @@ class WBStatisticsAPI:
             "Accept": "application/json"
         }
 
-    async def _request(self, endpoint: str, params: Dict[str, Any] = None, retries: int = 3) -> List[Dict[str, Any]]:
-        url = f"{self.BASE_URL}{endpoint}"
+    async def _request(self, endpoint: str, params: Dict[str, Any] = None, method: str = "GET", json_data: Any = None, retries: int = 3) -> Any:
+        """
+        Универсальный метод запроса. Поддерживает полные URL и POST.
+        """
+        # Если endpoint начинается с http, используем его как полный URL, иначе добавляем BASE_URL
+        if endpoint.startswith("http"):
+            url = endpoint
+        else:
+            url = f"{self.BASE_URL}{endpoint}"
+
         async with aiohttp.ClientSession() as session:
             for attempt in range(retries):
                 try:
-                    async with session.get(url, headers=self.headers, params=params, timeout=30) as resp:
+                    async with session.request(method, url, headers=self.headers, params=params, json=json_data, timeout=30) as resp:
                         if resp.status == 200:
                             return await resp.json()
                         elif resp.status == 429:
@@ -502,93 +500,107 @@ class WBStatisticsAPI:
                         else:
                             text = await resp.text()
                             logger.error(f"WB API Error {resp.status}: {text}")
-                            return []
+                            return [] # Or raise exception
                 except asyncio.TimeoutError:
-                    logger.warning(f"Timeout on {endpoint}. Retrying...")
+                    logger.warning(f"Timeout on {url}. Retrying...")
                 except Exception as e:
                     logger.error(f"Request failed: {e}")
                     
         return []
 
     async def get_stocks(self) -> List[Dict[str, Any]]:
-        """
-        Метод «Склад». Возвращает остатки товаров на складах.
-        """
         date_from = "2023-01-01T00:00:00"
         return await self._request("/api/v1/supplier/stocks", params={"dateFrom": date_from})
 
     async def get_orders(self, days: int = 30) -> List[Dict[str, Any]]:
-        """
-        Метод «Заказы». Возвращает заказы.
-        """
         date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/orders", params={"dateFrom": date_from, "flag": 0})
 
     async def get_sales(self, days: int = 30) -> List[Dict[str, Any]]:
-        """
-        Метод «Продажи». Возвращает продажи (факты выкупа).
-        """
         date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
         return await self._request("/api/v1/supplier/sales", params={"dateFrom": date_from, "flag": 0})
 
     async def get_turnover_data(self) -> Dict[str, Any]:
-        """
-        Aggregates data for supply analysis.
-        """
         stocks, orders = await asyncio.gather(
             self.get_stocks(),
             self.get_orders(days=30)
         )
         return {"stocks": stocks, "orders": orders}
-    
-    async def calculate_transit(self, liters: int, origin: str, destination: str, custom_transit_rate: float = None):
+
+    # --- Метод для воронки (перенесен из Mixin для использования в WBStatisticsAPI) ---
+    async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
-        Умный калькулятор транзита.
+        Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
+        через Analytics API.
+        Аргумент token здесь для совместимости, используется self.token.
         """
-        # --- 1. Тарифы на прямую доставку ---
-        direct_tariffs = {
-            "Коледино": 15.0, "Электросталь": 14.0, "Казань": 8.0, 
-            "Краснодар": 10.0, "Тула": 12.0
+        # Analytics API URL (V2)
+        url = "https://seller-analytics-api.wildberries.ru/api/v2/nm-report/detail"
+        
+        # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
+        headers = self.headers 
+        
+        res = {
+            "visitors": 0,
+            "addToCart": 0,
+            "ordersCount": 0,
+            "ordersSum": 0,
+            "buyoutsCount": 0,
+            "buyoutsSum": 0
         }
-        
-        direct_base_freight = 3000.0 
-        
-        if origin.lower() in destination.lower() or destination.lower() in origin.lower():
-            direct_base_freight = 1500.0
-            direct_rate = 2.0 
-        else:
-            direct_rate = direct_tariffs.get(destination, 12.0)
 
-        direct_cost = int(direct_base_freight + (liters * direct_rate))
-
-        # --- 2. Тарифы на Транзит WB ---
-        # Если пользователь задал свой тариф, используем его. Иначе дефолт 4.5
-        transit_rate = custom_transit_rate if custom_transit_rate is not None else 4.5
+        page = 1
+        is_more = True
         
-        if origin == destination:
-            transit_rate = 0
+        try:
+            while is_more:
+                payload = {
+                    "brandNames": [],
+                    "objectIDs": [],
+                    "tagIDs": [],
+                    "nmIDs": [],
+                    "timezone": "Europe/Moscow",
+                    "period": {
+                        "begin": date_from,
+                        "end": date_to
+                    },
+                    "orderBy": {
+                        "field": "openCardCount",
+                        "mode": "desc"
+                    },
+                    "page": page
+                }
+                
+                data = await self._request(
+                    endpoint=url,
+                    method="POST",
+                    json_data=payload,
+                    retries=3
+                )
+                
+                if not data or not isinstance(data, dict):
+                    break
+                
+                cards = data.get("data", {}).get("cards", [])
+                
+                if not cards:
+                    is_more = False
+                    break
+                
+                for c in cards:
+                    stats = c.get("statistics", {}).get("selectedPeriod", {})
+                    res["visitors"] += stats.get("openCardCount", 0)
+                    res["addToCart"] += stats.get("addToCartCount", 0)
+                    res["ordersCount"] += stats.get("ordersCount", 0)
+                    res["ordersSum"] += stats.get("ordersSumRub", 0)
+                    res["buyoutsCount"] += stats.get("buyoutsCount", 0)
+                    res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
+                
+                page += 1
+                if page > 100: break # Safety break
+
+            return res
             
-        transit_cost = int(liters * transit_rate)
-        
-        benefit = direct_cost - transit_cost
-        is_profitable = benefit > 0 and origin != destination
-
-        return {
-            "origin": origin,
-            "destination": destination,
-            "volume": liters,
-            "custom_rate": transit_rate,
-            "direct": {
-                "total": direct_cost,
-                "rate": direct_rate,
-                "base": direct_base_freight,
-                "description": "Своя машина / ТК"
-            },
-            "transit": {
-                "total": transit_cost,
-                "rate": transit_rate,
-                "description": "Транзит силами WB"
-            },
-            "is_profitable": is_profitable,
-            "benefit": benefit
-        }
+        except Exception as e:
+            logger.error(f"Failed to fetch full sales funnel in API class: {e}")
+            return {}
