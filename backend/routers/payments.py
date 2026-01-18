@@ -345,6 +345,12 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     # Get additional parameters (Shp_*)
     user_id = data.get("Shp_user_id")
     
+    # Collect all Shp_ parameters for signature verification
+    shp_params = {}
+    for key, value in data.items():
+        if key.startswith("Shp_"):
+            shp_params[key] = value
+    
     if not out_sum or not inv_id_str or not signature_value:
         logger.error("Missing required fields in Robokassa callback")
         return "ERROR"
@@ -356,9 +362,9 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
         logger.error(f"Invalid amount or InvId in callback: {e}")
         return "ERROR"
     
-    # Verify signature
+    # Verify signature WITH shp_params (CRITICAL: must match what Robokassa sent)
     robokassa = RobokassaService()
-    if not robokassa.verify_callback_signature(out_sum, inv_id_str, signature_value):
+    if not robokassa.verify_callback_signature(out_sum, inv_id_str, signature_value, shp_params if shp_params else None):
         logger.error(f"Invalid signature for payment {inv_id}")
         return "ERROR"
     

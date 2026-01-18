@@ -32,7 +32,7 @@ class RobokassaService:
         else:
             self.base_url = "https://auth.robokassa.ru/Merchant/Index.aspx"
     
-    def _generate_signature(self, out_sum: float, inv_id: int, password: str) -> str:
+    def _generate_signature(self, out_sum: float, inv_id: int, password: str, shp_params: Optional[dict] = None) -> str:
         """
         Generate MD5 signature for Robokassa.
         
@@ -40,6 +40,7 @@ class RobokassaService:
             out_sum: Payment amount
             inv_id: Invoice ID
             password: Password (Password1 for URL, Password2 for callback)
+            shp_params: Optional dictionary of shp_ parameters (e.g., {"user_id": 123})
             
         Returns:
             MD5 hash string
@@ -47,12 +48,19 @@ class RobokassaService:
         # Format amount with 2 decimal places
         amount_str = f"{out_sum:.2f}"
         
-        # For payment URL: MerchantLogin:OutSum:InvId:Password1
-        # For callback: OutSum:InvId:Password2
+        # For payment URL: MerchantLogin:OutSum:InvId:Password1[:Shp_x=value...]
+        # For callback: OutSum:InvId:Password2[:Shp_x=value...]
+        # Shp parameters must be in alphabetical order!
         if password == self.password1:
             signature_string = f"{self.merchant_login}:{amount_str}:{inv_id}:{password}"
         else:
             signature_string = f"{amount_str}:{inv_id}:{password}"
+        
+        # Add shp_ parameters in alphabetical order (CRITICAL for signature validation)
+        if shp_params:
+            sorted_shp = sorted(shp_params.items())
+            for key, value in sorted_shp:
+                signature_string += f":Shp_{key}={value}"
         
         return hashlib.md5(signature_string.encode('utf-8')).hexdigest().upper()
     
@@ -80,8 +88,13 @@ class RobokassaService:
         if not self.merchant_login or not self.password1:
             raise ValueError("Robokassa credentials not configured")
         
-        # Generate signature
-        signature = self._generate_signature(amount, inv_id, self.password1)
+        # Prepare shp_params dict for signature calculation (must be alphabetical order)
+        shp_params = {}
+        if user_id is not None:
+            shp_params["user_id"] = user_id
+        
+        # Generate signature WITH shp_params (CRITICAL: must match URL parameters)
+        signature = self._generate_signature(amount, inv_id, self.password1, shp_params)
         
         # Build parameters
         params = {
@@ -100,18 +113,21 @@ class RobokassaService:
             params["FailURL"] = self.fail_url
         if email:
             params["Email"] = email
-        if user_id:
+        if user_id is not None:
             params["Shp_user_id"] = user_id
         
-        # Build URL
+        # Build URL and log for debugging
         url = f"{self.base_url}?{urlencode(params)}"
+        logger.info(f"Robokassa payment URL generated: inv_id={inv_id}, amount={amount}, signature={signature[:8]}...")
+        logger.debug(f"Robokassa params: {params}")
         return url
     
     def verify_callback_signature(
         self,
         out_sum: str,
         inv_id: str,
-        signature_value: str
+        signature_value: str,
+        shp_params: Optional[dict] = None
     ) -> bool:
         """
         Verify callback signature from Robokassa.
@@ -120,6 +136,7 @@ class RobokassaService:
             out_sum: Payment amount (as string from callback)
             inv_id: Invoice ID (as string from callback)
             signature_value: Signature from callback
+            shp_params: Optional dictionary of shp_ parameters from callback
             
         Returns:
             True if signature is valid, False otherwise
@@ -133,11 +150,22 @@ class RobokassaService:
             amount = float(out_sum)
             inv_id_int = int(inv_id)
             
-            # Generate expected signature
-            expected_signature = self._generate_signature(amount, inv_id_int, self.password2)
+            # Prepare shp_params from callback (if provided)
+            callback_shp = {}
+            if shp_params:
+                for key, value in shp_params.items():
+                    # Remove "Shp_" prefix if present
+                    clean_key = key.replace("Shp_", "") if key.startswith("Shp_") else key
+                    callback_shp[clean_key] = value
+            
+            # Generate expected signature WITH shp_params (must match what Robokassa sent)
+            expected_signature = self._generate_signature(amount, inv_id_int, self.password2, callback_shp if callback_shp else None)
             
             # Compare (case-insensitive)
-            return expected_signature.upper() == signature_value.upper()
+            is_valid = expected_signature.upper() == signature_value.upper()
+            if not is_valid:
+                logger.warning(f"Signature mismatch: expected={expected_signature}, received={signature_value}, shp_params={shp_params}")
+            return is_valid
         except (ValueError, TypeError) as e:
             logger.error(f"Error verifying signature: {e}")
             return False

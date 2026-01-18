@@ -67,21 +67,72 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
             .finally(() => setScopesLoading(false));
     };
 
+    // Конвертация цены в Telegram Stars (тот же подход, что и в TariffsPage)
+    const convertToStars = (priceStr) => {
+        const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
+        return Math.max(1, Math.round(price)); // Минимум 1 звезда, 1₽ = 1 звезда
+    };
+
     const payStars = async (plan) => {
-        if (!plan.stars) return;
+        if (!plan.price || plan.price === "0 ₽") {
+            alert("Этот тариф бесплатный");
+            return;
+        }
+        
+        setPayLoading(true);
         try {
+            const starsAmount = convertToStars(plan.price);
+            console.log('[Pay Stars Profile] Plan price:', plan.price, 'Converted to stars:', starsAmount);
+            
+            if (starsAmount <= 0) {
+                throw new Error("Неверная сумма для оплаты");
+            }
+            
             const res = await fetch(`${API_URL}/api/payment/stars_link`, {
                 method: 'POST',
                 headers: getTgHeaders(),
-                body: JSON.stringify({ plan_id: plan.id, amount: plan.stars })
+                body: JSON.stringify({ 
+                    plan_id: plan.id, 
+                    amount: starsAmount 
+                })
             });
-            const d = await res.json();
-            if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
-                window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
-                    if (status === 'paid') { alert("Оплата успешна!"); window.location.reload(); }
+            
+            const data = await res.json();
+            console.log('[Pay Stars Profile] Response:', data);
+            
+            if (!res.ok) {
+                throw new Error(data.detail || "Ошибка создания ссылки оплаты");
+            }
+            
+            if (!data.invoice_link) {
+                throw new Error("Сервер не вернул ссылку на оплату");
+            }
+            
+            // Открываем инвойс в Telegram WebApp
+            if (window.Telegram?.WebApp?.openInvoice) {
+                window.Telegram.WebApp.openInvoice(data.invoice_link, (status) => {
+                    console.log('[Pay Stars Profile] Invoice status:', status);
+                    if (status === 'paid') {
+                        alert("Оплата успешна! Подписка активирована.");
+                        loadData(); // Обновляем данные пользователя
+                        if (refreshUser) refreshUser(); // Обновляем в App.jsx тоже
+                    } else if (status === 'cancelled') {
+                        console.log('[Pay Stars Profile] Payment cancelled');
+                    } else if (status === 'failed') {
+                        alert("Оплата не прошла. Попробуйте снова.");
+                    }
                 });
-            } else { alert("Ошибка WebApp (откройте в Telegram)"); }
-        } catch (e) { alert(e.message); }
+            } else if (window.Telegram?.WebApp?.openLink) {
+                window.Telegram.WebApp.openLink(data.invoice_link);
+            } else {
+                window.open(data.invoice_link, '_blank');
+            }
+        } catch (e) {
+            console.error('[Pay Stars Profile] Error:', e);
+            alert(e.message || "Ошибка при создании платежа через Telegram Stars");
+        } finally {
+            setPayLoading(false);
+        }
     };
 
     const payRubles = async (plan) => {

@@ -47,10 +47,8 @@ class BotService:
         
         url = f"{self.api_url}/createInvoiceLink"
         # Для XTR (Telegram Stars) amount указывается напрямую в звездах
-        # НО: нужно проверить документацию - возможно нужны минимальные единицы
-        # По документации Telegram: для XTR 1 звезда = 100 минимальных единиц
-        # Например: 10 звезд = 1000 единиц (10 * 100)
-        amount_in_units = amount_stars * 100 if amount_stars > 0 else 0
+        # По документации Telegram Bot API: для XTR amount указывается как целое число звезд
+        # НЕ нужно умножать на 100, в отличие от обычных валют
         
         data = {
             "title": title,
@@ -58,10 +56,10 @@ class BotService:
             "payload": payload,
             "provider_token": "", # Для Stars это поле должно быть пустым
             "currency": "XTR",
-            "prices": [{"label": "Subscription", "amount": amount_in_units}]
+            "prices": [{"label": "Subscription", "amount": amount_stars}]
         }
         
-        logger.info(f"Creating invoice with amount_stars={amount_stars}, amount_in_units={amount_in_units}")
+        logger.info(f"Creating invoice with amount_stars={amount_stars} (XTR currency, direct value)")
         
         async with aiohttp.ClientSession() as session:
             try:

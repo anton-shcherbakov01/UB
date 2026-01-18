@@ -248,11 +248,14 @@ async def get_tariffs(user: User = Depends(get_current_user)):
         plan_info = plan_mapping.get(plan_key, {})
         price = plan_config.get("price", 0)
         
+        # Конвертация цены в звезды (1₽ = 1 звезда)
+        stars_amount = price if price > 0 else 0
+        
         tariffs.append({
             "id": plan_key,
             "name": plan_config.get("name", plan_key).replace(" (Free)", "").replace(" (Pro)", "").replace(" (Business)", ""),
             "price": f"{price} ₽" if price > 0 else "0 ₽",
-            "stars": 0,  # Stars payment can be added later if needed
+            "stars": stars_amount,  # Количество звезд для оплаты (1₽ = 1 звезда)
             "features": plan_info.get("features_display", []),
             "current": user.subscription_plan == plan_key,
             "is_best": plan_info.get("is_best", False)
