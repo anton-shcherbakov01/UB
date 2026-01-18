@@ -200,6 +200,7 @@ class WBStatisticsMixin(WBApiBase):
         url = "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products"
         
         # FIX: API v3 требует формат YYYY-MM-DD. Обрезаем время, если оно есть.
+        # This was causing 400 error because of extra time string
         if len(date_from) > 10: date_from = date_from[:10]
         if len(date_to) > 10: date_to = date_to[:10]
 
@@ -250,24 +251,27 @@ class WBStatisticsMixin(WBApiBase):
                      logger.error(f"Funnel API v3 Error Body: {data}")
                      break
 
-                # Response structure check: { "data": { "cards": [] } }
+                # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
                      # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
-                cards = response_data.get("cards", [])
+                # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
+                items = response_data.get("products", [])
+                if not items:
+                    items = response_data.get("cards", [])
                 
-                if not cards:
+                if not items:
                     # Detailed logging to diagnose "No cards" issue
-                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
-                # logger.info(f"Funnel V3: Fetched {len(cards)} cards (Offset {offset})")
+                # logger.info(f"Funnel V3: Fetched {len(items)} items (Offset {offset})")
 
-                for c in cards:
+                for c in items:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
                     
@@ -615,7 +619,7 @@ class WBStatisticsAPI:
 
         # v3 uses limit/offset instead of page
         offset = 0
-        limit = 100  # Reduced to 100 as per reference doc recommendation
+        limit = 100 
         is_more = True
         
         try:
@@ -648,24 +652,27 @@ class WBStatisticsAPI:
                      logger.error(f"Funnel API v3 Error Body: {data}")
                      break
 
-                # Response structure check: { "data": { "cards": [] } }
+                # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
                      # Some APIs return cards directly or in a different wrapper on error/empty
                      logger.warning(f"No 'data' field in response. Full response: {data}")
                      break
 
-                cards = response_data.get("cards", [])
+                # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
+                items = response_data.get("products", [])
+                if not items:
+                    items = response_data.get("cards", [])
                 
-                if not cards:
+                if not items:
                     # Detailed logging to diagnose "No cards" issue
-                    logger.info(f"No cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                    logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
-                # logger.info(f"Funnel V3: Fetched {len(cards)} cards (Offset {offset})")
+                # logger.info(f"Funnel V3: Fetched {len(items)} items (Offset {offset})")
 
-                for c in cards:
+                for c in items:
                     # In v3 statistics are inside 'statistics' -> 'selectedPeriod'
                     stats = c.get("statistics", {}).get("selectedPeriod", {})
                     
