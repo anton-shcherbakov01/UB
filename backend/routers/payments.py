@@ -214,22 +214,24 @@ async def create_robokassa_subscription(
     amount = plan_config.get("price", 0)
     plan_name = plan_config.get("name", req.plan_id)
     
-    # Generate unique invoice ID (using user_id + timestamp + random component)
-    import random
-    timestamp = int(datetime.utcnow().timestamp())
-    random_part = random.randint(1000, 9999)
-    inv_id = int(f"{user.id}{timestamp}{random_part}")
-    
-    # Create payment record
+    # Create payment record first to get its ID
     payment = Payment(
         user_id=user.id,
-        provider_payment_id=str(inv_id),
+        provider_payment_id="",  # Will be updated after we get the payment ID
         amount=amount,
         currency="RUB",
         status="pending",
         plan_id=req.plan_id
     )
     db.add(payment)
+    await db.flush()  # Flush to get the payment ID without committing
+    await db.refresh(payment)  # Refresh to get the auto-generated ID
+    
+    # Use payment.id as InvId (must be integer < 2,147,483,647)
+    inv_id = payment.id
+    
+    # Update provider_payment_id with the actual InvId
+    payment.provider_payment_id = str(inv_id)
     await db.commit()
     
     # Create Robokassa service
@@ -271,22 +273,24 @@ async def create_robokassa_addon(
     if amount == 0:
         raise HTTPException(status_code=400, detail="This addon is free")
     
-    # Generate unique invoice ID (using user_id + timestamp + random component)
-    import random
-    timestamp = int(datetime.utcnow().timestamp())
-    random_part = random.randint(1000, 9999)
-    inv_id = int(f"{user.id}{timestamp}{random_part}")
-    
-    # Create payment record (store addon_id in plan_id field for now, or we could extend Payment model)
+    # Create payment record first to get its ID
     payment = Payment(
         user_id=user.id,
-        provider_payment_id=str(inv_id),
+        provider_payment_id="",  # Will be updated after we get the payment ID
         amount=amount,
         currency="RUB",
         status="pending",
         plan_id=f"addon_{req.addon_id}"  # Store addon ID in plan_id field
     )
     db.add(payment)
+    await db.flush()  # Flush to get the payment ID without committing
+    await db.refresh(payment)  # Refresh to get the auto-generated ID
+    
+    # Use payment.id as InvId (must be integer < 2,147,483,647)
+    inv_id = payment.id
+    
+    # Update provider_payment_id with the actual InvId
+    payment.provider_payment_id = str(inv_id)
     await db.commit()
     
     # Create Robokassa service
