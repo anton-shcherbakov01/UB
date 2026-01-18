@@ -37,7 +37,8 @@ class WBStatisticsMixin(WBApiBase):
         "analytics": "https://seller-analytics-api.wildberries.ru"
     }
 
-    def __init__(self):
+    def __init__(self, token: str):
+        self.token = token
         self.timeout = aiohttp.ClientTimeout(total=10)
     
     async def get_token_scopes(self, token: str) -> Dict[str, bool]:
