@@ -20,7 +20,7 @@ const FunnelPage = ({ onBack }) => {
 
     useEffect(() => {
         fetchFunnelData();
-    }, [period]); // nmIds добавим в зависимость от нажатия Enter или Blur
+    }, [period]);
 
     const fetchFunnelData = async () => {
         setLoading(true);
@@ -127,6 +127,21 @@ const FunnelPage = ({ onBack }) => {
                         <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
                             <HelpCircle size={24}/>
                         </button>
+                        
+                        {/* Tooltip */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-4 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2 text-rose-300">Как читать воронку?</div>
+                            <ul className="space-y-1.5 list-disc pl-3 mb-2">
+                                <li><span className="text-slate-300">Просмотры:</span> Уникальные открытия карточки.</li>
+                                <li><span className="text-slate-300">Корзина:</span> Конверсия (CR) в добавление.</li>
+                                <li><span className="text-slate-300">Заказы:</span> Оформленные покупки.</li>
+                                <li><span className="text-slate-300">Выкупы:</span> Товар фактически выкуплен.</li>
+                            </ul>
+                            <div className="text-[10px] text-slate-400 leading-tight border-t border-slate-700 pt-2">
+                                График показывает динамику по дням. Если история недоступна из-за лимитов WB, данные могут быть усреднены, но общие суммы всегда точные.
+                            </div>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
+                        </div>
                       </div>
                  </div>
             </div>
