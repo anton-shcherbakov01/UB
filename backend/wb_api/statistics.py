@@ -183,7 +183,7 @@ class WBStatisticsMixin(WBApiBase):
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str) -> Dict[str, Any]:
         """
         Получение ПОЛНОЙ воронки (Просмотры -> Корзины -> Заказы -> Выкупы) 
-        через Analytics API. Добавлена пагинация для получения данных по всем карточкам.
+        через Analytics API. Добавлена пагинация.
         """
         url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
         headers = {"Authorization": token}
@@ -247,9 +247,7 @@ class WBStatisticsMixin(WBApiBase):
                     res["buyoutsSum"] += stats.get("buyoutsSumRub", 0)
                 
                 page += 1
-                # Безопасный лимит страниц, чтобы не зациклиться
-                if page > 100:
-                    break
+                if page > 100: break
 
             return res
             
@@ -259,36 +257,67 @@ class WBStatisticsMixin(WBApiBase):
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """
-        Сводная статистика за сегодня для уведомлений.
+        Сводная статистика за сегодня.
+        Гибридный подход:
+        1. Деньги/Заказы -> API V1 (Statistics) - Быстро и точно.
+        2. Воронка (просмотры/корзины) -> API V2 (Analytics) - С задержкой, но безальтернативно.
         """
         today_date = datetime.now()
-        # Analytics API требует формат YYYY-MM-DD HH:mm:ss
+        today_str_v1 = today_date.strftime("%Y-%m-%dT00:00:00")
+        today_iso = today_date.strftime("%Y-%m-%d")
+        
         funnel_start = today_date.strftime("%Y-%m-%d 00:00:00")
         funnel_end = today_date.strftime("%Y-%m-%d 23:59:59")
         
         try:
-            # Используем один мощный запрос вместо трех слабых
-            funnel_data = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
-            
-            if not funnel_data:
-                return {
-                    "orders_sum": 0, "orders_count": 0,
-                    "sales_sum": 0, "sales_count": 0,
-                    "visitors": 0, "addToCart": 0
-                }
+            async with aiohttp.ClientSession() as session:
+                # 1. Запрашиваем V1 (Финансы)
+                # Берем кэш False, так как нужны свежие данные для уведомления
+                orders_task = self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
+                sales_task = self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
+                
+                # 2. Запрашиваем V2 (Воронка)
+                funnel_task = self.get_sales_funnel_full(token, funnel_start, funnel_end)
+                
+                orders_res, sales_res, funnel_res = await asyncio.gather(orders_task, sales_task, funnel_task, return_exceptions=True)
+                
+                # Обработка результатов
+                orders_sum = 0
+                orders_count = 0
+                sales_sum = 0
+                sales_count = 0
+                
+                # Orders V1
+                if isinstance(orders_res, dict):
+                    orders_sum = orders_res.get("sum", 0)
+                    orders_count = orders_res.get("count", 0)
+                elif not isinstance(orders_res, Exception) and orders_res:
+                    # Fallback structure logic if return differs
+                    pass
 
-            logger.info(f"Statistics today (Analytics API): {funnel_data}")
+                # Sales V1
+                if isinstance(sales_res, dict):
+                    sales_sum = sales_res.get("sum", 0)
+                    sales_count = sales_res.get("count", 0)
+
+                # Funnel V2
+                visitors = 0
+                addToCart = 0
+                if isinstance(funnel_res, dict):
+                    visitors = funnel_res.get("visitors", 0)
+                    addToCart = funnel_res.get("addToCart", 0)
             
             return {
-                "orders_sum": int(funnel_data.get("ordersSum", 0)),
-                "orders_count": funnel_data.get("ordersCount", 0),
-                "sales_sum": int(funnel_data.get("buyoutsSum", 0)),
-                "sales_count": funnel_data.get("buyoutsCount", 0),
-                "visitors": funnel_data.get("visitors", 0),
-                "addToCart": funnel_data.get("addToCart", 0)
+                "orders_sum": orders_sum,
+                "orders_count": orders_count,
+                "sales_sum": sales_sum,
+                "sales_count": sales_count,
+                "visitors": visitors,
+                "addToCart": addToCart
             }
+
         except Exception as e:
-            logger.error(f"Error getting statistics today: {e}", exc_info=True)
+            logger.error(f"Error getting statistics today hybrid: {e}", exc_info=True)
             return {
                 "orders_sum": 0, "orders_count": 0,
                 "sales_sum": 0, "sales_count": 0,
@@ -396,6 +425,28 @@ class WBStatisticsMixin(WBApiBase):
             valid_orders = [x for x in data if not x.get("isCancel")]
             total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
             return {"count": len(valid_orders), "sum": int(total_sum), "items": valid_orders}
+        return {"count": 0, "sum": 0, "items": []}
+
+    async def _get_sales_mixin(self, session, token: str, date_from: str, use_cache=True):
+        """Внутренний метод для получения продаж (v1/supplier/sales)"""
+        url = "https://statistics-api.wildberries.ru/api/v1/supplier/sales"
+        params = {"dateFrom": date_from, "flag": 0}
+        headers = {"Authorization": token}
+        
+        if hasattr(self, '_get_cached_or_request'):
+            data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
+        else:
+            async with session.get(url, headers=headers, params=params) as resp:
+                data = await resp.json() if resp.status == 200 else []
+        
+        if not data:
+            return {"count": 0, "sum": 0, "items": []}
+        
+        if isinstance(data, list):
+            # Фильтруем только продажи (без возвратов, если они есть с отрицательной ценой, хотя flag=0 обычно продажи)
+            valid_sales = [x for x in data if not x.get("isStorno")] # Пример фильтрации, если нужна
+            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_sales)
+            return {"count": len(valid_sales), "sum": int(total_sum), "items": valid_sales}
         return {"count": 0, "sum": 0, "items": []}
 
     async def _get_stocks_mixin(self, session, token: str, date_from: str, use_cache=True):
