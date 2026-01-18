@@ -6,7 +6,9 @@ import base64
 import httpx
 import random
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -22,9 +24,13 @@ from dependencies.quota import increment_usage
 logger = logging.getLogger("Payments")
 router = APIRouter(prefix="/api", tags=["Payments"])
 
+# === CONFIGURATION ===
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")  # Обязательно добавьте в .env!
+BOT_APP_URL = "https://t.me/juicystat_bot/app/juicystat"  # Ваша ссылка на приложение
 
+# === MODELS ===
 class StarsPaymentRequest(BaseModel):
     plan_id: str
     amount: int
@@ -37,6 +43,8 @@ class RobokassaSubscriptionRequest(BaseModel):
 
 class RobokassaAddonRequest(BaseModel):
     addon_id: str  # extra_ai_100, history_audit
+
+# === STARS PAYMENTS ===
 
 @router.post("/payment/stars_link")
 async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_current_user)):
@@ -59,12 +67,27 @@ async def create_stars_link(req: StarsPaymentRequest, user: User = Depends(get_c
     return {"invoice_link": link}
 
 @router.post("/webhook/telegram")
-async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+async def telegram_webhook(
+    request: Request, 
+    x_telegram_bot_api_secret_token: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db)
+):
+    # 1. Проверка безопасности (Secret Token)
+    if TELEGRAM_WEBHOOK_SECRET and x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
+        logger.warning("Unauthorized access to Telegram webhook (invalid token)")
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
     data = await request.json()
     
     if "message" in data and "successful_payment" in data["message"]:
         pay = data["message"]["successful_payment"]
-        payload = json.loads(pay["invoice_payload"])
+        payload_str = pay.get("invoice_payload")
+        
+        try:
+            payload = json.loads(payload_str)
+        except (json.JSONDecodeError, TypeError):
+            logger.error(f"Failed to decode payload: {payload_str}")
+            return {"ok": True}
         
         user_id = payload.get("user_id")
         plan = payload.get("plan")
@@ -74,27 +97,40 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
             if user:
                 now = datetime.utcnow()
                 user.subscription_plan = plan
-                user.subscription_expires_at = now + timedelta(days=30)
+                
+                # Продление или установка даты
+                if user.subscription_expires_at and user.subscription_expires_at > now:
+                    user.subscription_expires_at += timedelta(days=30)
+                else:
+                    user.subscription_expires_at = now + timedelta(days=30)
+
                 # Принудительно сбрасываем квоты при любой успешной оплате
                 user.usage_reset_date = now + timedelta(days=30)
                 user.ai_requests_used = 0
                 user.extra_ai_balance = 0
                 user.cluster_requests_used = 0
+                
                 db.add(user)
                 await db.commit()
                 logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars (quotas reset)")
                 
     return {"ok": True}
 
+# === YOOKASSA PAYMENTS ===
+
 @router.post("/payment/yookassa/create")
 async def create_yookassa_payment(req: YooPaymentRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         raise HTTPException(500, "YooKassa config missing")
 
-    prices = {"pro": 2990, "business": 6990}
-    amount_val = prices.get(req.plan_id)
+    # Исправлено: берем цены из конфига, а не хардкодим
+    plan_config = get_plan_config(req.plan_id)
+    if not plan_config:
+         raise HTTPException(400, "Invalid plan ID")
+
+    amount_val = plan_config.get("price")
     if not amount_val:
-        raise HTTPException(400, "Invalid plan")
+        raise HTTPException(400, "Plan price not found or free")
 
     idempotence_key = str(uuid.uuid4())
     auth_str = f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}"
@@ -106,7 +142,8 @@ async def create_yookassa_payment(req: YooPaymentRequest, user: User = Depends(g
         "Content-Type": "application/json"
     }
 
-    return_url = "https://t.me/WbAnalyticsBot/app" 
+    # Используем константу с правильным URL
+    return_url = BOT_APP_URL
 
     payload = {
         "amount": {"value": f"{amount_val}.00", "currency": "RUB"},
@@ -327,7 +364,6 @@ async def create_robokassa_addon(
 async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
     Robokassa ResultURL webhook handler.
-    This endpoint receives payment notifications from Robokassa.
     """
     try:
         # Robokassa sends form data
@@ -343,7 +379,7 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     signature_value = data.get("SignatureValue", "")
     
     # Get additional parameters (Shp_*)
-    user_id = data.get("Shp_user_id")
+    # user_id = data.get("Shp_user_id") # Not strictly needed if we look up by payment ID
     
     # Collect all Shp_ parameters for signature verification
     shp_params = {}
@@ -357,12 +393,12 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     
     try:
         inv_id = int(inv_id_str)
-        amount = float(out_sum)
+        # amount = float(out_sum) # Used inside verification
     except (ValueError, TypeError) as e:
         logger.error(f"Invalid amount or InvId in callback: {e}")
         return "ERROR"
     
-    # Verify signature WITH shp_params (CRITICAL: must match what Robokassa sent)
+    # Verify signature WITH shp_params
     robokassa = RobokassaService()
     if not robokassa.verify_callback_signature(out_sum, inv_id_str, signature_value, shp_params if shp_params else None):
         logger.error(f"Invalid signature for payment {inv_id}")
@@ -408,7 +444,7 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
                 user.extra_ai_balance = (user.extra_ai_balance or 0) + amount_to_add
                 logger.info(f"User {user.id} purchased {amount_to_add} AI requests addon")
             elif addon_config.get("feature"):
-                # Feature addon - could be stored in user preferences or activated
+                # Feature addon
                 logger.info(f"User {user.id} purchased feature addon: {addon_id}")
     else:
         # Process subscription purchase
@@ -442,10 +478,9 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
 async def robokassa_success(user_id: int = None):
     """
     Success URL redirect handler.
-    User is redirected here after successful payment.
-    Returns HTML page with auto-redirect to Telegram app.
     """
-    telegram_app_url = "https://t.me/WbAnalyticsBot/app"
+    # Используем константу URL
+    telegram_app_url = BOT_APP_URL
     
     html_content = f"""
     <!DOCTYPE html>
@@ -455,11 +490,7 @@ async def robokassa_success(user_id: int = None):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Оплата успешна</title>
         <style>
-            * {{
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }}
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -479,49 +510,20 @@ async def robokassa_success(user_id: int = None):
                 box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             }}
             .icon {{
-                width: 80px;
-                height: 80px;
-                background: #10b981;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0 auto 24px;
-                font-size: 48px;
+                width: 80px; height: 80px; background: #10b981;
+                border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                margin: 0 auto 24px; font-size: 48px;
             }}
-            h1 {{
-                color: #1f2937;
-                font-size: 24px;
-                font-weight: 700;
-                margin-bottom: 12px;
-            }}
-            p {{
-                color: #6b7280;
-                font-size: 16px;
-                line-height: 1.5;
-                margin-bottom: 24px;
-            }}
-            .timer {{
-                color: #667eea;
-                font-size: 14px;
-                font-weight: 600;
-                margin-bottom: 24px;
-            }}
+            h1 {{ color: #1f2937; font-size: 24px; font-weight: 700; margin-bottom: 12px; }}
+            p {{ color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 24px; }}
+            .timer {{ color: #667eea; font-size: 14px; font-weight: 600; margin-bottom: 24px; }}
             .button {{
-                background: #667eea;
-                color: white;
-                border: none;
-                padding: 14px 28px;
-                border-radius: 12px;
-                font-size: 16px;
-                font-weight: 600;
-                cursor: pointer;
-                width: 100%;
+                background: #667eea; color: white; border: none;
+                padding: 14px 28px; border-radius: 12px; font-size: 16px;
+                font-weight: 600; cursor: pointer; width: 100%;
                 transition: background 0.2s;
             }}
-            .button:hover {{
-                background: #5568d3;
-            }}
+            .button:hover {{ background: #5568d3; }}
         </style>
     </head>
     <body>
@@ -562,10 +564,9 @@ async def robokassa_success(user_id: int = None):
 async def robokassa_fail(user_id: int = None):
     """
     Fail URL redirect handler.
-    User is redirected here if payment failed or was cancelled.
-    Returns HTML page with auto-redirect to Telegram app.
     """
-    telegram_app_url = "https://t.me/WbAnalyticsBot/app"
+    # Используем константу URL
+    telegram_app_url = BOT_APP_URL
     
     html_content = f"""
     <!DOCTYPE html>
@@ -575,11 +576,7 @@ async def robokassa_fail(user_id: int = None):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Оплата не завершена</title>
         <style>
-            * {{
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }}
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
                 background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -599,57 +596,22 @@ async def robokassa_fail(user_id: int = None):
                 box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             }}
             .icon {{
-                width: 80px;
-                height: 80px;
-                background: #ef4444;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                margin: 0 auto 24px;
-                font-size: 48px;
+                width: 80px; height: 80px; background: #ef4444;
+                border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                margin: 0 auto 24px; font-size: 48px;
             }}
-            h1 {{
-                color: #1f2937;
-                font-size: 24px;
-                font-weight: 700;
-                margin-bottom: 12px;
-            }}
-            p {{
-                color: #6b7280;
-                font-size: 16px;
-                line-height: 1.5;
-                margin-bottom: 24px;
-            }}
-            .timer {{
-                color: #f5576c;
-                font-size: 14px;
-                font-weight: 600;
-                margin-bottom: 24px;
-            }}
+            h1 {{ color: #1f2937; font-size: 24px; font-weight: 700; margin-bottom: 12px; }}
+            p {{ color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 24px; }}
+            .timer {{ color: #f5576c; font-size: 14px; font-weight: 600; margin-bottom: 24px; }}
             .button {{
-                background: #f5576c;
-                color: white;
-                border: none;
-                padding: 14px 28px;
-                border-radius: 12px;
-                font-size: 16px;
-                font-weight: 600;
-                cursor: pointer;
-                width: 100%;
-                transition: background 0.2s;
-                margin-bottom: 12px;
+                background: #f5576c; color: white; border: none;
+                padding: 14px 28px; border-radius: 12px; font-size: 16px;
+                font-weight: 600; cursor: pointer; width: 100%;
+                transition: background 0.2s; margin-bottom: 12px;
             }}
-            .button:hover {{
-                background: #e44855;
-            }}
-            .button-secondary {{
-                background: #e5e7eb;
-                color: #374151;
-            }}
-            .button-secondary:hover {{
-                background: #d1d5db;
-            }}
+            .button:hover {{ background: #e44855; }}
+            .button-secondary {{ background: #e5e7eb; color: #374151; }}
+            .button-secondary:hover {{ background: #d1d5db; }}
         </style>
     </head>
     <body>
