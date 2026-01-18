@@ -199,11 +199,12 @@ class WBStatisticsMixin(WBApiBase):
         """
         Получение данных воронки продаж (просмотры, корзины) через Analytics API.
         Endpoint: /api/v2/nm-report/detail
+        Исправлено: используется _request_with_retry для обработки 429/504 ошибок.
         """
         url = f"{self.URLS['analytics']}/api/v2/nm-report/detail"
         headers = {
-            "Authorization": token,
-            "Content-Type": "application/json"
+            "Authorization": token
+            # Content-Type: application/json добавляется автоматически при использовании json_data
         }
         
         payload = {
@@ -223,27 +224,30 @@ class WBStatisticsMixin(WBApiBase):
             "page": 1
         }
         
+        # Используем встроенный механизм ретраев из Base (handle 429, 500, etc)
+        # Session=None создаст новую сессию внутри _request_with_retry
         try:
-            # Для воронки лучше не использовать кэш, данные динамичные, 
-            # но API тяжелый, поэтому нужен retry
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload, timeout=20) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        cards = data.get("data", {}).get("cards", [])
-                        
-                        # Суммируем показатели по всем карточкам
-                        total_visitors = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("openCardCount", 0) for c in cards)
-                        total_cart = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("addToCartCount", 0) for c in cards)
-                        
-                        return {"visitors": total_visitors, "addToCart": total_cart}
-                    elif resp.status == 429:
-                        logger.warning("Analytics API Rate Limit (429)")
-                        return {"visitors": 0, "addToCart": 0}
-                    else:
-                        text = await resp.text()
-                        logger.warning(f"Analytics API Error {resp.status}: {text[:200]}")
-                        return {"visitors": 0, "addToCart": 0}
+            data = await self._request_with_retry(
+                session=None,
+                url=url,
+                headers=headers,
+                method="POST",
+                json_data=payload,
+                retries=4  # Analytics API нестабилен, даем больше попыток
+            )
+            
+            if not data or not isinstance(data, dict):
+                logger.warning(f"Analytics API returned invalid data: {data}")
+                return {"visitors": 0, "addToCart": 0}
+                
+            cards = data.get("data", {}).get("cards", [])
+            
+            # Суммируем показатели по всем карточкам (страница 1)
+            total_visitors = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("openCardCount", 0) for c in cards)
+            total_cart = sum(c.get("statistics", {}).get("selectedPeriod", {}).get("addToCartCount", 0) for c in cards)
+            
+            return {"visitors": total_visitors, "addToCart": total_cart}
+            
         except Exception as e:
             logger.error(f"Failed to fetch sales funnel: {e}")
             return {"visitors": 0, "addToCart": 0}
