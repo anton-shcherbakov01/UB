@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Check, X, CreditCard, Loader2, Sparkles, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, Check, X, CreditCard, Loader2, Sparkles, ShoppingBag, Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -8,6 +8,7 @@ const TariffsPage = ({ onBack }) => {
     const [tariffs, setTariffs] = useState([]);
     const [loading, setLoading] = useState(false);
     const [payLoading, setPayLoading] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState('robokassa'); // 'stars' or 'robokassa'
 
     useEffect(() => {
         fetchTariffs();
@@ -23,7 +24,47 @@ const TariffsPage = ({ onBack }) => {
         }
     };
 
-    const payRubles = async (plan) => {
+    // Конвертация цены в Telegram Stars (примерно 1₽ = 0.1 звезды, но нужно уточнить курс)
+    const convertToStars = (priceStr) => {
+        const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
+        // Примерный курс: 100 рублей = 10 звезд (1 звезда = 10 рублей)
+        return Math.round(price / 10);
+    };
+
+    const payWithStars = async (plan) => {
+        if (!plan.price || plan.price === "0 ₽") return;
+        setPayLoading(true);
+        try {
+            const starsAmount = convertToStars(plan.price);
+            const res = await fetch(`${API_URL}/api/payment/stars_link`, {
+                method: 'POST',
+                headers: getTgHeaders(),
+                body: JSON.stringify({ 
+                    plan_id: plan.id,
+                    amount: starsAmount
+                })
+            });
+            const data = await res.json();
+            if (res.ok && data.invoice_link) {
+                if (window.Telegram?.WebApp?.openInvoice) {
+                    // Используем встроенный метод Telegram для оплаты
+                    window.Telegram.WebApp.openInvoice(data.invoice_link);
+                } else if (window.Telegram?.WebApp?.openLink) {
+                    window.Telegram.WebApp.openLink(data.invoice_link);
+                } else {
+                    window.open(data.invoice_link, '_blank');
+                }
+            } else {
+                throw new Error(data.detail || "Ошибка создания ссылки оплаты");
+            }
+        } catch (e) {
+            alert(e.message || "Ошибка при создании платежа через Telegram Stars");
+        } finally {
+            setPayLoading(false);
+        }
+    };
+
+    const payWithRobokassa = async (plan) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
         try {
@@ -34,15 +75,26 @@ const TariffsPage = ({ onBack }) => {
             });
             const data = await res.json();
             if (res.ok && data.payment_url) {
-                if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(data.payment_url);
-                else window.open(data.payment_url, '_blank');
+                if (window.Telegram?.WebApp?.openLink) {
+                    window.Telegram.WebApp.openLink(data.payment_url);
+                } else {
+                    window.open(data.payment_url, '_blank');
+                }
             } else {
                 throw new Error(data.detail || "Ошибка инициализации платежа");
             }
         } catch (e) {
-            alert(e.message);
+            alert(e.message || "Ошибка при создании платежа через Робокассу");
         } finally {
             setPayLoading(false);
+        }
+    };
+
+    const handlePay = (plan) => {
+        if (paymentMethod === 'stars') {
+            payWithStars(plan);
+        } else {
+            payWithRobokassa(plan);
         }
     };
 
@@ -76,6 +128,38 @@ const TariffsPage = ({ onBack }) => {
                     <ArrowLeft size={24} />
                 </button>
                 <h1 className="text-2xl font-black text-slate-800">Тарифные планы</h1>
+            </div>
+
+            {/* Выбор метода оплаты */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-4 mb-4">
+                <div className="flex items-center gap-2 mb-3">
+                    <CreditCard size={18} className="text-slate-600" />
+                    <span className="text-sm font-bold text-slate-700">Метод оплаты:</span>
+                </div>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setPaymentMethod('stars')}
+                        className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all ${
+                            paymentMethod === 'stars'
+                                ? 'bg-blue-600 text-white shadow-md'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                    >
+                        <Star size={16} className="inline mr-2" />
+                        Telegram Stars
+                    </button>
+                    <button
+                        onClick={() => setPaymentMethod('robokassa')}
+                        className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all ${
+                            paymentMethod === 'robokassa'
+                                ? 'bg-indigo-600 text-white shadow-md'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                    >
+                        <CreditCard size={16} className="inline mr-2" />
+                        Робокасса
+                    </button>
+                </div>
             </div>
 
             {/* Сравнительная таблица */}
@@ -155,11 +239,11 @@ const TariffsPage = ({ onBack }) => {
                                 </div>
                             ) : (
                                 <button
-                                    onClick={() => payRubles(analystPlan)}
+                                    onClick={() => handlePay(analystPlan)}
                                     disabled={payLoading}
                                     className="w-full py-3 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 active:scale-95 transition-transform flex justify-center items-center gap-2 hover:bg-indigo-700"
                                 >
-                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <><CreditCard size={16} /> Купить</>}
+                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <>{paymentMethod === 'stars' ? <Star size={16} /> : <CreditCard size={16} />} Купить</>}
                                 </button>
                             )}
                         </div>
@@ -172,11 +256,11 @@ const TariffsPage = ({ onBack }) => {
                                 </div>
                             ) : (
                                 <button
-                                    onClick={() => payRubles(strategistPlan)}
+                                    onClick={() => handlePay(strategistPlan)}
                                     disabled={payLoading}
                                     className="w-full py-3 rounded-xl font-bold text-xs bg-slate-900 text-white shadow-lg shadow-slate-200 active:scale-95 transition-transform flex justify-center items-center gap-2 hover:bg-slate-800"
                                 >
-                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <><CreditCard size={16} /> Купить</>}
+                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <>{paymentMethod === 'stars' ? <Star size={16} /> : <CreditCard size={16} />} Купить</>}
                                 </button>
                             )}
                         </div>

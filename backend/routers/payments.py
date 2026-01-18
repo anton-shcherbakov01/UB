@@ -7,6 +7,7 @@ import httpx
 import random
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -409,6 +410,7 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
             user.usage_reset_date = now + timedelta(days=30)
             user.ai_requests_used = 0
             user.extra_ai_balance = 0
+            user.cluster_requests_used = 0
             
             logger.info(f"User {user.id} subscription updated to {plan_id} via Robokassa (quotas reset)")
     
@@ -418,24 +420,251 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     logger.info(f"Successfully processed Robokassa payment {inv_id} for user {user.id}")
     return robokassa.get_payment_status_response(inv_id, success=True)
 
-@router.get("/payment/robokassa/success")
+@router.get("/payment/robokassa/success", response_class=HTMLResponse)
 async def robokassa_success(user_id: int = None):
     """
     Success URL redirect handler.
     User is redirected here after successful payment.
+    Returns HTML page with auto-redirect to Telegram app.
     """
-    return {
-        "status": "success",
-        "message": "Payment completed successfully. Your subscription has been activated."
-    }
+    telegram_app_url = "https://t.me/WbAnalyticsBot/app"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Оплата успешна</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .container {{
+                background: white;
+                border-radius: 24px;
+                padding: 40px;
+                max-width: 400px;
+                width: 100%;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            }}
+            .icon {{
+                width: 80px;
+                height: 80px;
+                background: #10b981;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 24px;
+                font-size: 48px;
+            }}
+            h1 {{
+                color: #1f2937;
+                font-size: 24px;
+                font-weight: 700;
+                margin-bottom: 12px;
+            }}
+            p {{
+                color: #6b7280;
+                font-size: 16px;
+                line-height: 1.5;
+                margin-bottom: 24px;
+            }}
+            .timer {{
+                color: #667eea;
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 24px;
+            }}
+            .button {{
+                background: #667eea;
+                color: white;
+                border: none;
+                padding: 14px 28px;
+                border-radius: 12px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                width: 100%;
+                transition: background 0.2s;
+            }}
+            .button:hover {{
+                background: #5568d3;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">✓</div>
+            <h1>Оплата успешна!</h1>
+            <p>Ваша подписка активирована. Вы будете перенаправлены в приложение через <span id="countdown">5</span> секунд.</p>
+            <div class="timer">Перенаправление...</div>
+            <button class="button" onclick="redirectToApp()">Вернуться в приложение</button>
+        </div>
+        <script>
+            let countdown = 5;
+            const countdownEl = document.getElementById('countdown');
+            
+            const timer = setInterval(() => {{
+                countdown--;
+                countdownEl.textContent = countdown;
+                if (countdown <= 0) {{
+                    clearInterval(timer);
+                    redirectToApp();
+                }}
+            }}, 1000);
+            
+            function redirectToApp() {{
+                if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openLink) {{
+                    window.Telegram.WebApp.openLink('{telegram_app_url}');
+                }} else {{
+                    window.location.href = '{telegram_app_url}';
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
-@router.get("/payment/robokassa/fail")
+@router.get("/payment/robokassa/fail", response_class=HTMLResponse)
 async def robokassa_fail(user_id: int = None):
     """
     Fail URL redirect handler.
     User is redirected here if payment failed or was cancelled.
+    Returns HTML page with auto-redirect to Telegram app.
     """
-    return {
-        "status": "failed",
-        "message": "Payment was not completed. Please try again."
-    }
+    telegram_app_url = "https://t.me/WbAnalyticsBot/app"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Оплата не завершена</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .container {{
+                background: white;
+                border-radius: 24px;
+                padding: 40px;
+                max-width: 400px;
+                width: 100%;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            }}
+            .icon {{
+                width: 80px;
+                height: 80px;
+                background: #ef4444;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 24px;
+                font-size: 48px;
+            }}
+            h1 {{
+                color: #1f2937;
+                font-size: 24px;
+                font-weight: 700;
+                margin-bottom: 12px;
+            }}
+            p {{
+                color: #6b7280;
+                font-size: 16px;
+                line-height: 1.5;
+                margin-bottom: 24px;
+            }}
+            .timer {{
+                color: #f5576c;
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 24px;
+            }}
+            .button {{
+                background: #f5576c;
+                color: white;
+                border: none;
+                padding: 14px 28px;
+                border-radius: 12px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                width: 100%;
+                transition: background 0.2s;
+                margin-bottom: 12px;
+            }}
+            .button:hover {{
+                background: #e44855;
+            }}
+            .button-secondary {{
+                background: #e5e7eb;
+                color: #374151;
+            }}
+            .button-secondary:hover {{
+                background: #d1d5db;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">✕</div>
+            <h1>Оплата не завершена</h1>
+            <p>Похоже, оплата не была завершена. Вы можете попробовать снова или выбрать другой метод оплаты.</p>
+            <div class="timer">Вы будете перенаправлены через <span id="countdown">5</span> секунд</div>
+            <button class="button" onclick="redirectToApp()">Вернуться в приложение</button>
+            <button class="button button-secondary" onclick="redirectToApp()">Попробовать снова</button>
+        </div>
+        <script>
+            let countdown = 5;
+            const countdownEl = document.getElementById('countdown');
+            
+            const timer = setInterval(() => {{
+                countdown--;
+                countdownEl.textContent = countdown;
+                if (countdown <= 0) {{
+                    clearInterval(timer);
+                    redirectToApp();
+                }}
+            }}, 1000);
+            
+            function redirectToApp() {{
+                if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openLink) {{
+                    window.Telegram.WebApp.openLink('{telegram_app_url}');
+                }} else {{
+                    window.location.href = '{telegram_app_url}';
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)

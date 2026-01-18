@@ -21,6 +21,8 @@ import PrivacyPage from './pages/PrivacyPage';
 import SupportPage from './pages/SupportPage';
 import TariffsPage from './pages/TariffsPage';
 import FunnelPage from './pages/FunnelPage';
+import PaymentSuccessPage from './pages/PaymentSuccessPage';
+import PaymentFailPage from './pages/PaymentFailPage';
 
 const AppContent = () => {
   const [user, setUser] = useState(null);
@@ -125,8 +127,10 @@ const AppContent = () => {
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} user={user} />} />
             <Route path="/funnel" element={<FunnelPage onBack={() => navigate('/')} />} />
             <Route path="/notifications" element={<NotificationsPage onNavigate={handleTabChange} user={user} />} />
-            <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
-            <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />
+              <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
+              <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />
+              <Route path="/payment/success" element={<PaymentSuccessPage />} />
+              <Route path="/payment/fail" element={<PaymentFailPage />} />
             <Route path="/support" element={<SupportPage onBack={() => navigate('/profile')} />} />
             <Route path="/tariffs" element={<TariffsPage onBack={() => navigate('/profile')} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
