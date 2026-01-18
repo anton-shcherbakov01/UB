@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 import io
 import asyncio
@@ -12,7 +12,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 
 from database import get_db, User, ProductCost
-from dependencies import get_current_user, get_redis_client
+from dependencies import get_current_user, get_redis_client, check_telegram_auth
 from dependencies.quota import QuotaCheck
 from fastapi import HTTPException
 from wb_api_service import wb_api_service
@@ -32,6 +32,21 @@ class CostUpdateRequest(BaseModel):
 class TransitCalcRequest(BaseModel):
     volume: int 
     destination: str = "Koledino"
+
+# --- Helper for PDF Auth ---
+async def get_user_via_query(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Извлекает пользователя из query-параметра x_tg_data.
+    Используется для скачивания файлов (window.open), где нельзя передать заголовки.
+    """
+    x_tg_data = request.query_params.get("x_tg_data")
+    if not x_tg_data:
+        raise HTTPException(status_code=401, detail="Missing auth data")
+    
+    user = await check_telegram_auth(x_tg_data, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid auth data")
+    return user
 
 def calculate_auto_logistics(volume_l: float, tariffs_map: dict) -> float:
     """
@@ -336,9 +351,6 @@ async def get_pnl_data(
 ):
     """
     Get P&L (Profit & Loss) data for the user.
-    
-    For "start" plan: Only yesterday's data is available (pnl_demo feature).
-    For "analyst" and higher: Full date range is available (pnl_full feature).
     """
     from datetime import timedelta
     from config.plans import has_feature
@@ -407,14 +419,14 @@ async def get_pnl_data(
 
 executor = ThreadPoolExecutor(max_workers=2)
 
-@router.get("/report/pnl-pdf")
+@router.get("/finance/report/pnl-pdf")
 async def generate_pnl_pdf(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_user_via_query),
     db: AsyncSession = Depends(get_db)
 ):
-    """Generate P&L PDF report"""
+    """Generate P&L PDF report. Uses query param auth."""
     from config.plans import has_feature
     
     # Check access (same logic as get_pnl_data)
@@ -465,12 +477,18 @@ async def generate_pnl_pdf(
         headers={'Content-Disposition': f'attachment; filename="pnl_report_{date_from_dt.strftime("%Y%m%d")}_{date_to_dt.strftime("%Y%m%d")}.pdf"'}
     )
 
-@router.get("/report/unit-economy-pdf")
+@router.get("/finance/report/unit-economy-pdf")
 async def generate_unit_economy_pdf(
-    user: User = Depends(QuotaCheck(feature_flag="unit_economy")),
+    user: User = Depends(get_user_via_query),
     db: AsyncSession = Depends(get_db)
 ):
     """Generate Unit Economy PDF report. Requires Analyst+ plan."""
+    from config.plans import has_feature
+    
+    # Manual feature check instead of QuotaCheck dependency
+    if not has_feature(user.subscription_plan, "unit_economy"):
+         raise HTTPException(status_code=403, detail="Unit Economy requires upgrade")
+
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="WB API Token required")
     

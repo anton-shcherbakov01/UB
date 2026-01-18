@@ -116,7 +116,7 @@ class PDFGenerator:
         if not pnl_data:
             pdf.set_font(font_family, '', 12)
             pdf.cell(0, 10, txt="Нет данных за выбранный период", ln=1, align='C')
-            return pdf.output(dest='S').encode('latin-1')
+            return self._return_bytes(pdf)
         
         # Summary
         total_revenue = sum(item.get('revenue', 0) for item in pnl_data)
@@ -155,7 +155,7 @@ class PDFGenerator:
             pdf.cell(50, 6, f"{profit:,.0f} ₽", 1)
             pdf.ln()
         
-        return pdf.output(dest='S').encode('latin-1')
+        return self._return_bytes(pdf)
     
     def create_supply_pdf(self, analysis_data: list) -> bytes:
         """
@@ -293,7 +293,7 @@ class PDFGenerator:
         if not unit_data:
             pdf.set_font(font_family, '', 12)
             pdf.cell(0, 10, txt="Нет данных для анализа", ln=1, align='C')
-            return pdf.output(dest='S').encode('latin-1')
+            return self._return_bytes(pdf)
         
         # Summary
         total_profit = sum(item.get('unit_economy', {}).get('profit', 0) for item in unit_data)
@@ -311,13 +311,11 @@ class PDFGenerator:
         
         # Table header
         pdf.set_font(font_family, 'B', 8)
-        pdf.cell(30, 7, "SKU", 1)
-        pdf.cell(25, 7, "Кол-во", 1)
-        pdf.cell(30, 7, "Цена", 1)
-        pdf.cell(30, 7, "Себест.", 1)
-        pdf.cell(30, 7, "Прибыль", 1)
-        pdf.cell(25, 7, "ROI %", 1)
-        pdf.cell(20, 7, "Маржа %", 1)
+        col_w = [35, 20, 30, 30, 30, 20, 20]
+        headers = ["SKU", "Кол-во", "Цена", "Себест.", "Прибыль", "ROI %", "Маржа"]
+        
+        for i, h in enumerate(headers):
+            self._safe_cell(pdf, col_w[i], 7, h, 1, 'C')
         pdf.ln()
         
         # Table rows
@@ -333,13 +331,18 @@ class PDFGenerator:
             roi = unit_econ.get('roi', 0)
             margin = unit_econ.get('margin', 0)
             
-            pdf.cell(30, 5, sku, 1)
-            pdf.cell(25, 5, str(quantity), 1)
-            pdf.cell(30, 5, f"{selling_price:,.0f}", 1)
-            pdf.cell(30, 5, f"{cost_price:,.0f}", 1)
-            pdf.cell(30, 5, f"{profit:,.0f}", 1)
-            pdf.cell(25, 5, f"{roi:.1f}", 1)
-            pdf.cell(20, 5, f"{margin}%", 1)
+            row_data = [
+                sku,
+                str(quantity),
+                f"{selling_price:,.0f}",
+                f"{cost_price:,.0f}",
+                f"{profit:,.0f}",
+                f"{roi:.1f}",
+                f"{margin}%"
+            ]
+            
+            for i, val in enumerate(row_data):
+                self._safe_cell(pdf, col_w[i], 5, val, 1, 'C')
             pdf.ln()
         
         # Footer
@@ -348,7 +351,7 @@ class PDFGenerator:
         pdf.set_text_color(128)
         pdf.cell(0, 10, f"Сгенерировано: {datetime.now().strftime('%Y-%m-%d %H:%M')}", align='C')
         
-        return pdf.output(dest='S').encode('latin-1')
+        return self._return_bytes(pdf)
     
     def create_forensics_pdf(self, forensics_data: Dict[str, Any]) -> bytes:
         """Create Forensics PDF report"""
@@ -488,4 +491,3 @@ class PDFGenerator:
 
 # Singleton instance
 pdf_generator = PDFGenerator()
-
