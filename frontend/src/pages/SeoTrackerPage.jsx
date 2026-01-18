@@ -4,9 +4,11 @@ import {
     AlertTriangle, Loader2, RotateCcw, HelpCircle, 
     Target, Globe, Zap, ArrowLeft, FileDown
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom'; // Импортируем хук
 import { API_URL, getTgHeaders } from '../config';
 
-const SEOTrackerPage = ({ onNavigate }) => {
+const SEOTrackerPage = () => { // Убрали onNavigate из пропсов
+    const navigate = useNavigate(); // Используем хук для навигации
     const [sku, setSku] = useState('');
     const [query, setQuery] = useState('');
     const [geo, setGeo] = useState('moscow');
@@ -49,6 +51,21 @@ const SEOTrackerPage = ({ onNavigate }) => {
         }
     };
 
+    // Функция скачивания PDF
+    const handleDownload = async () => {
+        try {
+            const params = new URLSearchParams();
+            if (sku) params.append('sku', sku);
+            if (query) params.append('keyword', query);
+            const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
+            if (x_tg_data) params.append('x_tg_data', x_tg_data);
+            const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
+            window.open(url, '_blank');
+        } catch (e) {
+            alert('Не удалось скачать PDF: ' + (e.message || ''));
+        }
+    };
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 bg-[#F4F4F9] min-h-screen">
             
@@ -66,9 +83,15 @@ const SEOTrackerPage = ({ onNavigate }) => {
                         </p>
                     </div>
 
+                    {/* PDF Download Button inside Header */}
                     <div className="relative z-10">
-                        {/* Можно добавить доп. иконку или статус здесь */}
-                        <Globe size={24} className="text-white/20" />
+                        <button 
+                            onClick={handleDownload}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="Скачать PDF отчёт"
+                        >
+                             <FileDown size={20}/>
+                        </button>
                     </div>
                     
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
@@ -77,9 +100,9 @@ const SEOTrackerPage = ({ onNavigate }) => {
                  {/* Right Sidebar Buttons */}
                  <div className="flex flex-col gap-2 w-14 shrink-0">
                      <button 
-                        onClick={() => onNavigate('home')} 
+                        onClick={() => navigate('/')} 
                         className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100"
-                        title="Назад"
+                        title="Назад на главную"
                       >
                           <ArrowLeft size={24}/>
                       </button>
@@ -92,10 +115,20 @@ const SEOTrackerPage = ({ onNavigate }) => {
                             <HelpCircle size={24}/>
                         </button>
                       </div>
+                      
+                      {result && (
+                        <button 
+                            onClick={handleReset}
+                            className="bg-slate-100 h-full rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex items-center justify-center active:scale-95"
+                            title="Сбросить"
+                        >
+                            <RotateCcw size={20}/>
+                        </button>
+                      )}
                  </div>
             </div>
 
-            {/* ГЕО-ПОДСКАЗКА (Выпадающая) */}
+            {/* ГЕО-ПОДСКАЗКА */}
             {showGeoInfo && (
                 <div className="bg-slate-800 text-slate-200 p-4 rounded-3xl shadow-xl animate-in zoom-in-95 duration-200 text-xs leading-relaxed border-b-4 border-indigo-500">
                     <div className="flex items-center gap-2 mb-2 text-indigo-300 font-bold uppercase tracking-widest">
@@ -224,26 +257,6 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                 </div>
                             </div>
                             
-                            {/* Кнопка PDF */}
-                            <button 
-                                onClick={async () => {
-                                    try {
-                                        const params = new URLSearchParams();
-                                        if (sku) params.append('sku', sku);
-                                        if (query) params.append('keyword', query);
-                                        const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
-                                        if (x_tg_data) params.append('x_tg_data', x_tg_data);
-                                        const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
-                                        window.open(url, '_blank');
-                                    } catch (e) {
-                                        alert('Не удалось скачать PDF: ' + (e.message || ''));
-                                    }
-                                }}
-                                className="w-full py-4 bg-white text-indigo-600 border-2 border-indigo-100 rounded-2xl font-bold flex justify-center items-center gap-2 shadow-sm active:scale-95 transition-all hover:bg-indigo-50"
-                            >
-                                <FileDown size={20}/> Скачать PDF отчет
-                            </button>
-
                             {/* Блок изменения региона */}
                             <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
                                 <div className="flex items-center gap-2 mb-3">

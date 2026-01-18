@@ -204,7 +204,7 @@ class WBStatisticsMixin(WBApiBase):
         if len(date_to) > 10: date_to = date_to[:10]
 
         # Используем токен из self, если переданный пустой (хотя обычно они совпадают)
-        headers = self.headers 
+        headers = {"Authorization": token}
         
         res = {
             "visitors": 0,
@@ -247,15 +247,15 @@ class WBStatisticsMixin(WBApiBase):
                 
                 # Check for error in response body structure
                 if "error" in data:
-                     logger.error(f"Funnel API v3 Error Body: {data}")
-                     break
+                      logger.error(f"Funnel API v3 Error Body: {data}")
+                      break
 
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
-                     # Some APIs return cards directly or in a different wrapper on error/empty
-                     logger.warning(f"No 'data' field in response. Full response: {data}")
-                     break
+                      # Some APIs return cards directly or in a different wrapper on error/empty
+                      logger.warning(f"No 'data' field in response. Full response: {data}")
+                      break
 
                 # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
                 items = response_data.get("products", [])
@@ -371,9 +371,9 @@ class WBStatisticsMixin(WBApiBase):
              else:
                  async with session.get(url, headers=headers, params=params) as resp:
                      if resp.status == 200:
-                        data = await resp.json()
+                         data = await resp.json()
                      else:
-                        data = []
+                         data = []
 
              return data if isinstance(data, list) else []
 
@@ -646,15 +646,15 @@ class WBStatisticsAPI:
                 
                 # Check for error in response body structure
                 if "error" in data:
-                     logger.error(f"Funnel API v3 Error Body: {data}")
-                     break
+                      logger.error(f"Funnel API v3 Error Body: {data}")
+                      break
 
                 # Response structure check: { "data": { "cards": [] } } OR { "data": { "products": [] } }
                 response_data = data.get("data", {})
                 if not response_data:
-                     # Some APIs return cards directly or in a different wrapper on error/empty
-                     logger.warning(f"No 'data' field in response. Full response: {data}")
-                     break
+                      # Some APIs return cards directly or in a different wrapper on error/empty
+                      logger.warning(f"No 'data' field in response. Full response: {data}")
+                      break
 
                 # Try to get items from 'products' (new v3) or 'cards' (old v3/docs)
                 items = response_data.get("products", [])
