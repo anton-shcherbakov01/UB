@@ -25,20 +25,28 @@ class PDFGenerator:
             './fonts/DejaVuSans-Bold.ttf',
             '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
         ]
+        self.font_dir = os.path.join(os.path.dirname(__file__), '../fonts')
 
     def _setup_pdf(self):
         pdf = FPDF()
         pdf.add_page()
         
-        # Попытка загрузить шрифт для кириллицы
+        # Подключение шрифтов (DejaVuSans поддерживает кириллицу)
         try:
-            # Путь к шрифту должен быть корректным внутри контейнера
-            font_path = os.path.join(os.path.dirname(__file__), '../fonts/DejaVuSans.ttf')
-            if os.path.exists(font_path):
-                pdf.add_font('DejaVu', '', font_path, uni=True)
+            font_regular = os.path.join(self.font_dir, 'DejaVuSans.ttf')
+            font_bold = os.path.join(self.font_dir, 'DejaVuSans-Bold.ttf')
+            
+            if os.path.exists(font_regular):
+                # FPDF2 автоматически понимает Unicode для TTF шрифтов
+                pdf.add_font('DejaVu', '', font_regular)
+                
+                # Подключаем жирный шрифт, если есть (для заголовков)
+                if os.path.exists(font_bold):
+                    pdf.add_font('DejaVu', 'B', font_bold)
+                
                 pdf.set_font('DejaVu', '', 12)
             else:
-                logger.warning(f"Cyrillic font not found at {font_path}, falling back to Arial/Helvetica")
+                logger.warning(f"Cyrillic font not found at {font_regular}, falling back to Arial")
                 pdf.set_font("Arial", size=12)
         except Exception as e:
             logger.error(f"Font loading error: {e}")
@@ -77,20 +85,16 @@ class PDFGenerator:
     def _safe_cell(self, pdf, w, h, txt, border=0, align='L', fill=False):
         """
         Безопасная запись в ячейку. 
-        Если шрифт не поддерживает символ (например, кириллицу в Arial),
-        заменяет текст на безопасный (translit/ascii), чтобы не было 500 ошибки.
+        Если шрифт не поддерживает символ, пробуем заменить на транслит/ASCII.
         """
         try:
             pdf.cell(w, h, txt=str(txt), border=border, align=align, fill=fill)
         except Exception as e:
-            # Ловим FPDFUnicodeEncodingException и UnicodeEncodeError
             try:
-                # Пытаемся сохранить читаемость через простую замену
-                # (в идеале тут нужен полноценный транслит, но пока так)
+                # Fallback: замена символов, если шрифт не тянет
                 safe_txt = str(txt).encode('ascii', 'replace').decode('ascii')
                 pdf.cell(w, h, txt=safe_txt, border=border, align=align, fill=fill)
             except Exception:
-                 # Совсем все плохо
                 pdf.cell(w, h, txt="?", border=border, align=align, fill=fill)
 
     def create_pnl_pdf(self, pnl_data: List[Dict[str, Any]], date_from: str, date_to: str) -> bytes:
@@ -155,20 +159,29 @@ class PDFGenerator:
     
     def create_supply_pdf(self, analysis_data: list) -> bytes:
         """
-        Генерация PDF отчета по поставкам (ABC/XYZ, ROP).
+        Генерация PDF отчета по поставкам.
         """
         pdf = self._setup_pdf()
         
         # Заголовок
         pdf.set_font_size(16)
+        # Если есть жирный шрифт, используем его
+        try:
+            pdf.set_font('DejaVu', 'B', 16)
+        except:
+            pass
+            
         self._safe_cell(pdf, 0, 10, txt=f"Отчет по поставкам (Supply Chain) - {datetime.now().strftime('%d.%m.%Y')}", align='C')
         pdf.ln(10)
         
-        # Таблица
-        pdf.set_font_size(10)
+        # Возвращаем обычный шрифт для таблицы
+        try:
+            pdf.set_font('DejaVu', '', 10)
+        except:
+            pdf.set_font_size(10)
         
         # Headers
-        col_widths = [80, 25, 25, 20, 30] # Name, Stock, Velocity, ABC, Status
+        col_widths = [80, 25, 25, 20, 30]
         headers = ["Товар", "Остаток", "Скорость", "ABC", "Статус"]
         
         for i, h in enumerate(headers):
@@ -178,7 +191,7 @@ class PDFGenerator:
         # Rows
         pdf.set_font_size(8)
         for item in analysis_data:
-            name = str(item.get('name', 'Unknown'))[:40] # Truncate
+            name = str(item.get('name', 'Unknown'))[:40]
             stock = str(item.get('stock', 0))
             velocity = str(round(item.get('velocity', 0), 2))
             abc = f"{item.get('abc', '-')}{item.get('xyz', '-')}"
@@ -461,13 +474,13 @@ class PDFGenerator:
 
     def _return_bytes(self, pdf) -> bytes:
         try:
-            # FPDF2 returns bytearray/bytes directly for dest='S'
+            # FPDF2 возвращает bytearray для dest='S'
             output = pdf.output(dest='S')
             
             if isinstance(output, str):
-                return output.encode('latin-1') # Legacy fpdf behavior
+                return output.encode('latin-1') # Старое поведение
             
-            return bytes(output) # New behavior (bytearray to bytes)
+            return bytes(output) # Новое поведение
             
         except Exception as e:
             logger.error(f"PDF Output error: {e}")

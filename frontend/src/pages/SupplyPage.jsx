@@ -542,7 +542,7 @@ const SupplyPage = () => {
              <UpgradeModal />
 
              {/* Header */}
-             <div className="flex justify-between items-stretch h-24 mb-6">
+             <div className="flex justify-between items-stretch h-20 mb-6">
                  {/* Main Header Card with Gradient */}
                  <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
                     <div className="relative z-10">
@@ -552,13 +552,14 @@ const SupplyPage = () => {
                         <p className="text-sm opacity-90 mt-1 font-medium">Умное управление запасами</p>
                     </div>
 
-                    {/* PDF Download Button INSIDE Header */}
+                    {/* PDF Download Button INSIDE Header (Round Icon) */}
                     <div className="relative z-10">
                          <button 
                             onClick={handleDownloadReport}
-                            className="bg-white/20 backdrop-blur-md px-4 py-3 rounded-xl hover:bg-white/30 transition-colors flex items-center gap-2 font-bold text-xs text-white border border-white/10 active:scale-95 shadow-sm"
+                            className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="Скачать PDF"
                         >
-                            <FileDown size={18} /> Скачать PDF
+                            <FileDown size={20} />
                         </button>
                     </div>
                     
