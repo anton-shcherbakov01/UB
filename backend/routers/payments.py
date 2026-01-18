@@ -479,8 +479,10 @@ async def robokassa_success(user_id: int = None):
     """
     Success URL redirect handler.
     """
-    # Используем константу URL
-    telegram_app_url = BOT_APP_URL
+    # Ссылка на корень твоего веб-приложения (где фронтенд)
+    # Если фронт лежит там же где и апи, то просто "/"
+    # Если фронт отдельно, например на vercel, то "https://my-front.com/"
+    # Для Telegram WebApp часто лучше просто перегрузить страницу.
     
     html_content = f"""
     <!DOCTYPE html>
@@ -489,70 +491,80 @@ async def robokassa_success(user_id: int = None):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Оплата успешна</title>
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background-color: #f3f4f6;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                min-height: 100vh;
                 padding: 20px;
             }}
-            .container {{
+            .card {{
                 background: white;
-                border-radius: 24px;
-                padding: 40px;
-                max-width: 400px;
-                width: 100%;
+                border-radius: 20px;
+                padding: 30px;
                 text-align: center;
-                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                max-width: 350px;
+                width: 100%;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.1);
             }}
-            .icon {{
-                width: 80px; height: 80px; background: #10b981;
+            .icon-box {{
+                width: 70px; height: 70px; background: #dcfce7; color: #16a34a;
                 border-radius: 50%; display: flex; align-items: center; justify-content: center;
-                margin: 0 auto 24px; font-size: 48px;
+                margin: 0 auto 20px; font-size: 32px;
             }}
-            h1 {{ color: #1f2937; font-size: 24px; font-weight: 700; margin-bottom: 12px; }}
-            p {{ color: #6b7280; font-size: 16px; line-height: 1.5; margin-bottom: 24px; }}
-            .timer {{ color: #667eea; font-size: 14px; font-weight: 600; margin-bottom: 24px; }}
-            .button {{
-                background: #667eea; color: white; border: none;
-                padding: 14px 28px; border-radius: 12px; font-size: 16px;
-                font-weight: 600; cursor: pointer; width: 100%;
-                transition: background 0.2s;
+            h1 {{ color: #111827; font-size: 22px; font-weight: 700; margin-bottom: 10px; }}
+            p {{ color: #6b7280; font-size: 15px; line-height: 1.5; margin-bottom: 25px; }}
+            .btn {{
+                background: #2563eb; color: white; border: none;
+                padding: 12px 20px; border-radius: 12px; font-size: 16px; font-weight: 600;
+                cursor: pointer; width: 100%; transition: opacity 0.2s;
+                text-decoration: none; display: inline-block;
             }}
-            .button:hover {{ background: #5568d3; }}
+            .btn:hover {{ opacity: 0.9; }}
         </style>
     </head>
     <body>
-        <div class="container">
-            <div class="icon">✓</div>
-            <h1>Оплата успешна!</h1>
-            <p>Ваша подписка активирована. Вы будете перенаправлены в приложение через <span id="countdown">5</span> секунд.</p>
-            <div class="timer">Перенаправление...</div>
-            <button class="button" onclick="redirectToApp()">Вернуться в приложение</button>
+        <div class="card">
+            <div class="icon-box">✓</div>
+            <h1>Оплата прошла успешно!</h1>
+            <p>Ваш тариф активирован, а лимиты обновлены. Нажмите кнопку ниже, чтобы вернуться к работе.</p>
+            
+            <button class="btn" onclick="goBack()">Вернуться в приложение</button>
         </div>
+
         <script>
-            let countdown = 5;
-            const countdownEl = document.getElementById('countdown');
-            
-            const timer = setInterval(() => {{
-                countdown--;
-                countdownEl.textContent = countdown;
-                if (countdown <= 0) {{
-                    clearInterval(timer);
-                    redirectToApp();
+            // Сообщаем Телеграму, что мы готовы (на всякий случай)
+            if (window.Telegram && window.Telegram.WebApp) {{
+                window.Telegram.WebApp.ready();
+            }}
+
+            function goBack() {{
+                // Логика:
+                // 1. Если это попап - пытаемся его закрыть.
+                // 2. Если мы в главном окне - перезагружаем его, направляя на главную страницу приложения.
+                
+                if (window.Telegram && window.Telegram.WebApp) {{
+                    // Попытка закрыть окно (работает, если оплата открывалась через openLink или popup)
+                    try {{
+                        window.Telegram.WebApp.close();
+                    }} catch (e) {{
+                        console.log("Cannot close", e);
+                    }}
                 }}
-            }}, 1000);
-            
-            function redirectToApp() {{
-                if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openLink) {{
-                    window.Telegram.WebApp.openLink('{telegram_app_url}');
-                }} else {{
-                    window.location.href = '{telegram_app_url}';
-                }}
+                
+                // Если окно не закрылось (мы в том же окне), делаем редирект
+                // Вместо t.me ссылки используем window.location.href на корень твоего сайта
+                // Это перезагрузит приложение и обновит данные (лимиты)
+                
+                // ВАЖНО: Укажи здесь URL твоего веб-приложения (фронтенда)
+                // Если бот открывает https://api.juicystat.ru/app, то пиши сюда этот путь
+                window.location.href = "https://api.juicystat.ru/"; 
+                // Или просто window.location.href = "/"; если корень там же.
             }}
         </script>
     </body>
