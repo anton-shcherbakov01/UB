@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
     ArrowLeft, TrendingDown, Warehouse, Calendar, 
-    DollarSign, AlertCircle, Search, Loader2, Info, X, Lock, Check
+    DollarSign, AlertCircle, Search, Loader2, Info, X, Lock, Check,
+    FileDown, HelpCircle
 } from 'lucide-react';
 import { 
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell 
@@ -14,6 +15,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [showInfo, setShowInfo] = useState(false); // Состояние для показа подсказки
+    const [pdfLoading, setPdfLoading] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -49,6 +51,26 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
         }
     };
 
+    const handleDownloadPdf = async () => {
+        setPdfLoading(true);
+        try {
+            const token = window.Telegram?.WebApp?.initData || '';
+            if (!token) {
+                alert('Ошибка авторизации. Перезагрузите страницу.');
+                return;
+            }
+            const endpoint = activeTab === 'forensics' 
+                ? '/api/finance/report/forensics-pdf'
+                : '/api/finance/report/cashgap-pdf';
+            const url = `${API_URL}${endpoint}?x_tg_data=${encodeURIComponent(token)}`;
+            window.open(url, '_blank');
+        } catch (e) {
+            alert('Не удалось скачать PDF: ' + (e.message || ''));
+        } finally {
+            setPdfLoading(false);
+        }
+    };
+
     // Тексты подсказок
     const getInfoContent = () => {
         if (activeTab === 'forensics') {
@@ -65,43 +87,86 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
 
     const info = getInfoContent();
 
+    // Determine header style based on active tab
+    const headerGradient = activeTab === 'forensics' 
+        ? 'from-indigo-600 to-violet-600' 
+        : 'from-rose-500 to-orange-500';
+    
+    const headerShadow = activeTab === 'forensics'
+        ? 'shadow-indigo-200'
+        : 'shadow-rose-200';
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-right-4">
-            {/* Header с кнопкой Инфо */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <button onClick={onBack} className="p-3 bg-white rounded-xl shadow-sm border border-slate-100 text-slate-500 hover:text-slate-800 active:scale-95 transition-transform">
-                        <ArrowLeft size={20} />
-                    </button>
-                    <div>
-                        <h2 className="text-xl font-black text-slate-800">Глубокая аналитика</h2>
-                        <p className="text-xs text-slate-400">Поиск аномалий и планирование</p>
+            
+            {/* Unified Header */}
+            <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
+                 <div className={`bg-gradient-to-r ${headerGradient} p-5 rounded-[28px] text-white shadow-xl ${headerShadow} relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500`}>
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            {activeTab === 'forensics' ? <Search size={24} className="text-white"/> : <DollarSign size={24} className="text-white"/>}
+                            {activeTab === 'forensics' ? 'Форензика' : 'Cash Gap'}
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
+                            {activeTab === 'forensics' ? 'Поиск аномалий' : 'Прогноз разрывов'}
+                        </p>
                     </div>
-                </div>
-                {/* Кнопка вызова подсказки */}
-                <button 
-                    onClick={() => setShowInfo(!showInfo)}
-                    className={`p-3 rounded-xl transition-all ${showInfo ? 'bg-indigo-100 text-indigo-600' : 'bg-white text-slate-400 shadow-sm border border-slate-100'}`}
-                >
-                    <Info size={20} />
-                </button>
+
+                    {/* Download Button inside Header */}
+                    <div className="relative z-10">
+                         <button 
+                            onClick={handleDownloadPdf}
+                            disabled={pdfLoading || loading || !data}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm disabled:opacity-50"
+                            title="Скачать отчет"
+                        >
+                            {pdfLoading ? <Loader2 size={20} className="animate-spin" /> : <FileDown size={20} />}
+                        </button>
+                    </div>
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={onBack} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
+                        title="Назад"
+                     >
+                         <ArrowLeft size={24}/>
+                     </button>
+                     
+                     <div className="group relative h-full">
+                        <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
+                            <HelpCircle size={24}/>
+                        </button>
+                        {/* Tooltip */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-4 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2 text-indigo-300">{info.title}</div>
+                            <p className="leading-relaxed">{info.text}</p>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
+                        </div>
+                     </div>
+                 </div>
             </div>
 
-            {/* Блок с подсказкой (появляется при клике) */}
-            {showInfo && (
-                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 relative animate-in fade-in zoom-in-95 shadow-sm">
-                    <button onClick={() => setShowInfo(false)} className="absolute top-3 right-3 text-indigo-400 hover:text-indigo-700">
-                        <X size={16} />
-                    </button>
-                    <h4 className="font-bold text-indigo-900 text-sm mb-2 flex items-center gap-2">
-                        <Info size={16} className="text-indigo-600"/> 
-                        {info.title}
-                    </h4>
-                    <p className="text-xs text-indigo-800 leading-relaxed opacity-90">
-                        {info.text}
-                    </p>
-                </div>
-            )}
+            {/* Tabs */}
+            <div className="bg-white p-1.5 rounded-2xl flex shadow-sm border border-slate-100">
+                <button 
+                    onClick={() => { setActiveTab('forensics'); setData(null); setError(null); }}
+                    className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'forensics' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                    <Search size={14}/> Форензика
+                </button>
+                <button 
+                    onClick={() => { setActiveTab('cashgap'); setData(null); setError(null); }}
+                    className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'cashgap' ? 'bg-rose-500 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                    <TrendingDown size={14}/> Разрывы
+                </button>
+            </div>
 
             {/* Plan Info Banner */}
             {user && (
@@ -111,7 +176,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                             ? 'bg-indigo-50 border-indigo-200' 
                             : 'bg-amber-50 border-amber-200')
                         : (user?.plan === 'strategist' 
-                            ? 'bg-indigo-50 border-indigo-200' 
+                            ? 'bg-rose-50 border-rose-200' 
                             : 'bg-amber-50 border-amber-200')
                 }`}>
                     <div className="flex items-start gap-3">
@@ -121,7 +186,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                                     <Check className="text-indigo-600" size={20} />
                                     <div className="flex-1 text-sm">
                                         <div className="font-bold text-indigo-900 mb-1">Форензика возвратов доступна</div>
-                                        <div className="text-indigo-700">
+                                        <div className="text-indigo-700 text-xs">
                                             Доступен анализ проблемных размеров и складов. История: {user?.plan === 'analyst' ? '60 дней' : '365 дней'}.
                                         </div>
                                     </div>
@@ -131,7 +196,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                                     <Lock className="text-amber-600" size={20} />
                                     <div className="flex-1 text-sm">
                                         <div className="font-bold text-amber-900 mb-1">Форензика доступна на тарифе Аналитик+</div>
-                                        <div className="text-amber-700">
+                                        <div className="text-amber-700 text-xs">
                                             Обновите тариф для доступа к анализу проблемных возвратов и аномалий складов.
                                         </div>
                                     </div>
@@ -140,10 +205,10 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                         ) : (
                             user?.plan === 'strategist' ? (
                                 <>
-                                    <Check className="text-indigo-600" size={20} />
+                                    <Check className="text-rose-600" size={20} />
                                     <div className="flex-1 text-sm">
-                                        <div className="font-bold text-indigo-900 mb-1">Cash Gap анализ доступен</div>
-                                        <div className="text-indigo-700">
+                                        <div className="font-bold text-rose-900 mb-1">Cash Gap анализ доступен</div>
+                                        <div className="text-rose-700 text-xs">
                                             Доступен прогноз кассовых разрывов на основе Supply Chain.
                                         </div>
                                     </div>
@@ -153,7 +218,7 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                                     <Lock className="text-amber-600" size={20} />
                                     <div className="flex-1 text-sm">
                                         <div className="font-bold text-amber-900 mb-1">Cash Gap доступен на тарифе Стратег</div>
-                                        <div className="text-amber-700">
+                                        <div className="text-amber-700 text-xs">
                                             Обновите тариф для доступа к прогнозу кассовых разрывов и планированию закупок.
                                         </div>
                                     </div>
@@ -163,22 +228,6 @@ const AdvancedAnalyticsPage = ({ onBack, user }) => {
                     </div>
                 </div>
             )}
-
-            {/* Tabs */}
-            <div className="bg-slate-100 p-1 rounded-xl flex">
-                <button 
-                    onClick={() => { setActiveTab('forensics'); setData(null); setError(null); }}
-                    className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'forensics' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
-                >
-                    🕵️ Форензика
-                </button>
-                <button 
-                    onClick={() => { setActiveTab('cashgap'); setData(null); setError(null); }}
-                    className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${activeTab === 'cashgap' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400'}`}
-                >
-                    💰 Кассовые разрывы
-                </button>
-            </div>
 
             {error && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
