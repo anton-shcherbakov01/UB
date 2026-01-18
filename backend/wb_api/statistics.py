@@ -46,11 +46,21 @@ class WBStatisticsMixin(WBApiBase):
         """
         headers = {"Authorization": token}
         
+        # Payload for Analytics Probe
+        analytics_payload = {
+            "period": {
+                "begin": datetime.now().strftime("%Y-%m-%d"),
+                "end": datetime.now().strftime("%Y-%m-%d")
+            },
+            "page": 1
+        }
+
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
-                "stats": self._probe(session, "GET", f"{self.URLS['statistics']}/api/v1/supplier/incomes", headers, params={"dateFrom": "2024-01-01"}),
+                # REPLACED: incomes (v1) -> Analytics V2
+                "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/v2/nm-report/detail", headers, json_data=analytics_payload),
                 "advert": self._probe(session, "GET", f"{self.URLS['advert']}/adv/v1/promotion/count", headers),
                 "feedbacks": self._probe(session, "GET", f"{self.URLS['feedbacks']}/api/v1/questions/count", headers, params={"isAnswered": "false"}),
                 "prices": self._probe(session, "GET", f"{self.URLS['common']}/public/api/v1/info", headers)
@@ -69,16 +79,18 @@ class WBStatisticsMixin(WBApiBase):
 
         promotion_scope = raw_res.get("advert", False)
         users_scope = False
+        analytics_access = raw_res.get("analytics", False)
         
         return {
             "content": raw_res.get("content", False),
             "marketplace": raw_res.get("marketplace", False),
-            "analytics": raw_res.get("stats", False),
+            "analytics": analytics_access,
             "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
-            "statistics": raw_res.get("stats", False),
-            "finance": raw_res.get("stats", False),
+            # Map Statistics/Finance to Analytics access as V1 is being deprecated
+            "statistics": analytics_access,
+            "finance": analytics_access,
             "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
             "chat": raw_res.get("feedbacks", False),
             "questions": raw_res.get("feedbacks", False),
@@ -86,9 +98,13 @@ class WBStatisticsMixin(WBApiBase):
             "users": users_scope
         }
 
-    async def _probe(self, session, method, url, headers, params=None) -> bool:
+    async def _probe(self, session, method, url, headers, params=None, json_data=None) -> bool:
         try:
-            async with session.request(method, url, headers=headers, params=params) as resp:
+            async with session.request(method, url, headers=headers, params=params, json=json_data) as resp:
+                # 401/403 = Access Denied. 
+                # 429 = Rate Limit (Access OK). 
+                # 200 = OK. 
+                # 404/500/etc = Endpoint issue but Token likely OK (or endpoint really dead).
                 if resp.status in [401, 403]: return False
                 return True
         except:
@@ -329,7 +345,11 @@ class WBStatisticsMixin(WBApiBase):
                  data = await self._get_cached_or_request(session, url, headers, params, use_cache=True)
              else:
                  async with session.get(url, headers=headers, params=params) as resp:
-                     data = await resp.json() if resp.status == 200 else []
+                     # Check status to avoid crashing on 404/429 inside mixin logic
+                     if resp.status == 200:
+                        data = await resp.json()
+                     else:
+                        data = []
 
              return data if isinstance(data, list) else []
 
@@ -408,7 +428,11 @@ class WBStatisticsMixin(WBApiBase):
             data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
         else:
              async with session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json() if resp.status == 200 else []
+                if resp.status == 200:
+                    data = await resp.json() 
+                else: 
+                    # If 404 or other error, return empty without crashing
+                    data = []
         
         if not data:
             return {"count": 0, "sum": 0, "items": []}
@@ -429,7 +453,10 @@ class WBStatisticsMixin(WBApiBase):
             data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
         else:
             async with session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json() if resp.status == 200 else []
+                if resp.status == 200:
+                    data = await resp.json()
+                else:
+                    data = []
         
         if not data:
             return {"count": 0, "sum": 0, "items": []}
@@ -449,7 +476,10 @@ class WBStatisticsMixin(WBApiBase):
             data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
         else:
             async with session.get(url, headers=headers, params=params) as resp:
-                data = await resp.json() if resp.status == 200 else []
+                if resp.status == 200:
+                    data = await resp.json()
+                else:
+                    data = []
         
         if not data: return {"total_quantity": 0}
         if isinstance(data, list):
@@ -497,10 +527,14 @@ class WBStatisticsAPI:
                         elif resp.status == 401:
                             logger.error("WB API Unauthorized.")
                             raise HTTPException(status_code=401, detail="Invalid WB Token")
+                        elif resp.status == 404:
+                            # V1 Deprecated or just no data. Warning instead of Error to reduce spam.
+                            logger.warning(f"WB API 404 (Deprecated/Not Found) at {url}")
+                            return []
                         else:
                             text = await resp.text()
                             logger.error(f"WB API Error {resp.status}: {text}")
-                            return [] # Or raise exception
+                            return []
                 except asyncio.TimeoutError:
                     logger.warning(f"Timeout on {url}. Retrying...")
                 except Exception as e:
