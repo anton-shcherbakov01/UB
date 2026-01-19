@@ -229,28 +229,36 @@ const FinancePage = ({ user, onNavigate }) => {
             const adjustments = item.adjustments || 0; // Доплаты
             const cogs = item.cogs || 0;
             
-            // --- COMMISSION LOGIC ---
-            // Комиссия WB = Грязная выручка - К перечислению.
-            // ВАЖНО: Логистика и штрафы вычитаются отдельно из net_sales, поэтому они не входят в расчет комиссии здесь.
-            let commission = item.commission || item.wb_commission || 0;
+            // --- UPDATED COMMISSION LOGIC (Fixing 250 rub issue) ---
+            // Вместо того чтобы верить полю commission из API (где часто 0 или копейки из-за СПП),
+            // мы считаем "Эффективную комиссию" как разрыв:
+            // Грязная выручка - (К перечислению + Логистика внутри строки + Штрафы внутри строки)
+            // Но так как net_sales (ppvz_for_pay) в API уже очищен от комиссии WB, 
+            // но НЕ очищен от логистики (delivery_rub) в общем смысле, но часто delivery_rub идет отдельно.
             
-            if (!commission && gross > 0) {
-                // Разница между "Грязной" и "К перечислению за товар"
-                commission = gross - net_sales; 
-                // Защита от отрицательных значений
-                if (commission < 0) commission = 0;
+            // Простая математика: 
+            // Клиент заплатил: 32 875
+            // Нам начислили за товар: 22 107
+            // Разница: 10 768. Это деньги, которые оставил себе WB (Комиссия + СПП).
+            
+            let effectiveCommission = 0;
+            if (gross > 0) {
+                 effectiveCommission = gross - net_sales;
+                 if (effectiveCommission < 0) effectiveCommission = 0;
+            } else {
+                 // Если продаж нет, берем то что пришло
+                 effectiveCommission = item.commission || 0;
             }
             
             acc.total_revenue += gross;
             acc.total_transferred += net_sales;
-            acc.total_commission += commission;
+            acc.total_commission += effectiveCommission;
             acc.total_cost_price += cogs;
             acc.total_logistics += logistics;
             acc.total_penalty += penalties;
             acc.total_adjustments += adjustments;
             
-            // Накапливаем CM3 (Net Profit)
-            // Profit = (К перечислению + Доплаты) - Логистика - Штрафы - Себестоимость
+            // Profit считается от net_sales, так как это база денег от ВБ
             const dayProfit = (net_sales + adjustments) - logistics - penalties - cogs;
             acc.net_profit += dayProfit;
             
@@ -486,8 +494,8 @@ const FinancePage = ({ user, onNavigate }) => {
                                     {/* Commission Row */}
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
-                                            Комиссия WB
-                                            <InfoTooltip text="Комиссия маркетплейса + Эквайринг + СПП." />
+                                            Комиссия WB + СПП
+                                            <InfoTooltip text="Эффективная комиссия: разница между ценой для клиента и суммой к начислению." />
                                         </span>
                                         <span className="font-bold text-purple-600">
                                             -{Math.round(pnlSummary.total_commission).toLocaleString()} ₽
@@ -506,8 +514,8 @@ const FinancePage = ({ user, onNavigate }) => {
 
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
-                                            Штрафы
-                                            <InfoTooltip text="Штрафы и прочие удержания." />
+                                            Штрафы (в отчете)
+                                            <InfoTooltip text="Штрафы и прочие удержания, включенные в отчет реализации." />
                                         </span>
                                         <span className="font-bold text-red-500">
                                             -{Math.round(pnlSummary.total_penalty).toLocaleString()} ₽
@@ -516,8 +524,8 @@ const FinancePage = ({ user, onNavigate }) => {
 
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
-                                            К перечислению
-                                            <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия - Логистика - Штрафы)." />
+                                            К перечислению (Товар)
+                                            <InfoTooltip text="Фактическая сумма от WB за вычетом комиссии и СПП, но до вычета Хранения и Рекламы." />
                                         </span>
                                         <span className="font-bold text-indigo-600">
                                             {Math.round(pnlSummary.total_transferred).toLocaleString()} ₽
@@ -537,8 +545,8 @@ const FinancePage = ({ user, onNavigate }) => {
                                     {/* Net Profit */}
                                     <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
                                         <span className="text-sm font-black text-slate-800 flex items-center">
-                                            Чистая прибыль
-                                            <InfoTooltip text="Итоговый результат: К перечислению + Доплаты - Логистика - Штрафы - Себестоимость." />
+                                            Чистая прибыль (Расч.)
+                                            <InfoTooltip text="Итоговый результат по отгруженным товарам. Не учитывает Хранение и Рекламу." />
                                         </span>
                                         <span className={`text-xl font-black ${pnlSummary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                             {Math.round(pnlSummary.net_profit).toLocaleString()} ₽
