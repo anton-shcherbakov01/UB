@@ -7,12 +7,12 @@ from redis import asyncio as aioredis
 from dotenv import load_dotenv
 
 from celery_app import REDIS_URL
-from routers import users, finance, monitoring, seo, ai, payments, admin, bidder, supply, dashboard
+from routers import users, finance, monitoring, seo, ai, payments, admin, supply, dashboard, analytics, slots, notifications, bidder, support
 
 load_dotenv()
 logger = logging.getLogger("API")
 
-app = FastAPI(title="WB Analytics Platform")
+app = FastAPI(title="JuicyStat")
 
 # CORS
 app.add_middleware(
@@ -34,6 +34,10 @@ app.include_router(admin.router)
 app.include_router(bidder.router)
 app.include_router(supply.router)
 app.include_router(dashboard.router)
+app.include_router(analytics.router)
+app.include_router(slots.router)
+app.include_router(notifications.router)
+app.include_router(support.router)
 
 @app.on_event("startup")
 async def on_startup(): 

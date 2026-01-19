@@ -27,6 +27,10 @@ class SeleniumWBParser:
         """Парсинг ключевых слов (Async)"""
         return await self.product_parser.get_seo_data(sku)
 
+    async def get_review_stats(self, sku: int):
+        """Метод для проверки товара перед AI анализом (Async)"""
+        return await self.product_parser.get_review_stats(sku)
+
     async def get_search_position_v2(self, query: str, target_sku: int, dest: str = GEO_ZONES["moscow"]):
         """Гибридный поиск позиции (Async)"""
         return await self.search_parser.get_search_position_v2(query, target_sku, dest)

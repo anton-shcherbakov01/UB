@@ -13,29 +13,154 @@ class ClickHouseService:
         self.password = os.getenv("CLICKHOUSE_PASSWORD", "")
         self.database = os.getenv("CLICKHOUSE_DB", "wb_analytics")
         self.client = None
-
-    def connect(self):
-        """Establishes connection to ClickHouse and ensures DB exists."""
+        self._last_connect_attempt = None
+        self._connect_backoff_seconds = 60  # Don't retry connection more often than once per minute
+        
+        # #region agent log
+        import json
         try:
-            self.client = clickhouse_connect.get_client(
-                host=self.host,
-                port=self.port,
-                username=self.user,
-                password=self.password,
-                connect_timeout=10
-            )
-            # Create DB if not exists
-            self.client.command(f"CREATE DATABASE IF NOT EXISTS {self.database}")
-            self.init_schema()
-            logger.info("✅ ClickHouse connected and schema initialized.")
-        except Exception as e:
-            logger.error(f"❌ ClickHouse connection failed: {e}")
-            raise e
+            with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "A",
+                    "location": "clickhouse_models.py:18",
+                    "message": "ClickHouseService __init__",
+                    "data": {
+                        "host": self.host,
+                        "port": self.port,
+                        "user": self.user,
+                        "database": self.database,
+                        "password_set": bool(self.password)
+                    },
+                    "timestamp": int(__import__('time').time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+
+    def connect(self, retry_count=3, retry_delay=5):
+        """Establishes connection to ClickHouse and ensures DB exists."""
+        import time
+        import json
+        
+        # #region agent log
+        try:
+            with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "sessionId": "debug-session",
+                    "runId": "run1",
+                    "hypothesisId": "B",
+                    "location": "clickhouse_models.py:19",
+                    "message": "connect() called",
+                    "data": {"host": self.host, "port": self.port, "retry_count": retry_count},
+                    "timestamp": int(time.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        last_error = None
+        for attempt in range(1, retry_count + 1):
+            # #region agent log
+            try:
+                with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "B",
+                        "location": "clickhouse_models.py:26",
+                        "message": f"Connection attempt {attempt}/{retry_count}",
+                        "data": {"attempt": attempt, "host": self.host, "port": self.port},
+                        "timestamp": int(time.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            try:
+                self.client = clickhouse_connect.get_client(
+                    host=self.host,
+                    port=self.port,
+                    username=self.user,
+                    password=self.password,
+                    connect_timeout=10
+                )
+                # Test connection with a simple query
+                self.client.command("SELECT 1")
+                # Create DB if not exists
+                self.client.command(f"CREATE DATABASE IF NOT EXISTS {self.database}")
+                self.init_schema()
+                logger.info("✅ ClickHouse connected and schema initialized.")
+                
+                # #region agent log
+                try:
+                    with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "B",
+                            "location": "clickhouse_models.py:38",
+                            "message": "Connection successful",
+                            "data": {"attempt": attempt},
+                            "timestamp": int(time.time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                
+                return
+            except Exception as e:
+                last_error = e
+                
+                # #region agent log
+                try:
+                    with open('c:\\Projects\\UB\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            "sessionId": "debug-session",
+                            "runId": "run1",
+                            "hypothesisId": "A",
+                            "location": "clickhouse_models.py:40",
+                            "message": f"Connection attempt {attempt} failed",
+                            "data": {"attempt": attempt, "error": str(e), "error_type": type(e).__name__},
+                            "timestamp": int(time.time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                
+                if attempt < retry_count:
+                    logger.warning(f"⚠️ ClickHouse connection attempt {attempt}/{retry_count} failed: {e}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"❌ ClickHouse connection failed after {retry_count} attempts: {e}")
+                    # Don't raise - allow retry on next call
+                    self.client = None
+        
+        # If all retries failed, raise the last error
+        if last_error:
+            raise last_error
 
     def get_client(self):
-        if not self.client:
+        """Get ClickHouse client, connecting if necessary."""
+        # If client exists, return it
+        if self.client:
+            return self.client
+        
+        # Check if we should attempt connection (backoff to avoid spam)
+        import time
+        now = time.time()
+        if self._last_connect_attempt and (now - self._last_connect_attempt) < self._connect_backoff_seconds:
+            # Too soon to retry, return None without logging
+            return None
+        
+        # Attempt connection
+        self._last_connect_attempt = now
+        try:
             self.connect()
-        return self.client
+            return self.client
+        except Exception as e:
+            # Only log error on first attempt or after backoff period
+            if not self._last_connect_attempt or (now - self._last_connect_attempt) >= self._connect_backoff_seconds:
+                logger.warning(f"ClickHouse connection unavailable (will retry later): {e}")
+            # Return None to indicate connection is not available
+            # This allows graceful degradation
+            return None
 
     def init_schema(self):
         """
@@ -116,6 +241,9 @@ class ClickHouseService:
         
         # Ensure we use the connected client
         client = self.get_client()
+        if not client:
+            logger.warning("ClickHouse client not available, skipping insert")
+            return
         
         # Columns must match the Create Table order/structure
         # In production, use Pandas DataFrame for faster inserts, but here we use native list
@@ -128,6 +256,8 @@ class ClickHouseService:
             )
         except Exception as e:
             logger.error(f"ClickHouse Insert Error: {e}")
+            # Reset client to force reconnection on next use
+            self.client = None
             raise e
 
 # Singleton instance

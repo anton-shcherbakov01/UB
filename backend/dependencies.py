@@ -78,7 +78,7 @@ async def get_current_user(
         try:
             username = user_data_dict.get('username')
             first_name = user_data_dict.get('first_name')
-            plan = "business" if is_super else "free"
+            plan = "strategist" if is_super else "start"  # Админы получают самый полный тариф
             is_adm = is_super
             
             # Используем text() для raw query (надежнее всего для upsert в данной конфигурации)
@@ -106,10 +106,10 @@ async def get_current_user(
             logger.error(f"User creation error: {e}")
             raise HTTPException(status_code=500, detail="Database error")
             
-    # Если юзер уже был, обновляем админские права если нужно
-    if user and is_super and (not user.is_admin or user.subscription_plan != "business"):
+    # Если юзер уже был, обновляем только админские права (не трогаем тариф - админ может менять его сам)
+    if user and is_super and not user.is_admin:
         user.is_admin = True
-        user.subscription_plan = "business"
+        # Не меняем subscription_plan - админ может сам выбрать тариф через админ-панель
         db.add(user)
         await db.commit()
     

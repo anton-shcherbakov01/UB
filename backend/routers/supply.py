@@ -1,15 +1,20 @@
 import json
 import logging
+import io
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
 from pydantic import BaseModel
+from concurrent.futures import ThreadPoolExecutor
 
 from database import get_db, User, SupplySettings
-from dependencies import get_current_user, get_redis_client
+from dependencies import get_current_user, get_redis_client, QuotaCheck
 from wb_api.statistics import WBStatisticsAPI
 from services.supply import supply_service
+from services.wb_supply_service import WBSupplyService
 from tasks.supply import sync_supply_data_task
 
 logger = logging.getLogger("SupplyRouter")
@@ -34,7 +39,10 @@ async def get_or_create_settings(session: AsyncSession, user_id: int) -> SupplyS
     
     # Executing the statement with await
     result = await session.execute(stmt) 
-    settings = result.scalar_one_or_none()
+    
+    # FIX: Используем scalars().first() вместо scalar_one_or_none()
+    # Это предотвращает краш, если в БД случайно создались дубликаты настроек
+    settings = result.scalars().first()
     
     if not settings:
         settings = SupplySettings(
@@ -171,3 +179,90 @@ async def calculate_transit_route(
         data.transit_rate
     )
     return result
+
+@router.get("/warehouses")
+async def get_warehouse_coefficients(
+    user: User = Depends(get_current_user)
+):
+    """
+    NEW: Get real-time acceptance coefficients from WB Supplies API.
+    Used for checking free slots (coeff = 0) and high-load warehouses.
+    """
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+
+    r_client = get_redis_client()
+    cache_key = f"supply:warehouses:{user.id}"
+
+    if r_client:
+        cached = r_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+
+    try:
+        supplies_api = WBSupplyService(user.wb_api_token)
+        data = await supplies_api.get_warehouses_coefficients()
+        
+        # Process data: sort by free slots (coeff 0 or 1)
+        # WB returns: [{'warehouseName': 'Коледино', 'date': '2023-10-25T00:00:00Z', 'coefficient': 0}, ...]
+        
+        if r_client:
+            r_client.setex(cache_key, 600, json.dumps(data)) # Cache for 10 min
+            
+        return data
+    except Exception as e:
+        logger.error(f"Warehouse fetch error: {e}")
+        return []
+
+@router.get("/report/supply-pdf")
+async def generate_supply_pdf(
+    user: User = Depends(QuotaCheck(feature_flag="pnl_full")),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate Supply analysis PDF report. Requires Analyst+ plan."""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+    
+    # Get supply analysis data
+    try:
+        settings = await get_or_create_settings(db, user.id)
+        config = {
+            "lead_time": settings.lead_time,
+            "min_stock_days": settings.min_stock_days,
+            "abc_a_share": settings.abc_a_share
+        }
+        
+        wb_api = WBStatisticsAPI(user.wb_api_token)
+        turnover_data = await wb_api.get_turnover_data()
+        stocks = turnover_data.get("stocks", [])
+        orders = turnover_data.get("orders", [])
+        
+        analysis = supply_service.analyze_supply(stocks, orders, config)
+    except Exception as e:
+        logger.error(f"Supply PDF data fetch error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка получения данных: {str(e)}")
+    
+    # Generate PDF in executor
+    loop = asyncio.get_event_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    
+    from services.pdf_generator import pdf_generator
+    from datetime import datetime
+    
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_supply_pdf,
+        analysis
+    )
+    
+    filename = f"supply_report_{datetime.now().strftime('%Y%m%d')}.pdf"
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(pdf_bytes)),
+            'Cache-Control': 'no-cache'
+        }
+    )

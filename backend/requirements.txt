@@ -28,3 +28,5 @@ plotly
 matplotlib
 httpx
 aiodns
+psutil
+python-multipart

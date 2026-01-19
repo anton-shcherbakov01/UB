@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
-    User, Key, X, Loader2, Shield, ArrowUpRight, CreditCard, 
-    AlertTriangle, Check, Lock, 
-    // Импортируем иконки для категорий
+    User, Key, X, Loader2, Shield, ArrowUpRight, 
+    AlertTriangle, Check, Lock, TrendingUp,
     Package, Store, PieChart, Megaphone, RotateCcw, FileText, 
     BarChart3, Wallet, Truck, MessageSquare, MessageCircle, 
     Tag, Users
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
+import TariffCard from '../components/TariffCard';
 
-const ProfilePage = ({ onNavigate }) => {
-    // --- STATE ---
+// Added refreshUser to props
+const ProfilePage = ({ onNavigate, refreshUser }) => {
+    const navigate = useNavigate();
     const [tariffs, setTariffs] = useState([]);
     const [user, setUser] = useState(null);
     const [wbToken, setWbToken] = useState('');
@@ -20,8 +22,17 @@ const ProfilePage = ({ onNavigate }) => {
     const [payLoading, setPayLoading] = useState(false);
     const [error, setError] = useState(null);
 
-    // --- INITIAL LOAD ---
     useEffect(() => { loadData(); }, []);
+    
+    // Обновляем данные пользователя при фокусе страницы (после использования сервисов)
+    useEffect(() => {
+        const handleFocus = () => {
+            loadData(); // Обновляем данные при возврате на страницу
+        };
+        
+        window.addEventListener('focus', handleFocus);
+        return () => window.removeEventListener('focus', handleFocus);
+    }, []);
 
     const loadData = async () => {
         try {
@@ -38,6 +49,9 @@ const ProfilePage = ({ onNavigate }) => {
                 setWbToken(uData.wb_token_preview || '');
                 fetchScopes();
             }
+            
+            // Update user state to reflect latest limits
+            setUser(uData);
         } catch (e) {
             console.error(e);
             setError(e.message);
@@ -53,29 +67,79 @@ const ProfilePage = ({ onNavigate }) => {
             .finally(() => setScopesLoading(false));
     };
 
-    // --- PAYMENT ---
+    // Конвертация цены в Telegram Stars (тот же подход, что и в TariffsPage)
+    const convertToStars = (priceStr) => {
+        const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
+        return Math.max(1, Math.round(price)); // Минимум 1 звезда, 1₽ = 1 звезда
+    };
+
     const payStars = async (plan) => {
-        if (!plan.stars) return;
+        if (!plan.price || plan.price === "0 ₽") {
+            alert("Этот тариф бесплатный");
+            return;
+        }
+        
+        setPayLoading(true);
         try {
+            const starsAmount = convertToStars(plan.price);
+            console.log('[Pay Stars Profile] Plan price:', plan.price, 'Converted to stars:', starsAmount);
+            
+            if (starsAmount <= 0) {
+                throw new Error("Неверная сумма для оплаты");
+            }
+            
             const res = await fetch(`${API_URL}/api/payment/stars_link`, {
                 method: 'POST',
                 headers: getTgHeaders(),
-                body: JSON.stringify({ plan_id: plan.id, amount: plan.stars })
+                body: JSON.stringify({ 
+                    plan_id: plan.id, 
+                    amount: starsAmount 
+                })
             });
-            const d = await res.json();
-            if (d.invoice_link && window.Telegram?.WebApp?.openInvoice) {
-                window.Telegram.WebApp.openInvoice(d.invoice_link, (status) => {
-                    if (status === 'paid') { alert("Успешно!"); window.location.reload(); }
+            
+            const data = await res.json();
+            console.log('[Pay Stars Profile] Response:', data);
+            
+            if (!res.ok) {
+                throw new Error(data.detail || "Ошибка создания ссылки оплаты");
+            }
+            
+            if (!data.invoice_link) {
+                throw new Error("Сервер не вернул ссылку на оплату");
+            }
+            
+            // Открываем инвойс в Telegram WebApp
+            if (window.Telegram?.WebApp?.openInvoice) {
+                window.Telegram.WebApp.openInvoice(data.invoice_link, (status) => {
+                    console.log('[Pay Stars Profile] Invoice status:', status);
+                    if (status === 'paid') {
+                        alert("Оплата успешна! Подписка активирована.");
+                        loadData(); // Обновляем данные пользователя
+                        if (refreshUser) refreshUser(); // Обновляем в App.jsx тоже
+                    } else if (status === 'cancelled') {
+                        console.log('[Pay Stars Profile] Payment cancelled');
+                    } else if (status === 'failed') {
+                        alert("Оплата не прошла. Попробуйте снова.");
+                    }
                 });
-            } else { alert("Ошибка WebApp"); }
-        } catch (e) { alert(e.message); }
+            } else if (window.Telegram?.WebApp?.openLink) {
+                window.Telegram.WebApp.openLink(data.invoice_link);
+            } else {
+                window.open(data.invoice_link, '_blank');
+            }
+        } catch (e) {
+            console.error('[Pay Stars Profile] Error:', e);
+            alert(e.message || "Ошибка при создании платежа через Telegram Stars");
+        } finally {
+            setPayLoading(false);
+        }
     };
 
     const payRubles = async (plan) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/payment/yookassa/create`, {
+            const res = await fetch(`${API_URL}/api/payment/robokassa/subscription`, {
                 method: 'POST',
                 headers: getTgHeaders(),
                 body: JSON.stringify({ plan_id: plan.id })
@@ -84,11 +148,10 @@ const ProfilePage = ({ onNavigate }) => {
             if (res.ok && data.payment_url) {
                 if (window.Telegram?.WebApp?.openLink) window.Telegram.WebApp.openLink(data.payment_url);
                 else window.open(data.payment_url, '_blank');
-            } else { throw new Error("Ошибка платежа"); }
+            } else { throw new Error(data.detail || "Ошибка инициализации платежа"); }
         } catch (e) { alert(e.message); } finally { setPayLoading(false); }
     };
 
-    // --- TOKEN ---
     const saveToken = async () => {
         if (!wbToken || wbToken.includes("••••") || wbToken.includes("****")) return;
         setTokenLoading(true);
@@ -102,24 +165,32 @@ const ProfilePage = ({ onNavigate }) => {
             if (res.ok) {
                 setUser(prev => ({ ...prev, has_wb_token: true }));
                 if (d.scopes) setScopes(d.scopes); else fetchScopes();
-                alert("Токен сохранен!");
+                
+                // --- FIX START: Notify App.jsx about the change ---
+                if (refreshUser) refreshUser();
+                // --- FIX END ---
+
+                alert("Токен успешно сохранен!");
             } else { throw new Error(d.detail); }
         } catch (e) { alert(e.message); } finally { setTokenLoading(false); }
     };
 
     const deleteToken = async () => {
-        if (!confirm("Удалить токен?")) return;
+        if (!confirm("Вы уверены, что хотите удалить токен?")) return;
         setTokenLoading(true);
         try {
             await fetch(`${API_URL}/api/user/token`, { method: 'DELETE', headers: getTgHeaders() });
             setWbToken('');
             setScopes(null);
             setUser(prev => ({ ...prev, has_wb_token: false }));
+
+            // --- FIX START: Notify App.jsx about the change ---
+            if (refreshUser) refreshUser();
+            // --- FIX END ---
+
         } catch (e) { console.error(e); } finally { setTokenLoading(false); }
     };
 
-    // --- CONFIGURATION ---
-    // Полный список доступов WB (13 пунктов)
     const SCOPE_CONFIG = [
         { key: 'content', label: 'Контент', icon: Package, color: 'blue' },
         { key: 'marketplace', label: 'Маркетплейс', icon: Store, color: 'indigo' },
@@ -138,17 +209,13 @@ const ProfilePage = ({ onNavigate }) => {
 
     const ScopeCard = ({ config, active }) => {
         const Icon = config.icon;
-        // Динамические цвета для активного состояния
         const activeBg = `bg-${config.color}-50`;
         const activeBorder = `border-${config.color}-200`;
         const activeIconBg = `bg-${config.color}-100`;
         const activeText = `text-${config.color}-600`;
-
         return (
             <div className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all duration-300 min-h-[70px] ${
-                active 
-                ? `${activeBg} ${activeBorder}` 
-                : 'bg-slate-50 border-slate-100 opacity-60 grayscale'
+                active ? `${activeBg} ${activeBorder}` : 'bg-slate-50 border-slate-100 opacity-60 grayscale'
             }`}>
                 <div className={`w-7 h-7 rounded-full flex items-center justify-center mb-1 ${
                     active ? `${activeIconBg} ${activeText}` : 'bg-slate-200 text-slate-400'
@@ -164,10 +231,18 @@ const ProfilePage = ({ onNavigate }) => {
 
     const isSaveDisabled = tokenLoading || (user?.has_wb_token && (wbToken.includes('****') || wbToken.includes('••••'))) || !wbToken;
 
+    const getPlanDisplayName = (planId) => {
+        switch(planId) {
+            case 'analyst': return 'Аналитик';
+            case 'strategist': return 'Стратег';
+            case 'start': return 'Старт';
+            default: return 'Старт';
+        }
+    };
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             
-            {/* ERROR */}
             {error && (
                 <div className="bg-red-50 p-4 rounded-2xl border border-red-100 flex items-start gap-3">
                     <AlertTriangle className="text-red-500 shrink-0" size={20} />
@@ -182,15 +257,26 @@ const ProfilePage = ({ onNavigate }) => {
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
                 <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 relative">
                     <User size={32} />
-                    <div className="absolute bottom-0 right-0 w-5 h-5 bg-emerald-500 border-4 border-white rounded-full"></div>
+                    <div className={`absolute bottom-0 right-0 w-5 h-5 border-4 border-white rounded-full ${user?.plan === 'analyst' || user?.plan === 'strategist' ? 'bg-indigo-500' : 'bg-emerald-500'}`}></div>
                 </div>
                 <div>
-                    <h2 className="text-xl font-black text-slate-800">{user?.name || 'Loading...'}</h2>
+                    <h2 className="text-xl font-black text-slate-800">{user?.name || 'Загрузка...'}</h2>
                     <p className="text-sm text-slate-400 mb-2">@{user?.username || '...'}</p>
-                    <div className="flex gap-2">
-                         <span className="bg-slate-900 text-white px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider">
-                            {user?.plan || 'Free'}
+                    <div className="flex flex-wrap gap-2">
+                         <span className="bg-slate-900 text-white px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider">
+                            {getPlanDisplayName(user?.plan)}
                         </span>
+                        {user?.days_left > 0 && (
+                            <span className="bg-emerald-100 text-emerald-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">
+                                {user.days_left} дн.
+                            </span>
+                        )}
+                        {user?.ai_requests_limit > 0 && (
+                            <span className="bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">
+                                AI: {user.ai_requests_used || 0}/{user.ai_requests_limit}
+                                {user?.extra_ai_balance > 0 && ` +${user.extra_ai_balance}`}
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
@@ -225,23 +311,40 @@ const ProfilePage = ({ onNavigate }) => {
                     )}
                 </div>
 
-                {/* GRID SCOPES (3 колонки для 13 элементов = 5 рядов) */}
                 {(user?.has_wb_token || scopes) && (
-                    <div className="mb-5">
-                         <div className="flex justify-between items-center mb-2 px-1">
-                            <span className="text-[10px] uppercase font-bold text-slate-400">Доступные разделы</span>
-                            {scopesLoading && <Loader2 size={12} className="animate-spin text-indigo-600"/>}
+                    <>
+                        {/* API Mode Display */}
+                        {scopes?.api_mode && (
+                            <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold text-slate-600 uppercase">Режим API</span>
+                                    <span className={`text-xs font-black px-2 py-1 rounded-lg ${
+                                        scopes.api_mode === 'read_write' 
+                                            ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                    }`}>
+                                        {scopes.api_mode === 'read_write' ? 'Чтение и запись' : 'Только чтение'}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                        
+                        <div className="mb-5">
+                             <div className="flex justify-between items-center mb-2 px-1">
+                                <span className="text-[10px] uppercase font-bold text-slate-400">Доступные разделы</span>
+                                {scopesLoading && <Loader2 size={12} className="animate-spin text-indigo-600"/>}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                {SCOPE_CONFIG.map(cfg => (
+                                    <ScopeCard 
+                                        key={cfg.key} 
+                                        config={cfg} 
+                                        active={scopes ? scopes[cfg.key] : false} 
+                                    />
+                                ))}
+                            </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-2">
-                            {SCOPE_CONFIG.map(cfg => (
-                                <ScopeCard 
-                                    key={cfg.key} 
-                                    config={cfg} 
-                                    active={scopes ? scopes[cfg.key] : false} 
-                                />
-                            ))}
-                        </div>
-                    </div>
+                    </>
                 )}
 
                 <button
@@ -257,49 +360,129 @@ const ProfilePage = ({ onNavigate }) => {
                 </button>
             </div>
 
-            {/* TARIFFS */}
-            <h2 className="font-bold text-lg px-2 mt-2">Тарифы</h2>
-            <div className="space-y-4">
-                {tariffs.map(plan => (
-                    <div key={plan.id} className={`p-5 rounded-[24px] border-2 transition-all relative overflow-hidden ${plan.current ? 'border-emerald-500 bg-white shadow-emerald-100 shadow-lg' : 'border-slate-100 bg-white'}`}>
-                        {plan.is_best && !plan.current && (
-                            <div className="absolute top-0 right-0 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl">
-                                POPULAR
-                            </div>
-                        )}
-                        <div className="flex justify-between items-start mb-2">
-                            <div>
-                                <h4 className="font-bold text-lg flex items-center gap-2">
-                                    {plan.name}
-                                    {plan.current && <span className="bg-emerald-500 text-white text-[10px] px-2 py-0.5 rounded-full">АКТИВЕН</span>}
-                                </h4>
-                                <div className="text-slate-900 font-black text-2xl mt-1">{plan.price}</div>
-                            </div>
-                            {plan.stars > 0 && (
-                                <div className="bg-amber-100 text-amber-700 px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
-                                    <Shield size={12} fill="currentColor" /> {plan.stars}
-                                </div>
-                            )}
+            {/* MY LIMITS SECTION */}
+            <div className="bg-white p-5 rounded-[28px] shadow-sm border border-slate-100">
+                <div className="flex items-center gap-2 mb-4 px-1">
+                    <div className="bg-violet-100 p-1.5 rounded-lg text-violet-600"><TrendingUp size={18} /></div>
+                    <h2 className="font-bold text-lg">Мои лимиты</h2>
+                </div>
+
+                {/* Plan Info */}
+                <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Текущий тариф</span>
+                        <span className="font-black text-slate-900">{getPlanDisplayName(user?.plan)}</span>
+                    </div>
+                    {user?.days_left > 0 && (
+                        <div className="text-xs text-slate-500">
+                            Действует еще {user.days_left} {user.days_left === 1 ? 'день' : user.days_left < 5 ? 'дня' : 'дней'}
                         </div>
-                        <ul className="space-y-2 mb-4">
-                            {plan.features.slice(0, 4).map((f, i) => (
-                                <li key={i} className="text-xs font-medium text-slate-600 flex items-center gap-2">
-                                    <div className={`w-1.5 h-1.5 rounded-full ${plan.current ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                    {f}
-                                </li>
-                            ))}
-                        </ul>
-                        {!plan.current && plan.price !== "0 ₽" && (
-                            <div className="grid grid-cols-2 gap-2 mt-4">
-                                <button onClick={() => payStars(plan)} className="flex items-center justify-center gap-1.5 py-2.5 bg-amber-400 text-white rounded-xl font-bold text-xs hover:bg-amber-500 active:scale-95 transition-all">
-                                    <Shield size={14} fill="currentColor" /> Stars
-                                </button>
-                                <button onClick={() => payRubles(plan)} disabled={payLoading} className="flex items-center justify-center gap-1.5 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-slate-800 active:scale-95 transition-all">
-                                    {payLoading ? <Loader2 className="animate-spin" size={14} /> : <CreditCard size={14} />} Карта РФ
-                                </button>
-                            </div>
+                    )}
+                </div>
+
+                {/* AI Requests Limit */}
+                {user?.ai_requests_limit > 0 && (
+                    <div className="mb-4 p-3 bg-indigo-50 rounded-xl border border-indigo-100">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-bold text-indigo-700 uppercase tracking-wide">AI-запросы</span>
+                            <span className="font-black text-indigo-900">
+                                {user.ai_requests_used || 0} / {user.ai_requests_limit}
+                                {user?.extra_ai_balance > 0 && <span className="text-emerald-600 ml-1">+{user.extra_ai_balance}</span>}
+                            </span>
+                        </div>
+                        <div className="w-full bg-indigo-100 rounded-full h-2.5">
+                            <div
+                                className="bg-indigo-600 h-2.5 rounded-full transition-all"
+                                style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / user.ai_requests_limit) * 100)}%` }}
+                            ></div>
+                        </div>
+                        {user?.extra_ai_balance > 0 && (
+                            <p className="text-xs text-indigo-600 mt-2">Дополнительный баланс: {user.extra_ai_balance} запросов</p>
                         )}
                     </div>
+                )}
+
+                {/* History Days Limit */}
+                <div className="mb-4 p-3 bg-emerald-50 rounded-xl border border-emerald-100">
+                    <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-emerald-700 uppercase tracking-wide">История продаж</span>
+                        <span className="font-black text-emerald-900">
+                            {user?.plan === 'start' ? '7 дней' : user?.plan === 'analyst' ? '60 дней' : user?.plan === 'strategist' ? '365 дней' : 'Не определено'}
+                        </span>
+                    </div>
+                    <p className="text-xs text-emerald-600 mt-1">Период доступной аналитики</p>
+                </div>
+
+                {/* Features List */}
+                <div className="mb-2">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 block">Доступные функции</span>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                            <Check size={14} className="text-emerald-600" />
+                            <span className="text-xs font-medium text-slate-700">Слоты товаров</span>
+                        </div>
+                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                            <Check size={14} className="text-emerald-600" />
+                            <span className="text-xs font-medium text-slate-700">Уведомления</span>
+                        </div>
+                        {user?.plan === 'start' ? (
+                            <div className="flex items-center gap-2 p-2 bg-amber-50 rounded-lg border border-amber-100">
+                                <Check size={14} className="text-amber-600" />
+                                <span className="text-xs font-medium text-amber-700">P&L (демо: вчера)</span>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                    <Check size={14} className="text-emerald-600" />
+                                    <span className="text-xs font-medium text-slate-700">P&L (полный)</span>
+                                </div>
+                                {(user?.plan === 'analyst' || user?.plan === 'strategist') && (
+                                    <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                        <Check size={14} className="text-emerald-600" />
+                                        <span className="text-xs font-medium text-slate-700">Форензика возвратов</span>
+                                    </div>
+                                )}
+                                {user?.plan === 'strategist' && (
+                                    <>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">Cash Gap анализ</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">Приоритетный опрос</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg">
+                                            <Check size={14} className="text-emerald-600" />
+                                            <span className="text-xs font-medium text-slate-700">P&L экспорт</span>
+                                        </div>
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* TARIFFS */}
+            <div className="flex justify-between items-center px-2 mt-2 mb-2">
+                <h2 className="font-bold text-lg">Тарифные планы</h2>
+                <button 
+                    onClick={() => navigate('/tariffs')}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                >
+                    Смотреть все →
+                </button>
+            </div>
+            <div className="space-y-4">
+                {tariffs.map(plan => (
+                    <TariffCard 
+                        key={plan.id}
+                        plan={plan}
+                        onPayStars={payStars}
+                        onPayRubles={payRubles}
+                        loading={payLoading}
+                    />
                 ))}
             </div>
 
@@ -317,11 +500,15 @@ const ProfilePage = ({ onNavigate }) => {
             {/* FOOTER */}
             <div className="pt-6 pb-6 text-center border-t border-slate-100 mt-4">
                 <div className="flex justify-center gap-4 text-[10px] text-slate-400 font-medium uppercase tracking-wide mb-2">
-                    <a href="#" className="hover:text-slate-600">Оферта</a> • 
-                    <a href="#" className="hover:text-slate-600">Конфиденциальность</a> • 
-                    <a href="#" className="hover:text-slate-600">Поддержка</a>
+                    <button onClick={() => navigate('/offer')} className="hover:text-slate-600">Оферта</button> • 
+                    <button onClick={() => navigate('/privacy')} className="hover:text-slate-600">Конфиденциальность</button> • 
+                    <button onClick={() => navigate('/support')} className="hover:text-slate-600">Поддержка</button>
                 </div>
-                <p className="text-[10px] text-slate-300">ID: {user?.id} • Ver: 2.1.0</p>
+                <p className="text-[10px] text-slate-300">ИП Щербаков Антон Алексеевич</p>
+                <p className="text-[10px] text-slate-300">ИНН: 712807221159 • ОГРНИП: 325710000062103</p>
+                <p className="text-[10px] text-slate-300">Email: anton.sherbakov.01@gmail.com</p>
+                <p className="text-[10px] text-slate-300">Telegram Support: <a href="https://t.me/AAntonShch" target="_blank" rel="noopener noreferrer" className="hover:text-slate-400">@AAntonShch</a></p>
+                <p className="text-[10px] text-slate-300 mt-2">ID: {user?.id} • Версия: 2.2.0</p>
             </div>
         </div>
     );

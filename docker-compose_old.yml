@@ -1,0 +1,169 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: wb_postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=wb_secret_password
+      - POSTGRES_DB=wb_monitor
+      - LANG=C.UTF-8
+    volumes:
+      - postgres_data_final:/var/lib/postgresql/data
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["NONE"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: wb_clickhouse
+    restart: always
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  redis:
+    image: redis:alpine
+    container_name: wb_redis
+    restart: always
+    ports: ["6379:6379"]
+    command: redis-server --save 60 1 --loglevel warning
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_api
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes: 
+      - ./backend:/app
+      - ./backend/proxy_ext:/app/proxy_ext
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    ports: ["8000:8000"]
+    env_file:
+      - ./backend/.env
+    environment:
+      - RUN_MIGRATIONS=true
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      # Явно задаем настройки подключения к ClickHouse:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+      - HEADLESS=True
+      # DEBUG_MODE=True  <-- ЗАКОММЕНТИРОВАНО (Нормальный режим)
+    depends_on: 
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_worker
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    volumes: 
+      - ./backend:/app
+      - ./backend/proxy_ext:/app/proxy_ext
+    env_file:
+      - ./backend/.env
+    environment:
+      - RUN_MIGRATIONS=false
+      - C_FORCE_ROOT=1
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      # И здесь тоже явно задаем настройки ClickHouse:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+      - HEADLESS=True
+    depends_on: 
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      clickhouse:
+        condition: service_started
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  beat:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_beat
+    command: celery -A celery_app beat --loglevel=info
+    volumes: 
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    environment:
+      - RUN_MIGRATIONS=false
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+    depends_on: 
+      redis:
+        condition: service_started
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data_final:
+  clickhouse_data:
