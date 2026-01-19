@@ -6,6 +6,22 @@ from datetime import datetime
 logger = logging.getLogger("ClickHouse")
 
 class ClickHouseService:
+    # --- ДОБАВЛЕНО: Белый список колонок для защиты от лишних полей API ---
+    VALID_COLUMNS = {
+        'rrd_id', 'realizationreport_id', 'supplier_id', 
+        'gi_id', 'subject_name', 'nm_id', 'brand_name', 'sa_name', 'ts_name', 'barcode', 
+        'doc_type_name', 'office_name', 'supplier_oper_name', 'site_country', 
+        'create_dt', 'order_dt', 'sale_dt', 'rr_dt', 
+        'quantity', 'retail_price', 'retail_amount', 'sale_percent', 'commission_percent', 
+        'retail_price_withdisc_rub', 'delivery_amount', 'return_amount', 'delivery_rub', 
+        'gi_box_type_name', 'product_discount_for_report', 'supplier_promo', 'rid', 
+        'ppvz_spp_prc', 'ppvz_kvw_prc_base', 'ppvz_kvw_prc', 'sup_rating_prc_up', 
+        'is_kgvp_v2', 'ppvz_sales_commission', 'ppvz_for_pay', 'ppvz_reward', 
+        'acquiring_fee', 'acquiring_bank', 'ppvz_vw', 'ppvz_vw_nds', 'ppvz_office_id', 
+        'penalty', 'additional_payment', 'rebill_logistic_cost'
+    }
+    # ----------------------------------------------------------------------
+
     def __init__(self):
         self.host = os.getenv("CLICKHOUSE_HOST", "clickhouse")
         self.port = int(os.getenv("CLICKHOUSE_PORT", 8123))
@@ -245,14 +261,25 @@ class ClickHouseService:
             logger.warning("ClickHouse client not available, skipping insert")
             return
         
-        # Columns must match the Create Table order/structure
-        # In production, use Pandas DataFrame for faster inserts, but here we use native list
-        # We assume 'reports' is a list of dictionaries matching the DB columns
         try:
+            # --- ИСПРАВЛЕНИЕ: Фильтрация полей ---
+            # Удаляем все ключи, которых нет в VALID_COLUMNS, чтобы избежать ошибки
+            # "Unrecognized column" (например, date_from/date_to из API v5)
+            clean_reports = []
+            for r in reports:
+                clean_r = {k: v for k, v in r.items() if k in self.VALID_COLUMNS}
+                if clean_r:
+                    clean_reports.append(clean_r)
+            
+            if not clean_reports:
+                logger.warning("No valid data to insert after schema filtering")
+                return
+            
+            # Вставка очищенных данных
             client.insert(
                 f"{self.database}.realization_reports",
-                reports,
-                column_names=[k for k in reports[0].keys()]
+                clean_reports,
+                column_names=list(clean_reports[0].keys())
             )
         except Exception as e:
             logger.error(f"ClickHouse Insert Error: {e}")
