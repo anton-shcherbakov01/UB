@@ -251,35 +251,46 @@ class ClickHouseService:
         self.client.command(schema_sql)
 
     def insert_reports(self, reports: list):
-        """Batch insert raw reports."""
+        """Batch insert raw reports with schema validation."""
         if not reports:
             return
         
-        # Ensure we use the connected client
         client = self.get_client()
         if not client:
             logger.warning("ClickHouse client not available, skipping insert")
             return
         
         try:
-            # --- ИСПРАВЛЕНИЕ: Фильтрация полей ---
-            # Удаляем все ключи, которых нет в VALID_COLUMNS, чтобы избежать ошибки
-            # "Unrecognized column" (например, date_from/date_to из API v5)
+            # 1. Фильтрация данных (удаляем лишние поля, которых нет в схеме)
             clean_reports = []
             for r in reports:
+                # Оставляем только ключи, которые есть в VALID_COLUMNS
                 clean_r = {k: v for k, v in r.items() if k in self.VALID_COLUMNS}
                 if clean_r:
                     clean_reports.append(clean_r)
             
             if not clean_reports:
-                logger.warning("No valid data to insert after schema filtering")
+                logger.warning("No valid data left after schema filtering")
                 return
+
+            # 2. Вставка
+            # Берем колонки из первого очищенного элемента
+            columns = list(clean_reports[0].keys())
             
-            # Вставка очищенных данных
+            # --- FIX: Конвертируем список словарей в список списков ---
+            # Библиотека clickhouse_connect иногда дает сбой на списке словарей при расчете размера блока
+            # Преобразуем явно в список значений
+            data_values = []
+            for r in clean_reports:
+                # Извлекаем значения в строгом порядке columns
+                # Используем .get() для безопасности, хотя clean_reports уже отфильтрован
+                row = [r.get(col) for col in columns]
+                data_values.append(row)
+
             client.insert(
                 f"{self.database}.realization_reports",
-                clean_reports,
-                column_names=list(clean_reports[0].keys())
+                data_values,
+                column_names=columns
             )
         except Exception as e:
             logger.error(f"ClickHouse Insert Error: {e}")
