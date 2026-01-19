@@ -1,10 +1,14 @@
 import logging
 import json
+import io
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi.responses import StreamingResponse
 from typing import List, Optional
 from pydantic import BaseModel, validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from concurrent.futures import ThreadPoolExecutor
 
 from dependencies import get_current_user, get_redis_client, get_db
 from database import User, SlotMonitor
@@ -133,3 +137,44 @@ async def delete_monitor(
     ))
     await db.commit()
     return {"status": "deleted"}
+
+executor = ThreadPoolExecutor(max_workers=2)
+
+@router.get("/report/slots-pdf")
+async def generate_slots_pdf(user: User = Depends(get_current_user)):
+    """Generate Slots analysis PDF report"""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="WB API Token required")
+    
+    # Get slots data
+    r_client = get_redis_client()
+    cache_key = f"slots:coeff:{user.id}"
+    
+    slots_data = []
+    if r_client:
+        cached = r_client.get(cache_key)
+        if cached:
+            try:
+                slots_data = json.loads(cached)
+            except:
+                pass
+    
+    if not slots_data:
+        # Fetch fresh data
+        service = SlotsService(user.wb_api_token)
+        slots_data = await service.get_coefficients()
+    
+    # Generate PDF in executor
+    from services.pdf_generator import pdf_generator
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        executor,
+        pdf_generator.create_slots_pdf,
+        slots_data
+    )
+    
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type='application/pdf',
+        headers={'Content-Disposition': 'attachment; filename="slots_analysis.pdf"'}
+    )

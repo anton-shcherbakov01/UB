@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
     Truck, Scale, Loader2, MapPin, ArrowRight, 
     PackageCheck, AlertTriangle, Box, RefreshCw,
     Activity, Settings, X, Save, HelpCircle, Info,
-    ArrowDown, FilterX
+    ArrowDown, FilterX, FileDown, ArrowLeft, Lock
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
-import AbcXyzMatrix from '../components/AbcXyzMatrix'; // <-- Импорт матрицы
+import AbcXyzMatrix from '../components/AbcXyzMatrix'; 
 
 const SupplyPage = () => {
+    const navigate = useNavigate();
+    const [user, setUser] = useState(null);
     const [coeffs, setCoeffs] = useState([]);
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -16,13 +19,13 @@ const SupplyPage = () => {
     const [error, setError] = useState(null);
     
     // --- STATE: МАТРИЦА ---
-    const [filterGroup, setFilterGroup] = useState(null); // Например 'AX', 'BZ'
+    const [filterGroup, setFilterGroup] = useState(null);
 
     // Calculator State
     const [volume, setVolume] = useState(1000);
     const [origin, setOrigin] = useState("Казань");
     const [destination, setDestination] = useState("Коледино");
-    const [transitRate, setTransitRate] = useState(4.5); // Custom rate
+    const [transitRate, setTransitRate] = useState(4.5); 
     const [calcResult, setCalcResult] = useState(null);
     const [calcLoading, setCalcLoading] = useState(false);
 
@@ -30,6 +33,7 @@ const SupplyPage = () => {
     const [showSettings, setShowSettings] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
     const [showCalcHelp, setShowCalcHelp] = useState(false);
+    const [showUpgrade, setShowUpgrade] = useState(false); // Для алерта
     const [settings, setSettings] = useState({
         lead_time: 7,
         min_stock_days: 14,
@@ -37,7 +41,6 @@ const SupplyPage = () => {
     });
     const [savingSettings, setSavingSettings] = useState(false);
 
-    // Default warehouses list
     const defaultWarehouses = [
         "Коледино", "Казань", "Электросталь", "Тула", "Краснодар", 
         "Санкт-Петербург (Уткина Заводь)", "Екатеринбург", "Новосибирск",
@@ -45,9 +48,17 @@ const SupplyPage = () => {
     ];
 
     useEffect(() => {
+        fetchUser();
         fetchData();
         fetchSettings();
     }, []);
+
+    const fetchUser = async () => {
+        try {
+            const res = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
+            if (res.ok) setUser(await res.json());
+        } catch (e) { console.error(e); }
+    };
 
     const fetchSettings = async () => {
         try {
@@ -137,6 +148,20 @@ const SupplyPage = () => {
         }
     };
 
+    const handleDownloadReport = async () => {
+        if (user?.plan === 'start') {
+            setShowUpgrade(true);
+            return;
+        }
+        try {
+            const token = window.Telegram?.WebApp?.initData || '';
+            const url = `${API_URL}/api/supply/report/supply-pdf?x_tg_data=${encodeURIComponent(token)}`;
+            window.open(url, '_blank');
+        } catch (e) {
+            alert('Не удалось скачать PDF: ' + (e.message || ''));
+        }
+    };
+
     const getWarehouseOptions = () => {
         if (coeffs.length > 0) {
             return coeffs.map(c => c.warehouseName).sort();
@@ -145,22 +170,16 @@ const SupplyPage = () => {
     };
 
     // --- LOGIC: MATRIX & FILTERING ---
-    // 1. Формируем данные для матрицы на основе загруженных продуктов
     const matrixData = useMemo(() => {
         if (!products.length) return null;
-        
         const summary = {};
         products.forEach(p => {
-            // Если xyz еще нет в API, ставим заглушку Z. 
-            // В будущем убедитесь, что API возвращает поля abc и xyz.
             const group = `${p.abc || 'C'}${p.xyz || 'Z'}`; 
             summary[group] = (summary[group] || 0) + 1;
         });
-
         return { summary };
     }, [products]);
 
-    // 2. Фильтруем список товаров
     const filteredProducts = useMemo(() => {
         if (!filterGroup) return products;
         return products.filter(p => {
@@ -171,6 +190,36 @@ const SupplyPage = () => {
 
 
     // --- Components ---
+
+    const UpgradeModal = () => {
+        if (!showUpgrade) return null;
+        return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowUpgrade(false)}>
+                <div className="bg-white rounded-3xl w-full max-w-xs p-6 shadow-2xl animate-in zoom-in-95 relative overflow-hidden" onClick={e => e.stopPropagation()}>
+                     <div className="absolute top-0 right-0 w-32 h-32 bg-amber-100 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+                     
+                     <div className="relative z-10 text-center">
+                        <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center mx-auto mb-4 text-amber-500 border border-amber-100 shadow-sm">
+                            <Lock size={32} />
+                        </div>
+                        <h3 className="text-xl font-black text-slate-800 mb-2">Доступ закрыт</h3>
+                        <p className="text-sm text-slate-500 mb-6 leading-relaxed font-medium">
+                            Скачивание PDF-отчетов по поставкам доступно на тарифе <span className="font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">PRO</span> и выше.
+                        </p>
+                        
+                        <div className="space-y-3">
+                             <button onClick={() => window.Telegram?.WebApp?.openLink('https://t.me/WbAnalyticsBot')} className="w-full bg-slate-900 text-white py-3.5 rounded-2xl font-bold shadow-lg shadow-slate-200 active:scale-95 transition-all">
+                                Обновить тариф
+                             </button>
+                             <button onClick={() => setShowUpgrade(false)} className="w-full bg-white text-slate-500 py-3.5 rounded-2xl font-bold border border-slate-200 active:scale-95 transition-all hover:bg-slate-50">
+                                Понятно
+                             </button>
+                        </div>
+                     </div>
+                </div>
+            </div>
+        )
+    };
 
     const InfoTooltip = ({ text }) => (
         <div className="group relative inline-flex ml-1 align-middle">
@@ -185,7 +234,7 @@ const SupplyPage = () => {
     const HelpModal = () => {
         if (!showHelp) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowHelp(false)}>
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowHelp(false)}>
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -230,7 +279,7 @@ const SupplyPage = () => {
     const CalcHelpModal = () => {
         if (!showCalcHelp) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowCalcHelp(false)}>
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setShowCalcHelp(false)}>
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -269,7 +318,7 @@ const SupplyPage = () => {
     const SettingsModal = () => {
         if (!showSettings) return null;
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="fixed top-0 left-0 right-0 bottom-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
                 <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 space-y-4 max-h-[85vh] overflow-y-auto">
                     <div className="flex justify-between items-center mb-2">
                         <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -490,28 +539,46 @@ const SupplyPage = () => {
              <SettingsModal />
              <HelpModal />
              <CalcHelpModal />
+             <UpgradeModal />
 
              {/* Header */}
-             <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[32px] text-white shadow-xl shadow-orange-200 relative overflow-hidden">
-                <div className="relative z-10 flex justify-between items-center">
-                    <div>
-                        <h1 className="text-2xl font-black flex items-center gap-2">
-                            <Truck className="text-white" /> Supply Chain
+             <div className="flex justify-between items-stretch h-20 mb-6">
+                 {/* Main Header Card with Gradient */}
+                 <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
+                    <div className="relative z-10">
+                        {/* Smaller font size for header */}
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Truck className="text-white" size={24} /> Supply Chain
                         </h1>
-                        <p className="text-sm opacity-90 mt-2 font-medium">Умное управление запасами</p>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">Умное управление запасами</p>
+                    </div>
+
+                    {/* PDF Download Button INSIDE Header (Round Icon) */}
+                    <div className="relative z-10">
+                         <button 
+                            onClick={handleDownloadReport}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="Скачать PDF"
+                        >
+                            <FileDown size={20} />
+                        </button>
                     </div>
                     
-                    <button 
-                        onClick={() => setShowSettings(true)}
-                        className="bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors"
-                    >
-                        <Settings className="text-white" size={20} />
-                    </button>
-                </div>
-                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button onClick={() => navigate('/')} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95" title="На главную">
+                         <ArrowLeft size={24}/>
+                     </button>
+                     <button onClick={() => setShowSettings(true)} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95" title="Настройки">
+                         <Settings size={24} />
+                     </button>
+                 </div>
             </div>
 
-            {/* Calculator Section (Без изменений, только сворачиваемость можно добавить по желанию) */}
+            {/* Calculator Section */}
             <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm relative">
                  <button 
                     onClick={() => setShowCalcHelp(true)}
@@ -617,7 +684,6 @@ const SupplyPage = () => {
             </div>
 
             {/* --- ABC/XYZ MATRIX INTEGRATION --- */}
-            {/* Вставляем матрицу здесь, чтобы она служила фильтром для списка ниже */}
             {matrixData && (
                 <div className="animate-in fade-in slide-in-from-bottom-2">
                     <AbcXyzMatrix 

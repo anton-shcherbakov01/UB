@@ -23,25 +23,14 @@ executor = ThreadPoolExecutor(max_workers=2)
 @router.get("/monitoring/scan/{sku}")
 async def scan_product(sku: int):
     """
-    Мгновенный скан товара.
+    Stub: Module is currently in development
     """
-    try:
-        # Прямой вызов async метода (без executor)
-        result = await selenium_service.get_product_details(sku)
-        
-        if not result.get('valid'):
-            raise HTTPException(404, "Товар не найден или ошибка парсинга WB")
-            
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Scan error: {e}")
-        raise HTTPException(500, f"Scan failed: {str(e)}")
+    return {"status": "maintenance", "message": "Module is currently in development"}
 
 @router.post("/monitor/add/{sku}")
 async def add_to_monitor(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    limits = {"free": 3, "pro": 50, "business": 500}
+    # Лимиты слотов для мониторинга по тарифам
+    limits = {"start": 3, "analyst": 50, "strategist": 500}
     limit = limits.get(user.subscription_plan, 3)
     
     count_stmt = select(func.count()).select_from(MonitoredItem).where(MonitoredItem.user_id == user.id)
@@ -114,8 +103,8 @@ def get_status_endpoint(task_id: str):
 
 @router.get("/report/pdf/{sku}")
 async def generate_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Upgrade to PRO")
+    if user.subscription_plan == "start":
+        raise HTTPException(403, "Upgrade to Analyst or Strategist")
 
     item = (await db.execute(select(MonitoredItem).where(MonitoredItem.user_id == user.id, MonitoredItem.sku == sku))).scalars().first()
     if not item: raise HTTPException(404, "Item not found")

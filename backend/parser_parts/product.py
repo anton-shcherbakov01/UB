@@ -9,6 +9,7 @@ import requests
 import asyncio
 import aiohttp
 import zipfile
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -42,6 +43,7 @@ class ProductParser:
     """
     Восстановленная логика парсинга Wildberries (Legacy/Stable).
     Использует перебор корзин для поиска card.json и Selenium для цен.
+    Гибридная версия: Async для метаданных + Sync (requests) для отзывов.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -174,6 +176,35 @@ class ProductParser:
         except: pass
         return 0
 
+    # --- БЕЗОПАСНЫЙ ЗАПУСК ASYNC КОДА В CELERY ---
+    
+    def _safe_run_async(self, coro):
+        """
+        Безопасный запуск async кода в Celery (защита от RuntimeError).
+        Проверяет наличие running event loop и использует ThreadPoolExecutor если нужно.
+        """
+        try:
+            # Пытаемся получить running loop
+            asyncio.get_running_loop()
+            # Если дошли сюда - loop уже есть, нужно использовать другой подход
+            # Создаем новый loop в отдельном потоке
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
+        except RuntimeError:
+            # Нет running loop - безопасно использовать asyncio.run()
+            return asyncio.run(coro)
+        except Exception as e:
+            logger.error(f"Error in _safe_run_async: {e}", exc_info=True)
+            # Fallback: создаем новый loop вручную
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(coro)
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
     # --- МЕТОДЫ ДЛЯ API / ROUTER ---
 
     async def get_review_stats(self, sku: int):
@@ -211,17 +242,13 @@ class ProductParser:
 
     def get_product_data(self, sku: int):
         """Парсинг цен (оставлен для совместимости с task)"""
-        # (Код парсинга цен Selenium, идентичный вашему, для краткости опущен, 
-        # но так как я должен вернуть полный файл - вставляю полную версию из вашего примера)
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         total_qty = 0
 
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
+            # Используем безопасный запуск async кода для корректной работы в Celery
+            data = self._safe_run_async(self._find_card_json(sku))
             
             if data:
                 static_info["name"] = data.get('imt_name') or data.get('subj_name')
@@ -276,14 +303,13 @@ class ProductParser:
     def get_full_product_info(self, sku: int, limit: int = 50):
         """
         Основной метод парсинга отзывов.
-        Восстановлен из вашего файла.
+        СИНХРОННЫЙ, использует asyncio.run только для card.json.
+        Использует requests для получения отзывов (стабильно).
         """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            static_data = loop.run_until_complete(self._find_card_json(sku))
-            loop.close()
+            # Используем безопасный запуск async кода для корректной работы в Celery
+            static_data = self._safe_run_async(self._find_card_json(sku))
 
             if not static_data: return {"status": "error", "message": "Card not found"}
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
@@ -298,37 +324,80 @@ class ProductParser:
             
             feed_data = None
             headers = {"User-Agent": random.choice(self.user_agents)}
+            last_error = None
             
             for url in endpoints:
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
-                    if r.status_code == 200:
+                    if r.status_code != 200:
+                        continue
+                    try:
                         feed_data = r.json()
+                    except (ValueError, TypeError) as json_err:
+                        logger.warning(f"Invalid JSON from {url[:50]}...: {json_err}")
+                        continue
+                    if isinstance(feed_data, dict):
                         break
-                except: continue
+                    feed_data = None
+                except requests.RequestException as req_err:
+                    last_error = str(req_err)
+                    logger.debug(f"Requests error for {url[:40]}...: {req_err}")
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    logger.debug(f"Unexpected error fetching {url[:40]}...: {e}")
+                    continue
             
-            if not feed_data: return {"status": "error", "message": "API отзывов недоступен"}
+            if not feed_data or not isinstance(feed_data, dict):
+                msg = "API отзывов недоступен"
+                if last_error:
+                    msg = f"{msg} ({last_error[:80]})"
+                return {"status": "error", "message": msg}
 
-            raw_feedbacks = feed_data.get('feedbacks') or feed_data.get('data', {}).get('feedbacks') or []
-            valuation = feed_data.get('valuation') or feed_data.get('data', {}).get('valuation', 0)
+            # Защита от пустых и неожиданных структур данных WB
+            data_part = feed_data.get('data') if isinstance(feed_data.get('data'), dict) else {}
+            raw_feedbacks = feed_data.get('feedbacks') or data_part.get('feedbacks') or []
+            if not isinstance(raw_feedbacks, list):
+                raw_feedbacks = []
+            valuation = feed_data.get('valuation') or data_part.get('valuation', 0)
             
             reviews = []
             for f in raw_feedbacks:
+                if not isinstance(f, dict):
+                    continue
                 txt = f.get('text', '')
-                if txt:
-                    reviews.append({"text": txt, "rating": f.get('productValuation', 5)})
+                if txt and isinstance(txt, str) and txt.strip():
+                    reviews.append({"text": txt.strip(), "rating": f.get('productValuation', 5)})
                 if len(reviews) >= limit: break
             
-            return {
-                "sku": sku,
-                "image": static_data.get('image_url'),
-                "rating": float(valuation),
-                "reviews": reviews,
-                "reviews_count": len(reviews),
+            # Safely convert rating to float
+            try:
+                rating_value = float(valuation) if valuation else 0.0
+            except (ValueError, TypeError):
+                rating_value = 0.0
+            
+            # Убедиться, что все значения сериализуемы (базовые типы Python)
+            result = {
+                "sku": int(sku),
+                "name": str(static_data.get('imt_name') or static_data.get('subj_name') or f"Товар {sku}"),
+                "image": str(static_data.get('image_url') or ""),
+                "rating": float(rating_value),
+                "reviews": reviews,  # Уже список словарей с базовыми типами
+                "reviews_count": int(len(reviews)),
                 "status": "success"
             }
+            
+            # Проверка сериализуемости перед возвратом
+            try:
+                json.dumps(result)
+            except (TypeError, ValueError) as ser_error:
+                logger.error(f"Result not serializable: {ser_error}")
+                return {"status": "error", "message": "Ошибка сериализации данных"}
+            
+            return result
 
         except Exception as e:
+            logger.error(f"get_full_product_info error for SKU {sku}: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):

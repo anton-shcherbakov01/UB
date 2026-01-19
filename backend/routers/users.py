@@ -10,6 +10,7 @@ from database import get_db, User, MonitoredItem, SearchHistory
 from dependencies import get_current_user
 from wb_api_service import wb_api_service
 from tasks import sync_financial_reports
+from config.plans import TIERS, ADDONS, get_limit
 
 router = APIRouter(prefix="/api/user", tags=["User"])
 
@@ -37,6 +38,12 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         delta = user.subscription_expires_at - datetime.utcnow()
         days_left = max(0, delta.days)
 
+    # Get quota usage info
+    from config.plans import get_limit
+    ai_limit = get_limit(user.subscription_plan, "ai_requests")
+    cluster_limit = get_limit(user.subscription_plan, "cluster_requests")
+    review_limit = get_limit(user.subscription_plan, "review_analysis_limit")
+    
     return {
         "id": user.telegram_id,
         "username": user.username,
@@ -47,7 +54,15 @@ async def get_profile(user: User = Depends(get_current_user), db: AsyncSession =
         "has_wb_token": bool(user.wb_api_token),
         "wb_token_preview": masked_token,
         "days_left": days_left,
-        "subscription_expires_at": user.subscription_expires_at
+        "subscription_expires_at": user.subscription_expires_at,
+        "ai_requests_used": user.ai_requests_used or 0,
+        "ai_requests_limit": ai_limit,
+        "cluster_requests_limit": cluster_limit,
+        "cluster_requests_used": user.cluster_requests_used or 0,
+        "review_analysis_limit": review_limit,
+        "extra_ai_balance": user.extra_ai_balance or 0,
+        "offer_accepted": user.offer_accepted or False,
+        "privacy_accepted": user.privacy_accepted or False
     }
 
 @router.post("/token")
@@ -112,9 +127,19 @@ async def get_token_scopes(user: User = Depends(get_current_user)):
         # Обновляем дефолтные значения теми, что пришли (если пришли)
         # Логика: если в real_scopes есть ключ - берем его значение, иначе False
         result = {key: real_scopes.get(key, False) for key in default_scopes}
+        
+        # Определяем режим API (чтение/запись)
+        try:
+            api_mode = await wb_api_service.get_api_mode(user.wb_api_token)
+            result["api_mode"] = api_mode
+        except Exception:
+            # Если не удалось определить режим, по умолчанию считаем read_only
+            result["api_mode"] = "read_only"
+        
         return result
     except Exception:
         # Если ошибка связи с WB, возвращаем все False
+        default_scopes["api_mode"] = "read_only"
         return default_scopes
 
 @router.delete("/token")
@@ -127,57 +152,116 @@ async def delete_wb_token(
     await db.commit()
     return {"status": "deleted"}
 
+@router.post("/accept-offer")
+async def accept_offer(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Принять публичную оферту"""
+    from datetime import datetime
+    
+    user.offer_accepted = True
+    user.offer_accepted_at = datetime.utcnow()
+    db.add(user)
+    await db.commit()
+    
+    return {"status": "accepted", "message": "Оферта принята"}
+
+@router.post("/accept-privacy")
+async def accept_privacy(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Принять политику конфиденциальности"""
+    from datetime import datetime
+    
+    user.privacy_accepted = True
+    user.privacy_accepted_at = datetime.utcnow()
+    db.add(user)
+    await db.commit()
+    
+    return {"status": "accepted", "message": "Политика конфиденциальности принята"}
+
 @router.get("/tariffs")
 async def get_tariffs(user: User = Depends(get_current_user)):
     """
-    Возвращает список тарифов с переведенными названиями и описаниями.
+    Возвращает список тарифов из config/plans.py с переведенными названиями и описаниями.
     """
-    return [
-        {
-            "id": "free",
-            "name": "Старт",  # Было "Start"
-            "price": "0 ₽",
-            "stars": 0,
-            "features": [
+    tariffs = []
+    
+    # Map plan IDs to display info - все сервисы приложения
+    plan_mapping = {
+        "start": {
+            "id": "start",
+            "features_display": [
                 "История: 7 дней",
-                "10 AI-запросов / мес",
-                "Базовая аналитика",
-                "3 товара в отслеживании"
-            ],
-            "current": user.subscription_plan == "free",
-            "is_best": False
+                "5 AI-запросов / мес",
+                "Слоты и уведомления",
+                "P&L (демо: вчера)",
+                "Анализ поставок",
+                "SEO генератор",
+                "SEO трекер",
+                "AI анализ отзывов (30 отзывов)"
+            ]
         },
-        {
-            "id": "pro",
-            "name": "Аналитик",  # Было "Analyst"
-            "price": "1490 ₽",
-            "stars": 1000,
-            "features": [
+        "analyst": {
+            "id": "analyst",
+            "features_display": [
                 "История: 60 дней",
-                "500 AI-запросов / мес",
-                "ABC/XYZ анализ",
-                "Unit-экономика (P&L)",
-                "50 товаров в отслеживании"
+                "100 AI-запросов / мес",
+                "50 кластеризаций / мес",
+                "Слоты и уведомления",
+                "P&L (полный доступ) + PDF",
+                "Unit экономика + PDF",
+                "Анализ поставок + PDF",
+                "SEO генератор + PDF",
+                "SEO трекер + PDF",
+                "AI анализ отзывов (100 отзывов) + PDF",
+                "Форензика возвратов + PDF"
             ],
-            "current": user.subscription_plan == "pro",
             "is_best": True
         },
-        {
-            "id": "business",
-            "name": "Стратег",  # Было "Strategist"
-            "price": "4990 ₽",
-            "stars": 4500,
-            "features": [
+        "strategist": {
+            "id": "strategist",
+            "features_display": [
                 "История: 365 дней",
-                "Безлимитный AI",
-                "API доступ (все методы)",
-                "Личный менеджер",
-                "500 товаров в отслеживании"
-            ],
-            "current": user.subscription_plan == "business",
-            "is_best": False
+                "1000 AI-запросов / мес",
+                "200 кластеризаций / мес",
+                "Слоты и уведомления",
+                "P&L экспорт + PDF",
+                "Unit экономика + PDF",
+                "Анализ поставок + PDF",
+                "SEO генератор + PDF",
+                "SEO трекер + PDF",
+                "AI анализ отзывов (200 отзывов) + PDF",
+                "Форензика + Cash Gap + PDF",
+                "Приоритетный опрос"
+            ]
         }
-    ]
+    }
+    
+    for plan_key in ["start", "analyst", "strategist"]:
+        plan_config = TIERS.get(plan_key, {})
+        if not plan_config:
+            continue
+            
+        plan_info = plan_mapping.get(plan_key, {})
+        price = plan_config.get("price", 0)
+        
+        # Конвертация цены в звезды (1₽ = 1 звезда)
+        stars_amount = price if price > 0 else 0
+        
+        tariffs.append({
+            "id": plan_key,
+            "name": plan_config.get("name", plan_key).replace(" (Free)", "").replace(" (Pro)", "").replace(" (Business)", ""),
+            "price": f"{price} ₽" if price > 0 else "0 ₽",
+            "stars": stars_amount,  # Количество звезд для оплаты (1₽ = 1 звезда)
+            "features": plan_info.get("features_display", []),
+            "current": user.subscription_plan == plan_key,
+            "is_best": plan_info.get("is_best", False)
+        })
+    
+    return tariffs
 # --- History Routes (без изменений, кратко) ---
 @router.get("/history")
 async def get_user_history(

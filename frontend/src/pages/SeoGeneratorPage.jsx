@@ -1,9 +1,30 @@
-import React, { useState } from 'react';
-import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Wand2, Clock, Loader2, Sparkles, Copy, X, BrainCircuit, Layers, Table, HelpCircle, FileText, Download, Lock, CheckCircle, AlertCircle, XCircle, ArrowLeft } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import HistoryModule from '../components/HistoryModule';
 
-const SeoGeneratorPage = () => {
+// Toast Notification Component
+const Toast = ({ message, type = 'error', onClose }) => {
+    useEffect(() => {
+        const timer = setTimeout(() => onClose(), 5000);
+        return () => clearTimeout(timer);
+    }, [onClose]);
+
+    const bgColor = type === 'success' ? 'bg-emerald-500' : type === 'info' ? 'bg-blue-500' : 'bg-red-500';
+    const Icon = type === 'success' ? CheckCircle : type === 'info' ? AlertCircle : XCircle;
+
+    return (
+        <div className={`fixed top-4 right-4 ${bgColor} text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 z-50 animate-in slide-in-from-top-5 fade-in min-w-[300px] max-w-[90vw]`}>
+            <Icon size={20} className="shrink-0" />
+            <p className="flex-1 text-sm font-medium">{message}</p>
+            <button onClick={onClose} className="shrink-0 hover:opacity-70 transition-opacity">
+                <X size={16} />
+            </button>
+        </div>
+    );
+};
+
+const SeoGeneratorPage = ({ user, onUserUpdate }) => {
     const [step, setStep] = useState(1);
     const [sku, setSku] = useState('');
     const [loading, setLoading] = useState(false);
@@ -24,6 +45,13 @@ const SeoGeneratorPage = () => {
     const [error, setError] = useState('');
     const [historyOpen, setHistoryOpen] = useState(false);
     const [pdfLoading, setPdfLoading] = useState(false);
+    
+    // Toast State
+    const [toast, setToast] = useState(null);
+    
+    const showToast = (message, type = 'error') => {
+        setToast({ message, type });
+    };
 
     const toneOptions = ["Продающий", "Информативный", "Дерзкий", "Формальный", "Дружелюбный"];
 
@@ -44,31 +72,58 @@ const SeoGeneratorPage = () => {
         setLoading(true);
         setStatus('Загрузка BERT модели...');
         try {
-            const res = await fetch(`${API_URL}/api/seo/cluster`, { 
+            const res = await fetch(`${API_URL}/api/seo/cluster`, {
                 method: 'POST',
-                headers: getTgHeaders(),
+                headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sku: Number(sku), keywords })
             });
             const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.message || 'Ошибка запуска кластеризации');
             const taskId = data.task_id;
-            
+            if (!taskId) throw new Error('Не получен task_id');
+
+            const queueInfo = { position: data.position ?? 0, is_priority: data.is_priority ?? false };
             let attempts = 0;
-            while(attempts < 30) {
+            while (attempts < 40) {
                 await new Promise(r => setTimeout(r, 2000));
-                const sRes = await fetch(`${API_URL}/api/monitor/status/${taskId}`);
-                const sData = await sRes.json();
-                
-                if (sData.status === 'SUCCESS') {
-                    setClusters(sData.data.clusters);
-                    setLoading(false);
+                try {
+                    const qRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
+                    if (qRes.ok) {
+                        const q = await qRes.json();
+                        if (q.position != null) queueInfo.position = q.position;
+                        queueInfo.is_priority = q.is_priority ?? queueInfo.is_priority;
+                    }
+                } catch (_) {}
+                const pos = queueInfo.position;
+                setStatus(queueInfo.is_priority
+                    ? `Приоритет: поз. ${pos}… (${attempts * 2}с)`
+                    : pos > 0 ? `Очередь: поз. ${pos}… (${attempts * 2}с)` : `Кластеризация… (${attempts * 2}с)`);
+
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
+                if (!sRes.ok) { attempts++; continue; }
+                const sData = await sRes.json().catch(() => ({}));
+                if ((sData.status || '').toUpperCase() === 'SUCCESS') {
+                    const raw = sData.data || {};
+                    if (raw.error) {
+                        setError('Кластеризация: ' + raw.error);
+                        showToast('Кластеризация: ' + raw.error, 'error');
+                        return;
+                    }
+                    const clustersData = raw.clusters ?? (Array.isArray(raw) ? raw : []);
+                    setClusters(Array.isArray(clustersData) ? clustersData : (clustersData?.clusters || []));
+                    showToast(`Кластеризация завершена: ${clustersData.length || 0} групп`, 'success');
+                    onUserUpdate?.();
                     return;
                 }
-                if (sData.status === 'FAILURE') throw new Error(sData.error);
+                if ((sData.status || '').toUpperCase() === 'FAILURE') throw new Error(sData.error || 'Ошибка кластеризации');
                 if (sData.info) setStatus(sData.info);
                 attempts++;
             }
+            throw new Error('Превышено время ожидания');
         } catch (e) {
-            setError('Ошибка кластеризации: ' + e.message);
+            const errorMsg = e.message || 'Ошибка кластеризации';
+            setError(errorMsg);
+            showToast(errorMsg, 'error');
         } finally {
             setLoading(false);
             setStatus('');
@@ -90,90 +145,147 @@ const SeoGeneratorPage = () => {
         setLoading(true);
         setStatus('Генерация GEO контента...');
         try {
-            const res = await fetch(`${API_URL}/api/seo/generate`, { method: 'POST', headers: getTgHeaders(), body: JSON.stringify({ sku: Number(sku), keywords, tone, title_len: titleLen, desc_len: descLen }) });
+            const res = await fetch(`${API_URL}/api/seo/generate`, {
+                method: 'POST',
+                headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sku: Number(sku), keywords, tone, title_len: titleLen, desc_len: descLen })
+            });
             const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.message || 'Не удалось запустить генерацию');
             const taskId = data.task_id;
+            if (!taskId) throw new Error('Не получен task_id');
+
+            const queueInfo = { position: data.position ?? 0, is_priority: data.is_priority ?? false };
             let attempts = 0;
-            while(attempts < 60) {
+            while (attempts < 60) {
                 await new Promise(r => setTimeout(r, 3000));
-                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`);
-                const sData = await sRes.json();
-                if (sData.status === 'SUCCESS') {
-                    // Проверяем наличие ошибки AI в результатах
-                    if (sData.data?.generated_content?._error) {
-                        setError(`⚠️ Ошибка AI: ${sData.data.generated_content._error}`);
+                try {
+                    const qRes = await fetch(`${API_URL}/api/ai/queue/${taskId}`, { headers: getTgHeaders() });
+                    if (qRes.ok) {
+                        const q = await qRes.json();
+                        if (q.position != null) queueInfo.position = q.position;
+                        queueInfo.is_priority = q.is_priority ?? queueInfo.is_priority;
                     }
-                    setResult(sData.data.generated_content); 
-                    setStep(3); 
-                    break;
+                } catch (_) {}
+                const pos = queueInfo.position;
+                setStatus(queueInfo.is_priority
+                    ? `Приоритет: поз. ${pos}… (${attempts * 3}с)`
+                    : pos > 0 ? `Очередь: поз. ${pos}… (${attempts * 3}с)` : `Генерация GEO… (${attempts * 3}с)`);
+
+                const sRes = await fetch(`${API_URL}/api/ai/result/${taskId}`, { headers: getTgHeaders() });
+                if (!sRes.ok) { attempts++; continue; }
+                const sData = await sRes.json().catch(() => ({}));
+                if ((sData.status || '').toUpperCase() === 'SUCCESS') {
+                    const payload = sData.data || sData.result;
+                    if (payload?.generated_content?._error) setError(`⚠️ Ошибка AI: ${payload.generated_content._error}`);
+                    setResult(payload?.generated_content || payload);
+                    setStep(3);
+                    onUserUpdate?.();
+                    return;
                 }
-                if (sData.status === 'FAILURE') {
-                    const errorMsg = sData.error || sData.data?.error || "Ошибка генерации";
-                    throw new Error(errorMsg);
-                }
+                if ((sData.status || '').toUpperCase() === 'FAILURE') throw new Error(sData.error || sData.data?.error || 'Ошибка генерации');
+                if (sData.info) setStatus(sData.info);
                 attempts++;
             }
-        } catch (e) { setError(e.message); } finally { setLoading(false); setStatus(''); }
+            throw new Error('Превышено время ожидания');
+        } catch (e) { setError(e.message || ''); } finally { setLoading(false); setStatus(''); }
     };
 
     const downloadPdf = async () => {
-        if (!result) return;
+        if (!result || !sku) return;
+        if (user?.plan === 'start') {
+            showToast("Скачивание PDF доступно только на тарифе Аналитик или выше", 'info');
+            return;
+        }
         setPdfLoading(true);
         try {
-            const payload = {
-                sku: String(sku),
-                title: result.title || "",
-                description: result.description || "",
-                features: result.structured_features || {},
-                faq: result.faq || []
-            };
-
-            if (user?.plan === 'free') {
-                alert("Скачивание PDF доступно только на тарифе PRO или Business");
+            // Как в AIAnalysisPage: window.open для мобильных (blob+click часто не срабатывает)
+            const token = window.Telegram?.WebApp?.initData || '';
+            if (!token) {
+                showToast("Ошибка авторизации. Перезагрузите страницу.", 'error');
                 return;
             }
-
-            const response = await fetch(`${API_URL}/api/report/seo-pdf/generate`, {
-                method: 'POST',
-                headers: {
-                    ...getTgHeaders(),
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) throw new Error("Ошибка генерации PDF");
-
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `SEO_Report_${sku}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            const url = `${API_URL}/api/report/seo-pdf/${sku}?x_tg_data=${encodeURIComponent(token)}`;
+            window.open(url, '_blank');
         } catch (e) {
-            alert("Не удалось скачать PDF: " + e.message);
+            showToast("Не удалось скачать PDF: " + (e.message || ''), 'error');
         } finally {
             setPdfLoading(false);
         }
     };
 
-    const CopyButton = ({ text }) => (
-        <button onClick={() => {navigator.clipboard.writeText(text); alert("Скопировано!");}} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 rounded-lg">
-            <Copy size={16} />
-        </button>
-    );
+    const CopyButton = ({ text, onCopy }) => {
+        const handleCopy = () => {
+            navigator.clipboard.writeText(text);
+            if (onCopy) onCopy();
+            else showToast("Скопировано!", 'success');
+        };
+        return (
+            <button onClick={handleCopy} className="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 rounded-lg">
+                <Copy size={16} />
+            </button>
+        );
+    };
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
-            <div className="flex justify-between items-center">
-                <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-3xl text-white shadow-xl shadow-orange-200 flex-1 mr-4">
-                    <h1 className="text-2xl font-black flex items-center gap-2"><Wand2 className="text-yellow-200" /> SEO Gen</h1>
-                    <p className="text-sm opacity-90 mt-2">GEO-оптимизация 2026</p>
-                </div>
-                <button onClick={() => setHistoryOpen(true)} className="bg-white p-4 rounded-3xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors h-full"><Clock size={24}/></button>
+            {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+            
+            {/* Header styled like SupplyPage */}
+            <div className="flex justify-between items-stretch h-20 mb-6">
+                 {/* Main Header Card */}
+                 <div className="bg-gradient-to-r from-orange-500 to-pink-500 p-6 rounded-[28px] text-white shadow-xl shadow-orange-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
+                    {/* Title Area */}
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Wand2 className="text-yellow-200" size={24} /> SEO Gen
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">GEO-оптимизация 2026</p>
+                    </div>
+
+                    {/* History Button inside Header */}
+                    <div className="relative z-10">
+                         <button 
+                            onClick={() => setHistoryOpen(true)}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="История"
+                        >
+                            <Clock size={20} />
+                        </button>
+                    </div>
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => window.history.length > 1 ? window.history.back() : window.location.href = '/'} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
+                        title="Назад"
+                     >
+                         <ArrowLeft size={24}/>
+                     </button>
+                     
+                     <div className="group relative h-full">
+                        <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
+                            <HelpCircle size={24}/>
+                        </button>
+                        {/* Tooltip positioned to the left of the sidebar */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-72 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
+                            <div className="font-bold mb-2">SEO Генератор</div>
+                            <p className="mb-2">Создавайте оптимизированные описания товаров с помощью AI:</p>
+                            <ul className="space-y-1 text-[10px] list-disc list-inside">
+                                <li><strong>Кластеризация ключевых слов</strong> - группировка по темам (Аналитик+)</li>
+                                <li><strong>Генерация контента</strong> - создание заголовков и описаний</li>
+                                <li><strong>Выбор тона</strong> - продающий, информативный, дерзкий и др. (Аналитик+)</li>
+                                <li><strong>Настройка длины</strong> - контроль размера заголовка и описания</li>
+                            </ul>
+                            <p className="mt-2 text-[10px]">Используйте кластеризацию для лучшей структуры ключевых слов перед генерацией.</p>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
+                        </div>
+                     </div>
+                 </div>
             </div>
             
             <HistoryModule type="seo" isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
@@ -206,13 +318,39 @@ const SeoGeneratorPage = () => {
                             <h3 className="font-bold text-lg">Шаг 2. Семантика</h3>
                             <button 
                                 onClick={handleClusterKeywords} 
-                                disabled={loading || clusters}
-                                className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-2 transition-all ${clusters ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'}`}
+                                disabled={loading || clusters || user?.plan === 'start'}
+                                title={user?.plan === 'start' ? 'Доступно на тарифе Аналитик и выше' : ''}
+                                className={`text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-2 transition-all ${user?.plan === 'start' ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : clusters ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200'}`}
                             >
-                                {loading ? <Loader2 size={14} className="animate-spin"/> : <BrainCircuit size={14}/>}
-                                {clusters ? 'Сгруппировано' : 'AI Кластеризация'}
+                                {user?.plan === 'start' ? <Lock size={14}/> : loading ? <Loader2 size={14} className="animate-spin"/> : <BrainCircuit size={14}/>}
+                                {clusters ? 'Сгруппировано' : user?.plan === 'start' ? 'AI Кластеризация (Аналитик+)' : 'AI Кластеризация'}
                             </button>
                         </div>
+
+                        {user && (
+                            <>
+                                <div className="p-3 bg-gradient-to-br from-orange-50 to-pink-50 rounded-xl border border-orange-100">
+                                    <div className="flex justify-between items-center text-xs">
+                                        <span className="font-bold text-orange-800">AI запросы</span>
+                                        <span className="font-black text-orange-900">{user.ai_requests_used ?? 0} / {user.ai_requests_limit ?? 0}</span>
+                                    </div>
+                                    <div className="h-1.5 bg-orange-100 rounded-full mt-1 overflow-hidden">
+                                        <div className="h-full bg-orange-500 rounded-full" style={{ width: `${Math.min(100, ((user.ai_requests_used || 0) / (user.ai_requests_limit || 1)) * 100)}%` }} />
+                                    </div>
+                                </div>
+                                {user.cluster_requests_limit !== undefined && user.cluster_requests_limit > 0 && (
+                                    <div className="p-3 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                                        <div className="flex justify-between items-center text-xs">
+                                            <span className="font-bold text-indigo-800">Кластеризация</span>
+                                            <span className="font-black text-indigo-900">{user.cluster_requests_used ?? 0} / {user.cluster_requests_limit ?? 0}</span>
+                                        </div>
+                                        <div className="h-1.5 bg-indigo-100 rounded-full mt-1 overflow-hidden">
+                                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, ((user.cluster_requests_used || 0) / (user.cluster_requests_limit || 1)) * 100)}%` }} />
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
 
                         {status && <div className="text-xs text-indigo-600 font-medium bg-indigo-50 p-2 rounded-lg text-center">{status}</div>}
                         
@@ -265,17 +403,40 @@ const SeoGeneratorPage = () => {
                                 <input type="range" min="500" max="3000" step="100" value={descLen} onChange={e=>setDescLen(Number(e.target.value))} className="w-full accent-indigo-600 h-1 bg-slate-100 rounded-lg appearance-none cursor-pointer"/>
                             </div>
 
-                            <h3 className="font-bold text-sm mb-3">Tone of Voice</h3>
+                            <div className="flex items-center justify-between mb-2">
+                                <h3 className="font-bold text-sm">Tone of Voice</h3>
+                                {user?.plan === 'start' && <span className="text-[10px] text-amber-600 flex items-center gap-1"><Lock size={10}/> Выбор тона на Аналитик+</span>}
+                            </div>
                             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                                {toneOptions.map(t => (
-                                    <button 
-                                        key={t}
-                                        onClick={() => setTone(t)}
-                                        className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all ${tone === t ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-100 bg-white text-slate-500'}`}
-                                    >
-                                        {t}
-                                    </button>
-                                ))}
+                                {toneOptions.map(t => {
+                                    const locked = user?.plan === 'start' && t !== 'Продающий';
+                                    return (
+                                        <button 
+                                            key={t}
+                                            onClick={() => !locked && setTone(t)}
+                                            disabled={locked}
+                                            title={locked ? 'Доступно на тарифе Аналитик+' : ''}
+                                            className={`px-4 py-2 rounded-xl text-xs font-bold border whitespace-nowrap transition-all relative group ${
+                                                locked 
+                                                    ? 'border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 text-amber-600 cursor-not-allowed shadow-sm' 
+                                                    : tone === t 
+                                                        ? 'border-orange-500 bg-orange-50 text-orange-600 shadow-md' 
+                                                        : 'border-slate-100 bg-white text-slate-500 hover:border-orange-200 hover:bg-orange-50'
+                                            }`}
+                                        >
+                                            {locked && (
+                                                <Lock size={12} className="inline-block mr-1.5 opacity-70" />
+                                            )}
+                                            {t}
+                                            {locked && (
+                                                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-slate-900 text-white text-[10px] rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
+                                                    Доступно на тарифе Аналитик+
+                                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
+                                                </div>
+                                            )}
+                                        </button>
+                                    );
+                                })}
                             </div>
                         </div>
 

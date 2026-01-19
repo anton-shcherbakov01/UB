@@ -13,8 +13,12 @@ services:
     volumes:
       - postgres_data_final:/var/lib/postgresql/data
     ports: ["5433:5432"]
+    command: postgres -c shared_buffers=1GB
     healthcheck:
-      test: ["NONE"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wb_monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     logging:
       driver: "json-file"
       options:
@@ -30,6 +34,8 @@ services:
       - "9000:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      # ВОЗВРАЩАЕМ КОНФИГ: Теперь он оптимизирован и безопасен
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.d/my_custom_config.xml:ro
     environment:
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
@@ -39,6 +45,12 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user default --password 123 --query 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
@@ -51,6 +63,11 @@ services:
     restart: always
     ports: ["6379:6379"]
     command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     logging:
       driver: "json-file"
       options:
@@ -76,21 +93,19 @@ services:
       - RUN_MIGRATIONS=true
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # Явно задаем настройки подключения к ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=123
       - HEADLESS=True
-      # DEBUG_MODE=True  <-- ЗАКОММЕНТИРОВАНО (Нормальный режим)
     depends_on: 
       db:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -105,7 +120,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    command: celery -A celery_app worker --loglevel=info --concurrency=5
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
@@ -116,7 +131,6 @@ services:
       - C_FORCE_ROOT=1
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
-      # И здесь тоже явно задаем настройки ClickHouse:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
       - CLICKHOUSE_DB=wb_analytics
@@ -125,11 +139,51 @@ services:
       - HEADLESS=True
     depends_on: 
       db:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  selenium_worker:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_selenium_worker
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    # Важно: concurrency=1 для Selenium на 16GB. Не ставь больше.
+    command: celery -A celery_app worker --loglevel=info --concurrency=1 -Q selenium
+    volumes: 
+      - ./backend:/app
+      - ./backend/proxy_ext:/app/proxy_ext
+    shm_size: '2gb'
+    env_file:
+      - ./backend/.env
+    environment:
+      - RUN_MIGRATIONS=false
+      - C_FORCE_ROOT=1
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+asyncpg://postgres:wb_secret_password@db:5432/wb_monitor
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=wb_analytics
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=123
+      - HEADLESS=True
+    depends_on: 
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -157,7 +211,9 @@ services:
       - CLICKHOUSE_PASSWORD=123
     depends_on: 
       redis:
-        condition: service_started
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:

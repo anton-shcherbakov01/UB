@@ -117,6 +117,9 @@ class EconomicsModule:
         
         try:
             ch_client = ch_service.get_client()
+            if not ch_client:
+                logger.warning("ClickHouse client not available for P&L query")
+                return []
             result = ch_client.query(ch_query, parameters=params)
             rows = result.result_rows
         except Exception as e:
@@ -360,6 +363,9 @@ class EconomicsModule:
         
         try:
             ch_client = ch_service.get_client()
+            if not ch_client:
+                logger.warning("ClickHouse client not available for forensics query")
+                return {"status": "error", "message": "ClickHouse connection unavailable"}
             rows_sizes = ch_client.query(ch_query_sizes, parameters=params).result_rows
             rows_wh = ch_client.query(ch_query_warehouses, parameters=params).result_rows
         except Exception as e:

@@ -10,6 +10,8 @@ from fpdf import FPDF
 
 from database import get_db, User, SearchHistory
 from dependencies import get_current_user
+from dependencies.quota import QuotaCheck, increment_usage
+from services.queue_service import queue_service
 from tasks import analyze_reviews_task, get_status
 # Используем parser_service, который правильно работает с async
 from parser_service import parser_service
@@ -26,33 +28,101 @@ async def check_product_reviews(sku: int, user: User = Depends(get_current_user)
     try:
         # Используем async метод через parser_service
         info = await parser_service.get_review_stats(sku)
-        if not info or info.get("status") == "error":
-            raise HTTPException(404, info.get("message", "Товар не найден"))
+        if not info:
+            raise HTTPException(status_code=404, detail="Товар не найден или данные недоступны")
+        if info.get("status") == "error":
+            error_msg = info.get("message", "Ошибка при получении данных о товаре")
+            logger.warning(f"Product check error for SKU {sku}: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
         return info
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Check error: {e}", exc_info=True)
-        raise HTTPException(500, f"Ошибка проверки товара: {str(e)}")
+        logger.error(f"Check error for SKU {sku}: {e}", exc_info=True)
+        # Возвращаем более понятное сообщение об ошибке
+        error_message = "Не удалось проверить товар. Попробуйте позже или проверьте правильность артикула."
+        raise HTTPException(status_code=500, detail=error_message)
 
 @router.post("/ai/analyze/{sku}")
 async def start_ai_analysis(
     sku: int, 
     limit: int = Query(100, ge=10, description="Max reviews to parse"),
+    user: User = Depends(QuotaCheck("ai_requests")),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Start AI analysis of product reviews.
+    Requires ai_requests quota.
+    """
+    try:
+        # Проверка доступности Celery и создание задачи с обработкой ошибок
+        task = None
+        try:
+            task = analyze_reviews_task.delay(sku, limit, user.id)
+            if not task:
+                raise HTTPException(status_code=500, detail="Не удалось создать задачу анализа: задача не создана")
+            if not task.id or not isinstance(task.id, str):
+                raise HTTPException(status_code=500, detail="Не удалось создать задачу анализа: невалидный task_id")
+        except HTTPException:
+            raise
+        except Exception as celery_error:
+            logger.error(f"Celery task creation failed for SKU {sku}, user {user.id}: {celery_error}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(celery_error)}")
+        
+        # Add task to queue and get position (with error handling)
+        queue_info = {
+            "queue": "normal",
+            "position": 0,
+            "is_priority": False
+        }
+        try:
+            queue_info = queue_service.add_task_to_queue(
+                task_id=task.id,
+                user_id=user.id,
+                user_plan=user.subscription_plan,
+                task_type="ai_analysis"
+            )
+        except Exception as queue_error:
+            logger.warning(f"Queue service error (non-critical): {queue_error}")
+            # Continue without queue info if queue service fails
+        
+        # Только после успешного создания задачи списываем квоту
+        try:
+            await increment_usage(user, "ai_requests", amount=1, db=db)
+        except Exception as usage_error:
+            logger.error(f"Failed to increment usage for user {user.id}: {usage_error}", exc_info=True)
+            # Не прерываем выполнение, но логируем ошибку
+        
+        return {
+            "status": "accepted", 
+            "task_id": task.id,
+            "queue": queue_info.get("queue", "normal"),
+            "position": queue_info.get("position", 0),
+            "is_priority": queue_info.get("is_priority", False)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting AI analysis for SKU {sku}, user {user.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка запуска анализа: {str(e)}")
+
+@router.get("/ai/queue/{task_id}")
+async def get_queue_position(
+    task_id: str,
     user: User = Depends(get_current_user)
 ):
-    # limit теперь приходит точный, выбранный пользователем на основе реального кол-ва
-    task = analyze_reviews_task.delay(sku, limit, user.id)
-    return {"status": "accepted", "task_id": task.id}
+    """Get current position of task in queue"""
+    position_info = queue_service.get_task_position(task_id, user.id)
+    if position_info:
+        return position_info
+    return {"position": None, "status": "processing_or_completed"}
 
 @router.get("/ai/result/{task_id}")
 def get_ai_result(task_id: str):
     return get_status(task_id)
 
 @router.get("/report/ai-pdf/{sku}")
-async def generate_ai_pdf(sku: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    if user.subscription_plan == "free":
-        raise HTTPException(403, "Upgrade to PRO")
+async def generate_ai_pdf(sku: int, user: User = Depends(QuotaCheck(feature_flag="pnl_full")), db: AsyncSession = Depends(get_db)):
 
     stmt = select(SearchHistory).where(
         SearchHistory.user_id == user.id, 

@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
     Search, MapPin, Rocket, Info, CheckCircle, 
     AlertTriangle, Loader2, RotateCcw, HelpCircle, 
-    Target, Globe, Zap, ArrowLeft
+    Target, Globe, Zap, ArrowLeft, FileDown
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom'; // Импортируем хук
 import { API_URL, getTgHeaders } from '../config';
 
-const SEOTrackerPage = ({ onNavigate }) => {
+const SEOTrackerPage = () => { // Убрали onNavigate из пропсов
+    const navigate = useNavigate(); // Используем хук для навигации
     const [sku, setSku] = useState('');
     const [query, setQuery] = useState('');
     const [geo, setGeo] = useState('moscow');
@@ -49,38 +51,84 @@ const SEOTrackerPage = ({ onNavigate }) => {
         }
     };
 
+    // Функция скачивания PDF
+    const handleDownload = async () => {
+        try {
+            const params = new URLSearchParams();
+            if (sku) params.append('sku', sku);
+            if (query) params.append('keyword', query);
+            const x_tg_data = new URLSearchParams(window.location.search).get('tgWebAppData') || '';
+            if (x_tg_data) params.append('x_tg_data', x_tg_data);
+            const url = `${API_URL}/api/seo/report/tracker-pdf?${params.toString()}`;
+            window.open(url, '_blank');
+        } catch (e) {
+            alert('Не удалось скачать PDF: ' + (e.message || ''));
+        }
+    };
+
     return (
-        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
+        <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4 bg-[#F4F4F9] min-h-screen">
             
-            {/* HEADER (В едином стиле с AI Стратегом) */}
-            <div className="flex justify-between items-stretch h-20">
-                <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-4 rounded-3xl text-white shadow-xl shadow-indigo-200 flex-1 mr-3 flex flex-col justify-center">
-                    <h1 className="text-xl font-black flex items-center gap-2">
-                        <Rocket className="text-cyan-300" size={20} /> SEO Радар
-                    </h1>
-                    <p className="text-[10px] opacity-80 mt-1 uppercase tracking-wider font-bold">Real-time Rank Tracking</p>
-                </div>
-                
-                <div className="flex flex-col gap-2 h-full">
-                    <button 
-                        onClick={() => setShowGeoInfo(!showGeoInfo)}
-                        className={`p-3 rounded-2xl shadow-sm transition-all flex-1 flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400'}`}
-                    >
-                        <HelpCircle size={20}/>
-                    </button>
+            {/* Unified Header */}
+            <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
+                 <div className="bg-gradient-to-br from-indigo-600 to-blue-600 p-5 rounded-[28px] text-white shadow-xl shadow-indigo-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500">
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Rocket size={24} className="text-cyan-300"/>
+                            SEO Радар
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
+                            Real-time Rank Tracking
+                        </p>
+                    </div>
+
+                    {/* PDF Download Button inside Header */}
+                    <div className="relative z-10">
+                        <button 
+                            onClick={handleDownload}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm"
+                            title="Скачать PDF отчёт"
+                        >
+                             <FileDown size={20}/>
+                        </button>
+                    </div>
                     
-                    {result && (
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => navigate('/')} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100"
+                        title="Назад на главную"
+                      >
+                          <ArrowLeft size={24}/>
+                      </button>
+                      
+                      <div className="group relative h-full">
+                        <button 
+                            onClick={() => setShowGeoInfo(!showGeoInfo)}
+                            className={`h-full w-full rounded-2xl shadow-sm transition-colors flex items-center justify-center active:scale-95 border ${showGeoInfo ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-100 text-slate-400 hover:text-indigo-600'}`}
+                        >
+                            <HelpCircle size={24}/>
+                        </button>
+                      </div>
+                      
+                      {result && (
                         <button 
                             onClick={handleReset}
-                            className="bg-slate-100 p-3 rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex-1 flex items-center justify-center active:scale-95"
+                            className="bg-slate-100 h-full rounded-2xl shadow-sm text-slate-500 hover:text-red-500 transition-colors flex items-center justify-center active:scale-95"
+                            title="Сбросить"
                         >
                             <RotateCcw size={20}/>
                         </button>
-                    )}
-                </div>
+                      )}
+                 </div>
             </div>
 
-            {/* ГЕО-ПОДСКАЗКА (Выпадающая) */}
+            {/* ГЕО-ПОДСКАЗКА */}
             {showGeoInfo && (
                 <div className="bg-slate-800 text-slate-200 p-4 rounded-3xl shadow-xl animate-in zoom-in-95 duration-200 text-xs leading-relaxed border-b-4 border-indigo-500">
                     <div className="flex items-center gap-2 mb-2 text-indigo-300 font-bold uppercase tracking-widest">
@@ -208,6 +256,36 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                     <b>Совет:</b> Если вы видите рекламную пометку, значит текущая позиция удерживается за счет ставок. Чтобы расти органически, работайте над CTR карточки и скоростью доставки в выбранном ГЕО.
                                 </div>
                             </div>
+                            
+                            {/* Блок изменения региона */}
+                            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <MapPin className="text-indigo-600" size={18}/>
+                                    <span className="text-sm font-bold text-slate-800">Проверить в другом регионе</span>
+                                </div>
+                                <div className="flex gap-3">
+                                    <div className="flex-1 relative">
+                                        <select 
+                                            value={geo} 
+                                            onChange={e => setGeo(e.target.value)}
+                                            className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-2xl font-bold text-sm outline-none border border-slate-100 appearance-none focus:ring-2 ring-indigo-100"
+                                        >
+                                            {regions.length > 0 ? regions.map(r => (
+                                                <option key={r.key} value={r.key}>{r.label}</option>
+                                            )) : <option value="moscow">Москва</option>}
+                                        </select>
+                                        <MapPin className="absolute left-3 top-3.5 text-slate-300" size={18} />
+                                    </div>
+                                    <button 
+                                        onClick={handleCheck}
+                                        disabled={loading}
+                                        className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                    >
+                                        {loading ? <Loader2 className="animate-spin" size={16}/> : <Search size={16}/>}
+                                        Проверить
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     ) : (
                         <div className="bg-white p-8 rounded-[32px] border border-slate-200 text-center shadow-lg">
@@ -219,12 +297,44 @@ const SEOTrackerPage = ({ onNavigate }) => {
                                 Товар не обнаружен в первых 500 результатах. <br/>
                                 Это может быть связано с нулевыми остатками на складах региона <b>{geo}</b> или отсутствием индексации по запросу <b>"{query}"</b>.
                             </div>
-                            <button 
-                                onClick={handleReset}
-                                className="mt-6 text-indigo-600 font-bold text-sm border-b-2 border-indigo-100 pb-1"
-                            >
-                                Попробовать другой запрос
-                            </button>
+                            <div className="space-y-3 mt-6">
+                                <button 
+                                    onClick={handleReset}
+                                    className="text-indigo-600 font-bold text-sm border-b-2 border-indigo-100 pb-1"
+                                >
+                                    Попробовать другой запрос
+                                </button>
+                                
+                                {/* Блок изменения региона для случая "не найдено" */}
+                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left mt-4">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <MapPin className="text-indigo-600" size={16}/>
+                                        <span className="text-xs font-bold text-slate-700">Попробовать другой регион</span>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 relative">
+                                            <select 
+                                                value={geo} 
+                                                onChange={e => setGeo(e.target.value)}
+                                                className="w-full pl-8 pr-4 py-2 bg-white rounded-xl font-bold text-xs outline-none border border-slate-200 appearance-none focus:ring-2 ring-indigo-100"
+                                            >
+                                                {regions.length > 0 ? regions.map(r => (
+                                                    <option key={r.key} value={r.key}>{r.label}</option>
+                                                )) : <option value="moscow">Москва</option>}
+                                            </select>
+                                            <MapPin className="absolute left-2 top-2.5 text-slate-300" size={14} />
+                                        </div>
+                                        <button 
+                                            onClick={handleCheck}
+                                            disabled={loading}
+                                            className="px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                        >
+                                            {loading ? <Loader2 className="animate-spin" size={12}/> : <Search size={12}/>}
+                                            Проверить
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

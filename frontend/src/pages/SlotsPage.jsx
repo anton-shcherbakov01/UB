@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Calendar, Package, Search, Filter, 
     CheckCircle2, Loader2, MapPin, XCircle, 
-    ArrowLeft, Truck, Bell, BellRing, Trash2
+    ArrowLeft, Truck, Bell, BellRing, Trash2, HelpCircle
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -169,40 +169,86 @@ const SlotsPage = ({ user, onNavigate }) => {
         );
     }
 
+    // Colors for the new header
+    const headerGradient = 'from-cyan-600 to-blue-600';
+    const headerShadow = 'shadow-cyan-200';
+
     return (
-        <div className="p-4 pb-32 space-y-4 animate-in slide-in-from-right-4 fade-in">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    {onNavigate && <button onClick={() => onNavigate('home')} className="p-2 bg-white rounded-xl border border-slate-100"><ArrowLeft size={20} className="text-slate-500"/></button>}
-                    <div>
-                        <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">Слоты</h1>
-                        <p className="text-slate-500 text-xs font-medium">Мониторинг приемки</p>
+        <div className="p-4 pb-32 space-y-6 animate-in slide-in-from-right-4 fade-in bg-[#F4F4F9] min-h-screen">
+            
+            {/* Unified Header */}
+            <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
+                 <div className={`bg-gradient-to-br ${headerGradient} p-5 rounded-[28px] text-white shadow-xl ${headerShadow} relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500`}>
+                    <div className="relative z-10">
+                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
+                            <Calendar size={24} className="text-white"/>
+                            Слоты
+                        </h1>
+                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
+                            Мониторинг приемки
+                        </p>
                     </div>
-                </div>
-                {/* Active Monitors Counter */}
-                {monitors.length > 0 && (
-                    <div className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-200">
-                        <BellRing size={14} className="animate-pulse"/>
-                        {monitors.length} на слежении
-                    </div>
-                )}
+
+                    {/* Active Monitors Badge inside Header */}
+                    {monitors.length > 0 && (
+                        <div className="relative z-10 bg-white/20 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 shadow-sm">
+                            <BellRing size={16} className="text-white animate-pulse" />
+                            <span className="text-xs font-bold text-white">{monitors.length} на слежении</span>
+                        </div>
+                    )}
+                    
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                 </div>
+                 
+                 {/* Right Sidebar Buttons */}
+                 <div className="flex flex-col gap-2 w-14 shrink-0">
+                     <button 
+                        onClick={() => onNavigate('home')} 
+                        className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100"
+                        title="Назад"
+                      >
+                          <ArrowLeft size={24}/>
+                      </button>
+                      
+                      <div className="group relative h-full">
+                        <button className="h-full w-full bg-white rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100">
+                            <HelpCircle size={24}/>
+                        </button>
+                        {/* Tooltip */}
+                        <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
+                            <div className="font-bold mb-2 text-cyan-300">Коэффициенты приемки</div>
+                            <p className="mb-2">Коэффициент показывает стоимость приемки (x0 - бесплатно, x1 - база, и т.д.):</p>
+                            <ul className="space-y-1 list-disc list-inside text-[10px] pl-1">
+                                <li><strong>x0</strong> - Бесплатно (зеленый)</li>
+                                <li><strong>x1</strong> - Стандарт (синий)</li>
+                                <li><strong>x2-5</strong> - Повышенный (желтый)</li>
+                                <li><strong>x6+</strong> - Высокий (красный)</li>
+                                <li><strong>—</strong> - Приемка закрыта</li>
+                            </ul>
+                            <div className="mt-2 pt-2 border-t border-slate-700 text-[9px] text-slate-400">
+                                Нажмите на колокольчик у склада, чтобы получать уведомления о появлении бесплатных слотов.
+                            </div>
+                            <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
+                        </div>
+                      </div>
+                 </div>
             </div>
 
             {/* Controls */}
-            <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+            <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-sm space-y-3">
                 <div className="relative">
                     <Search className="absolute left-3 top-3.5 text-slate-400" size={18} />
                     <input 
                         type="text" placeholder="Поиск склада..." value={search} onChange={e => setSearch(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-full pl-10 pr-4 py-3 bg-slate-50 rounded-2xl font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all border border-slate-100"
                     />
                 </div>
                 <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-                    <button onClick={() => setOnlyFree(!onlyFree)} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap border transition-all ${onlyFree ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'}`}>
+                    <button onClick={() => setOnlyFree(!onlyFree)} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap border transition-all active:scale-95 ${onlyFree ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-100' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
                         {onlyFree ? <CheckCircle2 size={14}/> : <Filter size={14}/>} Бесплатные
                     </button>
-                    <button onClick={() => setBoxType(boxType === 'all' ? 'pallet' : boxType === 'pallet' ? 'box' : 'all')} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap bg-white text-slate-600 border border-slate-200">
+                    <button onClick={() => setBoxType(boxType === 'all' ? 'pallet' : boxType === 'pallet' ? 'box' : 'all')} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all active:scale-95">
                         <Package size={14}/> {boxType === 'all' ? 'Все типы' : boxType === 'pallet' ? 'Паллеты' : 'Короба'}
                     </button>
                 </div>
@@ -210,9 +256,12 @@ const SlotsPage = ({ user, onNavigate }) => {
 
             {/* List */}
             {loading && !data.length ? (
-                <div className="py-20 text-center text-slate-400"><Loader2 className="animate-spin mx-auto mb-2 text-indigo-500"/>Обновляем тарифы...</div>
+                <div className="py-20 text-center text-slate-400 flex flex-col items-center">
+                    <Loader2 className="animate-spin mb-2 text-cyan-600" size={32}/>
+                    <span className="text-sm font-medium">Обновляем тарифы...</span>
+                </div>
             ) : processedData.length === 0 ? (
-                <div className="py-20 text-center text-slate-400 font-bold text-sm">Нет данных</div>
+                <div className="py-20 text-center text-slate-400 font-bold text-sm bg-white rounded-3xl border border-dashed border-slate-200">Нет данных по вашему запросу</div>
             ) : (
                 <div className="space-y-3">
                     {processedData.map((wh) => {
@@ -224,7 +273,7 @@ const SlotsPage = ({ user, onNavigate }) => {
                                         <MapPin size={16} className={isMonitored ? "text-indigo-600" : "text-slate-400"} />
                                         <div className="font-bold text-slate-800 text-sm flex items-center gap-2">
                                             {wh.name}
-                                            {wh.isSortingCenter && <span className="bg-slate-200 text-slate-600 text-[9px] px-1.5 rounded font-black">СЦ</span>}
+                                            {wh.isSortingCenter && <span className="bg-slate-200 text-slate-600 text-[9px] px-1.5 py-0.5 rounded font-black">СЦ</span>}
                                         </div>
                                     </div>
                                     <button 
@@ -249,7 +298,7 @@ const SlotsPage = ({ user, onNavigate }) => {
                                             );
                                         })}
                                     </div>
-                                    {isMonitored && <div className="mt-2 text-[10px] text-indigo-600 bg-indigo-50 p-2 rounded text-center font-bold">Бот следит за этим складом (x0)</div>}
+                                    {isMonitored && <div className="mt-2 text-[10px] text-indigo-600 bg-indigo-50 p-2 rounded-xl text-center font-bold flex items-center justify-center gap-1"><CheckCircle2 size={12}/> Бот следит за этим складом (x0)</div>}
                                 </div>
                             </div>
                         );
