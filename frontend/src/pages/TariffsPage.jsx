@@ -1,352 +1,370 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Check, X, CreditCard, Loader2, Sparkles, ShoppingBag, Star } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ArrowLeft, CreditCard, Loader2, Sparkles, ShoppingBag, Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { API_URL, getTgHeaders } from '../config';
+import TariffCard from '../components/TariffCard';
 
 const TariffsPage = ({ onBack }) => {
     const navigate = useNavigate();
     const [tariffs, setTariffs] = useState([]);
-    const [loading, setLoading] = useState(false);
     const [payLoading, setPayLoading] = useState(false);
-    const [paymentMethod, setPaymentMethod] = useState('robokassa'); // 'stars' or 'robokassa'
+    const [paymentMethod, setPaymentMethod] = useState('robokassa'); // 'stars' | 'robokassa'
+    const [processingId, setProcessingId] = useState(null); // ID тарифа/аддона, который сейчас оплачивается
+    
+    // Ссылка на таймер поллинга
+    const pollingRef = useRef(null);
 
+    // --- 1. ИНИЦИАЛИЗАЦИЯ И СЛУШАТЕЛИ ---
     useEffect(() => {
         fetchTariffs();
+
+        // Магия для WebApp: когда юзер возвращается из браузера (после оплаты), обновляем данные
+        const handleFocus = () => {
+            console.log("[App] Focused - refreshing data...");
+            fetchTariffs();
+        };
+
+        window.addEventListener('focus', handleFocus);
+        document.addEventListener('visibilitychange', handleFocus);
+
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+            document.removeEventListener('visibilitychange', handleFocus);
+            stopPolling();
+        };
     }, []);
 
+    // Остановка поллинга
+    const stopPolling = () => {
+        if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+        }
+    };
+
+    // --- 2. ЗАГРУЗКА ДАННЫХ ---
     const fetchTariffs = async () => {
         try {
             const res = await fetch(`${API_URL}/api/user/tariffs`, { headers: getTgHeaders() });
             const data = await res.json();
-            if (Array.isArray(data)) setTariffs(data);
-            return data; // Возвращаем данные для использования в поллинге
+            
+            if (Array.isArray(data)) {
+                const enrichedData = data.map(plan => ({
+                    ...plan,
+                    stars: convertToStars(plan.price),
+                    // Если с бека нет фич, ставим заглушки для красоты
+                    features: plan.features || getDefaultFeatures(plan.id) 
+                }));
+                setTariffs(enrichedData);
+                return enrichedData;
+            }
         } catch (e) {
-            console.error(e);
-            return [];
+            console.error("Ошибка загрузки тарифов:", e);
         }
+        return [];
     };
 
+    // --- 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
     const convertToStars = (priceStr) => {
         const price = parseInt(priceStr.replace(/[^0-9]/g, '')) || 0;
-        return Math.max(1, Math.round(price)); 
+        return Math.max(1, Math.round(price));
     };
 
-    const payWithStars = async (plan) => {
-        if (!plan.price || plan.price === "0 ₽") {
-            alert("Этот тариф бесплатный");
-            return;
-        }
-        
+    const getDefaultFeatures = (id) => {
+        if (id === 'start') return ['История 7 дней', '5 AI-запросов', 'Базовая аналитика'];
+        if (id === 'analyst') return ['История 60 дней', '100 AI-запросов', 'Форензика', 'SEO'];
+        if (id === 'strategist') return ['История 365 дней', '1000 AI-запросов', 'Cash Gap', 'Приоритет'];
+        return [];
+    };
+
+    // --- 4. ЛОГИКА ОПЛАТЫ (ОБЩАЯ) ---
+    
+    // Запуск поллинга (проверки статуса)
+    const startPolling = (targetId, isAddon = false) => {
+        stopPolling();
         setPayLoading(true);
-        try {
-            const starsAmount = convertToStars(plan.price);
+        setProcessingId(targetId);
+
+        // Проверяем каждые 3 секунды
+        pollingRef.current = setInterval(async () => {
+            const updatedList = await fetchTariffs();
             
-            if (starsAmount <= 0) {
-                throw new Error("Неверная сумма для оплаты. Проверьте цену тарифа.");
-            }
-            
-            const res = await fetch(`${API_URL}/api/payment/stars_link`, {
-                method: 'POST',
-                headers: getTgHeaders(),
-                body: JSON.stringify({ 
-                    plan_id: plan.id,
-                    amount: starsAmount
-                })
-            });
-            
-            const data = await res.json();
-            
-            if (!res.ok) {
-                throw new Error(data.detail || "Ошибка создания ссылки оплаты");
-            }
-            
-            if (!data.invoice_link) {
-                throw new Error("Сервер не вернул ссылку на оплату");
-            }
-            
-            if (window.Telegram?.WebApp?.openInvoice) {
-                window.Telegram.WebApp.openInvoice(data.invoice_link, (status) => {
-                    if (status === 'paid') {
-                        alert("Оплата успешна! Подписка активирована.");
-                        fetchTariffs(); 
-                    } else if (status === 'failed') {
-                        alert("Оплата не прошла. Попробуйте снова.");
-                    }
-                });
+            if (isAddon) {
+                // Для аддонов сложнее проверить "активность" через список тарифов.
+                // Обычно просто ждем возврата юзера или проверяем баланс юзера.
+                // Тут оставим просто обновление списка.
             } else {
-                window.Telegram.WebApp.openLink(data.invoice_link);
+                const targetPlan = updatedList?.find(t => t.id === targetId);
+                // Если тариф стал активным
+                if (targetPlan && targetPlan.current) {
+                    stopPolling();
+                    setPayLoading(false);
+                    setProcessingId(null);
+                    
+                    if (window.Telegram?.WebApp?.showAlert) {
+                        window.Telegram.WebApp.showAlert(`Тариф ${targetPlan.name} активирован!`);
+                    } else {
+                        alert("Успешно! Тариф активирован.");
+                    }
+                }
             }
-        } catch (e) {
-            console.error('[Pay Stars] Error:', e);
-            alert(e.message || "Ошибка при создании платежа через Telegram Stars");
-        } finally {
+        }, 3000);
+
+        // Тайм-аут 5 минут
+        setTimeout(() => {
+            stopPolling();
             setPayLoading(false);
-        }
+            setProcessingId(null);
+        }, 300000);
     };
 
-    // --- ОБНОВЛЕННАЯ ФУНКЦИЯ ОПЛАТЫ ЧЕРЕЗ РОБОКАССУ ---
-    const payWithRobokassa = async (plan) => {
+    // --- ОПЛАТА ПОДПИСКИ (ROBOKASSA) ---
+    const paySubscriptionRobokassa = async (plan) => {
         if (!plan.price || plan.price === "0 ₽") return;
         setPayLoading(true);
+        setProcessingId(plan.id);
+
         try {
-            // 1. Создаем платеж
             const res = await fetch(`${API_URL}/api/payment/robokassa/subscription`, {
                 method: 'POST',
                 headers: getTgHeaders(),
                 body: JSON.stringify({ plan_id: plan.id })
             });
             const data = await res.json();
-            
+
             if (res.ok && data.payment_url) {
-                // 2. Открываем ссылку
+                // Открываем ссылку во внешнем браузере/popup
                 if (window.Telegram?.WebApp?.openLink) {
-                    // try_instant_view: false - чтобы открылось в браузере/popup
                     window.Telegram.WebApp.openLink(data.payment_url, { try_instant_view: false });
                 } else {
                     window.open(data.payment_url, '_blank');
                 }
-
-                // 3. ЗАПУСКАЕМ ПРОВЕРКУ (Polling), пока юзер платит в браузере
-                // Не выключаем лоадер, ждем результата
-                const checkInterval = setInterval(async () => {
-                    try {
-                        // Запрашиваем тарифы заново
-                        const updatedTariffs = await fetchTariffs();
-                        
-                        // Ищем наш тариф в обновленном списке
-                        const targetPlan = updatedTariffs?.find(t => t.id === plan.id);
-                        
-                        // Если он стал активным (current: true)
-                        if (targetPlan && targetPlan.current) {
-                            clearInterval(checkInterval); // Стоп проверка
-                            setPayLoading(false); // Стоп лоадер
-                            
-                            // Уведомление
-                            if (window.Telegram?.WebApp?.showAlert) {
-                                window.Telegram.WebApp.showAlert("Оплата прошла успешно! Тариф активирован.");
-                            } else {
-                                alert("Оплата прошла успешно! Тариф активирован.");
-                            }
-                        }
-                    } catch (err) {
-                        console.error("Polling error:", err);
-                    }
-                }, 3000); // Проверяем каждые 3 секунды
-
-                // Остановим проверку принудительно через 5 минут, если юзер уснул
-                setTimeout(() => {
-                    clearInterval(checkInterval);
-                    setPayLoading(false);
-                }, 300000);
-
+                // Запускаем ожидание
+                startPolling(plan.id, false);
             } else {
-                throw new Error(data.detail || "Ошибка инициализации платежа");
+                throw new Error(data.detail || "Ошибка получения ссылки");
             }
         } catch (e) {
-            alert(e.message || "Ошибка при создании платежа через Робокассу");
+            alert(e.message);
             setPayLoading(false);
+            setProcessingId(null);
         }
     };
-    // ---------------------------------------------------
 
-    const handlePay = (plan) => {
+    // --- ОПЛАТА ПОДПИСКИ (STARS) ---
+    const paySubscriptionStars = async (plan) => {
+        setPayLoading(true);
+        setProcessingId(plan.id);
+        try {
+            const starsAmount = convertToStars(plan.price);
+            const res = await fetch(`${API_URL}/api/payment/stars_link`, {
+                method: 'POST',
+                headers: getTgHeaders(),
+                body: JSON.stringify({ plan_id: plan.id, amount: starsAmount })
+            });
+            const data = await res.json();
+
+            if (res.ok && data.invoice_link) {
+                if (window.Telegram?.WebApp?.openInvoice) {
+                    window.Telegram.WebApp.openInvoice(data.invoice_link, (status) => {
+                        if (status === 'paid') {
+                            window.Telegram.WebApp.showAlert("Оплата успешна!");
+                            fetchTariffs();
+                        }
+                        setPayLoading(false);
+                        setProcessingId(null);
+                    });
+                } else {
+                    window.Telegram.WebApp.openLink(data.invoice_link);
+                    setPayLoading(false); // В вебе сбрасываем сразу, т.к. не можем отследить инвойс
+                }
+            } else {
+                throw new Error(data.detail || "Ошибка");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Ошибка оплаты Stars");
+            setPayLoading(false);
+            setProcessingId(null);
+        }
+    };
+
+    // --- ОПЛАТА АДДОНОВ (Только Robokassa, как в бэкенде) ---
+    const payAddonRobokassa = async (addon) => {
         if (paymentMethod === 'stars') {
-            payWithStars(plan);
-        } else {
-            payWithRobokassa(plan);
+            alert("Оплата дополнений через Stars пока недоступна. Пожалуйста, выберите Робокассу.");
+            return;
+        }
+
+        setPayLoading(true);
+        setProcessingId(addon.id);
+
+        try {
+            const res = await fetch(`${API_URL}/api/payment/robokassa/addon`, {
+                method: 'POST',
+                headers: getTgHeaders(),
+                body: JSON.stringify({ addon_id: addon.id })
+            });
+            const data = await res.json();
+
+            if (res.ok && data.payment_url) {
+                if (window.Telegram?.WebApp?.openLink) {
+                    window.Telegram.WebApp.openLink(data.payment_url, { try_instant_view: false });
+                } else {
+                    window.open(data.payment_url, '_blank');
+                }
+                // Для аддонов просто ждем возврата (focus) или таймер
+                // startPolling тут менее эффективен, так как список тарифов не меняется
+                // Но можно оставить лоадер на 10 сек для визуальной реакции
+                setTimeout(() => {
+                    setPayLoading(false);
+                    setProcessingId(null);
+                }, 10000); 
+            } else {
+                throw new Error(data.detail || "Ошибка");
+            }
+        } catch (e) {
+            alert(e.message);
+            setPayLoading(false);
+            setProcessingId(null);
         }
     };
 
-    const features = [
-        { key: 'history_days', label: 'История продаж', start: '7 дней', analyst: '60 дней', strategist: '365 дней' },
-        { key: 'ai_requests', label: 'AI-запросы в месяц', start: '5', analyst: '100', strategist: '1000' },
-        { key: 'review_analysis_limit', label: 'Лимит отзывов (1 анализ)', start: '30 шт', analyst: '100 шт', strategist: '200 шт' },
-        { key: 'cluster_requests', label: 'Запросы кластеров', start: '0', analyst: '50', strategist: '200' },
-        { key: 'slots', label: 'Слоты товаров', start: '✓', analyst: '✓', strategist: '✓' },
-        { key: 'notifications', label: 'Уведомления', start: 'Раз в сутки', analyst: 'Раз в 3 часа', strategist: 'Раз в час' },
-        { key: 'pnl', label: 'P&L (Прибыль/Убыток)', start: 'Демо', analyst: 'Полный', strategist: 'Полный + Экспорт' },
-        { key: 'forensics', label: 'Форензика возвратов', start: '✗', analyst: '✓', strategist: '✓' },
-        { key: 'cashgap', label: 'Cash Gap анализ', start: '✗', analyst: '✗', strategist: '✓' },
-        { key: 'seo_semantics', label: 'SEO Семантика', start: '✗', analyst: '✓', strategist: '✓' },
-        { key: 'priority_poll', label: 'Приоритетный опрос AI', start: '✗', analyst: '✗', strategist: '✓' }
-    ];
-
+    // --- ДАННЫЕ (Статика для UI) ---
     const addons = [
-        { id: 'extra_ai_100', name: 'Дополнительные AI-запросы', description: '+100 AI-запросов', price: 490 }
+        { id: 'extra_ai_100', name: 'Дополнительные AI-запросы', description: '+100 AI-запросов к текущему лимиту', price: 490 }
     ];
 
     const startPlan = tariffs.find(t => t.id === 'start');
     const analystPlan = tariffs.find(t => t.id === 'analyst');
     const strategistPlan = tariffs.find(t => t.id === 'strategist');
+    const sortedPlans = [startPlan, analystPlan, strategistPlan].filter(Boolean);
+
+    // Данные таблицы
+    const featuresList = [
+        { key: 'history_days', label: 'История продаж', start: '7 дней', analyst: '60 дней', strategist: '365 дней' },
+        { key: 'ai_requests', label: 'AI-запросы', start: '5', analyst: '100', strategist: '1000' },
+        { key: 'slots', label: 'Слоты товаров', start: '✓', analyst: '✓', strategist: '✓' },
+        { key: 'forensics', label: 'Форензика возвратов', start: '✗', analyst: '✓', strategist: '✓' },
+        { key: 'seo_semantics', label: 'SEO Семантика', start: '✗', analyst: '✓', strategist: '✓' },
+        { key: 'cashgap', label: 'Cash Gap анализ', start: '✗', analyst: '✗', strategist: '✓' }
+    ];
 
     return (
         <div className="p-4 max-w-6xl mx-auto pb-32">
+            {/* Хедер */}
             <div className="flex items-center gap-3 mb-6">
                 <button onClick={onBack || (() => navigate('/profile'))} className="text-slate-400 hover:text-slate-600">
                     <ArrowLeft size={24} />
                 </button>
-                <h1 className="text-2xl font-black text-slate-800">Тарифные планы</h1>
+                <h1 className="text-2xl font-black text-slate-800">Тарифы и Лимиты</h1>
             </div>
 
             {/* Выбор метода оплаты */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-4 mb-4">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-4 mb-6">
                 <div className="flex items-center gap-2 mb-3">
                     <CreditCard size={18} className="text-slate-600" />
-                    <span className="text-sm font-bold text-slate-700">Метод оплаты:</span>
+                    <span className="text-sm font-bold text-slate-700">Способ оплаты:</span>
                 </div>
                 <div className="flex gap-2">
                     <button
                         onClick={() => setPaymentMethod('stars')}
-                        className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all ${
+                        className={`flex-1 py-3 px-4 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
                             paymentMethod === 'stars'
-                                ? 'bg-blue-600 text-white shadow-md'
+                                ? 'bg-blue-600 text-white shadow-md transform scale-[1.02]'
                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                         }`}
                     >
-                        <Star size={16} className="inline mr-2" />
+                        <Star size={16} fill={paymentMethod === 'stars' ? "currentColor" : "none"} />
                         Telegram Stars
                     </button>
                     <button
                         onClick={() => setPaymentMethod('robokassa')}
-                        className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all ${
+                        className={`flex-1 py-3 px-4 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
                             paymentMethod === 'robokassa'
-                                ? 'bg-indigo-600 text-white shadow-md'
+                                ? 'bg-indigo-600 text-white shadow-md transform scale-[1.02]'
                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                         }`}
                     >
-                        <CreditCard size={16} className="inline mr-2" />
-                        Робокасса
+                        <CreditCard size={16} />
+                        Робокасса (Карта)
                     </button>
                 </div>
             </div>
 
-            {/* Сравнительная таблица */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden mb-6">
-                <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead className="bg-slate-50 border-b-2 border-slate-200">
-                            <tr>
-                                <th className="text-left p-4 font-bold text-sm text-slate-700 uppercase tracking-wide">Функции</th>
-                                <th className="text-center p-4 font-black text-lg text-slate-900 min-w-[150px]">
-                                    {startPlan?.name || 'Start'}
-                                    {startPlan?.current && <span className="ml-2 text-xs text-emerald-600 font-bold block">(Активен)</span>}
-                                </th>
-                                <th className="text-center p-4 font-black text-lg text-indigo-600 min-w-[150px] relative">
-                                    {analystPlan?.name || 'Analyst'}
-                                    {analystPlan?.current && <span className="ml-2 text-xs text-emerald-600 font-bold block">(Активен)</span>}
-                                    {!analystPlan?.current && (
-                                        <div className="absolute -top-2 left-1/2 -translate-x-1/2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shadow-lg">
-                                            <Sparkles size={8} className="inline mr-1" /> PRO
-                                        </div>
-                                    )}
-                                </th>
-                                <th className="text-center p-4 font-black text-lg text-slate-900 min-w-[150px]">
-                                    {strategistPlan?.name || 'Strategist'}
-                                    {strategistPlan?.current && <span className="ml-2 text-xs text-emerald-600 font-bold block">(Активен)</span>}
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {features.map((feature, idx) => (
-                                <tr key={feature.key} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
-                                    <td className="p-4 text-sm font-medium text-slate-700">{feature.label}</td>
-                                    <td className="p-4 text-center text-sm font-bold text-slate-600">{feature.start}</td>
-                                    <td className="p-4 text-center text-sm font-bold text-indigo-600">{feature.analyst}</td>
-                                    <td className="p-4 text-center text-sm font-bold text-slate-600">{feature.strategist}</td>
-                                </tr>
-                            ))}
-                            <tr className="bg-slate-100 border-t-2 border-slate-200">
-                                <td className="p-4 text-sm font-bold text-slate-900">Цена</td>
-                                <td className="p-4 text-center">
-                                    <div className="text-xl font-black text-slate-900">{startPlan?.price || '0 ₽'}</div>
-                                    {startPlan?.price !== "0 ₽" && <div className="text-xs text-slate-500 mt-1">/мес</div>}
-                                </td>
-                                <td className="p-4 text-center">
-                                    <div className="text-xl font-black text-indigo-600">{analystPlan?.price || '1490 ₽'}</div>
-                                    <div className="text-xs text-slate-500 mt-1">/мес</div>
-                                </td>
-                                <td className="p-4 text-center">
-                                    <div className="text-xl font-black text-slate-900">{strategistPlan?.price || '4990 ₽'}</div>
-                                    <div className="text-xs text-slate-500 mt-1">/мес</div>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                {/* Кнопки покупки */}
-                <div className="grid grid-cols-3 gap-2 md:gap-4 p-4 bg-slate-50 border-t border-slate-200">
-                    {startPlan && (
-                        <div>
-                            {startPlan.current ? (
-                                <div className="w-full py-3 rounded-xl font-bold text-xs bg-emerald-50 text-emerald-600 flex justify-center items-center gap-2 border border-emerald-100">
-                                    <Check size={16} /> <span className="hidden md:inline">Выбран</span>
-                                </div>
-                            ) : (
-                                <button disabled className="w-full py-3 rounded-xl font-bold text-xs border-2 border-slate-200 text-slate-400 bg-white cursor-not-allowed">
-                                    Free
-                                </button>
-                            )}
-                        </div>
-                    )}
-                    {analystPlan && (
-                        <div>
-                            {analystPlan.current ? (
-                                <div className="w-full py-3 rounded-xl font-bold text-xs bg-emerald-50 text-emerald-600 flex justify-center items-center gap-2 border border-emerald-100">
-                                    <Check size={16} /> <span className="hidden md:inline">Выбран</span>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => handlePay(analystPlan)}
-                                    disabled={payLoading}
-                                    className="w-full py-3 rounded-xl font-bold text-xs bg-indigo-600 text-white shadow-lg shadow-indigo-200 active:scale-95 transition-transform flex justify-center items-center gap-2 hover:bg-indigo-700"
-                                >
-                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <>{paymentMethod === 'stars' ? <Star size={16} /> : <CreditCard size={16} />} Купить</>}
-                                </button>
-                            )}
-                        </div>
-                    )}
-                    {strategistPlan && (
-                        <div>
-                            {strategistPlan.current ? (
-                                <div className="w-full py-3 rounded-xl font-bold text-xs bg-emerald-50 text-emerald-600 flex justify-center items-center gap-2 border border-emerald-100">
-                                    <Check size={16} /> <span className="hidden md:inline">Выбран</span>
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={() => handlePay(strategistPlan)}
-                                    disabled={payLoading}
-                                    className="w-full py-3 rounded-xl font-bold text-xs bg-slate-900 text-white shadow-lg shadow-slate-200 active:scale-95 transition-transform flex justify-center items-center gap-2 hover:bg-slate-800"
-                                >
-                                    {payLoading ? <Loader2 size={16} className="animate-spin" /> : <>{paymentMethod === 'stars' ? <Star size={16} /> : <CreditCard size={16} />} Купить</>}
-                                </button>
-                            )}
-                        </div>
-                    )}
-                </div>
+            {/* СЕТКА ТАРИФОВ */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                {sortedPlans.map((plan) => (
+                    <TariffCard 
+                        key={plan.id}
+                        plan={plan}
+                        loading={payLoading} // Глобальное состояние загрузки
+                        currentPaymentId={processingId} // Чтобы крутилась только нужная карточка
+                        onPayStars={() => paySubscriptionStars(plan)}
+                        onPayRubles={() => paySubscriptionRobokassa(plan)}
+                    />
+                ))}
             </div>
 
-            {/* Аддоны */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-6">
-                <h2 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
-                    <ShoppingBag size={20} className="text-violet-600" />
-                    Дополнительные опции
+            {/* БЛОК АДДОНОВ (Докупка) */}
+            <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-3xl border border-indigo-100 p-6 mb-8">
+                <h2 className="text-xl font-black text-indigo-900 mb-4 flex items-center gap-2">
+                    <ShoppingBag size={22} className="text-indigo-600" />
+                    Докупить лимиты
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {addons.map((addon) => (
-                        <div key={addon.id} className="p-4 rounded-2xl border-2 border-slate-100 hover:border-indigo-200 transition-all flex flex-col justify-between">
+                        <div key={addon.id} className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
                             <div>
-                                <h3 className="font-bold text-sm text-slate-800 mb-1">{addon.name}</h3>
-                                <p className="text-xs text-slate-600 mb-3">{addon.description}</p>
+                                <h3 className="font-bold text-base text-slate-800 mb-1">{addon.name}</h3>
+                                <p className="text-sm text-slate-500 mb-4">{addon.description}</p>
                             </div>
-                            <div className="flex items-center justify-between mt-2">
+                            <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                                 <div className="text-xl font-black text-slate-900">{addon.price} ₽</div>
-                                <button className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 active:scale-95 transition-transform">
+                                <button 
+                                    onClick={() => payAddonRobokassa(addon)}
+                                    disabled={payLoading}
+                                    className="px-5 py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-70"
+                                >
+                                    {payLoading && processingId === addon.id ? (
+                                        <Loader2 size={14} className="animate-spin" />
+                                    ) : (
+                                        <CreditCard size={14} />
+                                    )}
                                     Купить
                                 </button>
                             </div>
                         </div>
                     ))}
+                </div>
+            </div>
+
+            {/* СРАВНИТЕЛЬНАЯ ТАБЛИЦА */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden mb-6">
+                <h2 className="p-5 text-lg font-bold text-slate-700 border-b border-slate-100 bg-slate-50/50">
+                    Сравнение возможностей
+                </h2>
+                <div className="overflow-x-auto">
+                    <table className="w-full">
+                        <thead className="bg-slate-50 border-b-2 border-slate-200">
+                            <tr>
+                                <th className="text-left p-4 font-bold text-xs text-slate-500 uppercase tracking-wide">Функция</th>
+                                <th className="text-center p-4 font-black text-sm text-slate-900">Start</th>
+                                <th className="text-center p-4 font-black text-sm text-indigo-600">Analyst</th>
+                                <th className="text-center p-4 font-black text-sm text-slate-900">Strategist</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {featuresList.map((feature) => (
+                                <tr key={feature.key} className="hover:bg-slate-50/50">
+                                    <td className="p-4 text-sm font-medium text-slate-700">{feature.label}</td>
+                                    <td className="p-4 text-center text-sm font-semibold text-slate-600">{feature.start}</td>
+                                    <td className="p-4 text-center text-sm font-bold text-indigo-600 bg-indigo-50/30">{feature.analyst}</td>
+                                    <td className="p-4 text-center text-sm font-semibold text-slate-600">{feature.strategist}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>

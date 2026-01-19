@@ -477,9 +477,13 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
 @router.get("/payment/robokassa/success", response_class=HTMLResponse)
 async def robokassa_success(user_id: int = None):
     """
-    Страница успеха. Ее единственная задача - сообщить пользователю об успехе
-    и ЗАКРЫТЬСЯ, чтобы пользователь увидел под ней свое основное приложение.
+    Success URL redirect handler.
+    Перенаправляет пользователя обратно в Telegram Mini App.
     """
+    # ССЫЛКА НА ТВОЕ ПРИЛОЖЕНИЕ (Deep Link)
+    # При переходе по ней телефон сам переключится на Telegram
+    telegram_link = "https://t.me/juicystat_bot/app" 
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="ru">
@@ -487,51 +491,38 @@ async def robokassa_success(user_id: int = None):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Оплата успешна</title>
-        <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
             body {{
-                font-family: -apple-system, sans-serif;
-                background-color: #f0fdf4; /* Светло-зеленый фон */
+                font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background-color: #ffffff;
                 display: flex; flex-direction: column;
                 align-items: center; justify-content: center;
-                height: 100vh; margin: 0; text-align: center; padding: 20px;
+                height: 100vh; margin: 0; padding: 20px; text-align: center;
             }}
-            .icon {{ font-size: 60px; margin-bottom: 20px; }}
-            h1 {{ margin-bottom: 10px; color: #166534; }}
-            p {{ color: #4b5563; margin-bottom: 30px; }}
-            button {{
-                background-color: #16a34a; color: white; border: none;
-                padding: 15px 30px; border-radius: 12px; font-size: 18px; font-weight: bold;
-                width: 100%; max-width: 300px; cursor: pointer;
+            .icon {{
+                font-size: 64px; margin-bottom: 20px;
+                animation: pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             }}
+            h1 {{ color: #10b981; margin-bottom: 10px; font-size: 24px; }}
+            p {{ color: #6b7280; margin-bottom: 30px; font-size: 16px; line-height: 1.5; }}
+            .btn {{
+                background-color: #0088cc; /* Telegram Blue */
+                color: white; border: none; padding: 16px 32px;
+                border-radius: 16px; font-size: 18px; font-weight: 600;
+                text-decoration: none; display: inline-block;
+                box-shadow: 0 4px 12px rgba(0, 136, 204, 0.3);
+                transition: transform 0.1s;
+            }}
+            .btn:active {{ transform: scale(0.98); }}
+            @keyframes pop {{ 0% {{ transform: scale(0); }} 100% {{ transform: scale(1); }} }}
         </style>
     </head>
     <body>
-        <div class="icon">✅</div>
-        <h1>Оплата прошла!</h1>
-        <p>Нажмите кнопку ниже, чтобы закрыть это окно и вернуться в приложение.</p>
-        <button onclick="closeMe()">Закрыть и обновить</button>
-
-        <script>
-            // Сообщаем Телеграму, что приложение готово
-            if (window.Telegram && window.Telegram.WebApp) {{
-                window.Telegram.WebApp.ready();
-            }}
-
-            function closeMe() {{
-                if (window.Telegram && window.Telegram.WebApp) {{
-                    // Эта команда закрывает текущее окно (браузер внутри телеги)
-                    window.Telegram.WebApp.close();
-                }} else {{
-                    // Фоллбэк для обычного браузера (вряд ли сработает, но пусть будет)
-                    window.close();
-                }}
-            }}
-            
-            // ОПЦИОНАЛЬНО: Автоматическое закрытие через 3 секунды, 
-            // если хочешь, чтобы юзер даже кнопку не жал.
-            // setTimeout(closeMe, 3000); 
-        </script>
+        <div class="icon">🎉</div>
+        <h1>Оплата прошла успешно!</h1>
+        <p>Ваш тариф активирован.<br>Нажмите кнопку ниже, чтобы вернуться.</p>
+        
+        <a href="{telegram_link}" class="btn">Вернуться в приложение</a>
     </body>
     </html>
     """
