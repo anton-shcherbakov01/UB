@@ -120,7 +120,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    command: celery -A celery_app worker --loglevel=info --concurrency=5
     volumes: 
       - ./backend:/app
       - ./backend/proxy_ext:/app/proxy_ext
