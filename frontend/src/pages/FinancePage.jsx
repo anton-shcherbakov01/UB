@@ -222,23 +222,23 @@ const FinancePage = ({ user, onNavigate }) => {
         if (!pnlRawData || pnlRawData.length === 0) return null;
 
         const sum = pnlRawData.reduce((acc, item) => {
-            const gross = item.gross_sales || 0;
-            const net_sales = item.net_sales || 0;
+            const gross = item.gross_sales || 0;       // Продажи (грязные)
+            const net_sales = item.net_sales || 0;     // К перечислению (ppvz_for_pay)
             const logistics = item.logistics || 0;
             const penalties = item.penalties || 0;
+            const adjustments = item.adjustments || 0; // Доплаты
             const cogs = item.cogs || 0;
             
             // --- COMMISSION LOGIC ---
-            // 1. Попытка взять явное поле из отчета
+            // Комиссия WB = Грязная выручка - К перечислению.
+            // ВАЖНО: Логистика и штрафы вычитаются отдельно из net_sales, поэтому они не входят в расчет комиссии здесь.
             let commission = item.commission || item.wb_commission || 0;
             
-            // 2. Если явного поля нет, считаем разрыв: 
-            // Gross - Net - Logistics - Penalties
-            if (!commission) {
-                 const gap = gross - net_sales;
-                 const calc_comm = gap - logistics - penalties;
-                 // Если разрыв положительный, считаем это комиссией
-                 if (calc_comm > 0) commission = calc_comm;
+            if (!commission && gross > 0) {
+                // Разница между "Грязной" и "К перечислению за товар"
+                commission = gross - net_sales; 
+                // Защита от отрицательных значений
+                if (commission < 0) commission = 0;
             }
             
             acc.total_revenue += gross;
@@ -247,9 +247,12 @@ const FinancePage = ({ user, onNavigate }) => {
             acc.total_cost_price += cogs;
             acc.total_logistics += logistics;
             acc.total_penalty += penalties;
+            acc.total_adjustments += adjustments;
             
-            // Пересчитываем Net Profit от базы перечисления
-            acc.net_profit += (net_sales - cogs - penalties);
+            // Накапливаем CM3 (Net Profit)
+            // Profit = (К перечислению + Доплаты) - Логистика - Штрафы - Себестоимость
+            const dayProfit = (net_sales + adjustments) - logistics - penalties - cogs;
+            acc.net_profit += dayProfit;
             
             return acc;
         }, {
@@ -259,12 +262,11 @@ const FinancePage = ({ user, onNavigate }) => {
             total_cost_price: 0,
             total_logistics: 0,
             total_penalty: 0,
+            total_adjustments: 0,
             net_profit: 0
         });
         
-        // Гарантируем сходимость
-        sum.net_profit = sum.total_transferred - sum.total_cost_price;
-
+        // Расчет ROI
         sum.roi = sum.total_cost_price > 0 
             ? (sum.net_profit / sum.total_cost_price) * 100 
             : 0;
@@ -273,10 +275,14 @@ const FinancePage = ({ user, onNavigate }) => {
     }, [pnlRawData]);
 
     const pnlChartData = useMemo(() => {
+        if (!pnlRawData) return [];
         return pnlRawData.map(item => ({
             ...item,
             date: item.date, // 'YYYY-MM-DD'
-            profit: (item.net_sales || 0) - (item.cogs || 0) 
+            // Profit для графика: берем cm3 с бэкенда или считаем ту же формулу
+            profit: item.cm3 !== undefined 
+                ? item.cm3 
+                : ((item.net_sales || 0) + (item.adjustments || 0) - (item.logistics || 0) - (item.penalties || 0) - (item.cogs || 0))
         }));
     }, [pnlRawData]);
 
@@ -532,7 +538,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                     <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
                                         <span className="text-sm font-black text-slate-800 flex items-center">
                                             Чистая прибыль
-                                            <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость." />
+                                            <InfoTooltip text="Итоговый результат: К перечислению + Доплаты - Логистика - Штрафы - Себестоимость." />
                                         </span>
                                         <span className={`text-xl font-black ${pnlSummary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                             {Math.round(pnlSummary.net_profit).toLocaleString()} ₽
