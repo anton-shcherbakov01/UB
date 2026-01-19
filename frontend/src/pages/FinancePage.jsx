@@ -28,7 +28,7 @@ const FinancePage = ({ user, onNavigate }) => {
     const [editingCost, setEditingCost] = useState(null);
     const [viewMode, setViewMode] = useState('unit'); // 'unit' | 'pnl'
     
-    // Dates
+    // Dates for P&L
     const [dateRange, setDateRange] = useState(() => {
         const end = new Date();
         const start = new Date();
@@ -40,12 +40,12 @@ const FinancePage = ({ user, onNavigate }) => {
         };
     });
 
-    // Data
+    // P&L Data
     const [pnlData, setPnlData] = useState(null);
     const [pnlLoading, setPnlLoading] = useState(false);
     const [pnlError, setPnlError] = useState(null);
     
-    // Status
+    // UI Loading States
     const [pdfLoading, setPdfLoading] = useState(false);
     const [syncLoading, setSyncLoading] = useState(false);
 
@@ -123,6 +123,7 @@ const FinancePage = ({ user, onNavigate }) => {
         }
     };
     
+    // Перезагружаем P&L при смене режима просмотра ИЛИ дат
     useEffect(() => {
         if (viewMode === 'pnl') {
             fetchPnlData();
@@ -397,14 +398,14 @@ const FinancePage = ({ user, onNavigate }) => {
                                     </ResponsiveContainer>
                                 </div>
 
-                                {/* Summary Table */}
+                                {/* Summary Table WITH TOOLTIPS */}
                                 <div className="space-y-1 bg-slate-50 p-4 rounded-3xl border border-slate-100">
                                     {pnlData.summary && (
                                         <>
                                             <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                                 <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Выручка 
-                                                    <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). База для комиссий." />
+                                                    <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). Это база для начисления комиссий." />
                                                 </span>
                                                 <span className="font-bold text-slate-800">
                                                     {Math.round(pnlData.summary.total_revenue).toLocaleString()} ₽
@@ -414,7 +415,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                                 <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     К перечислению
-                                                    <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия WB)." />
+                                                    <InfoTooltip text="Сумма, которую Wildberries фактически перечислил вам на счет за этот период (Выручка минус Комиссия WB, но до вычета Логистики и Штрафов в некоторых отчетах)." />
                                                 </span>
                                                 <span className="font-bold text-indigo-600">
                                                     {Math.round(pnlData.summary.total_transferred).toLocaleString()} ₽
@@ -424,7 +425,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                                 <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Себестоимость
-                                                    <InfoTooltip text="Закупочная стоимость реализованного товара." />
+                                                    <InfoTooltip text="Закупочная стоимость проданных товаров. Рассчитывается как: (Кол-во продаж - Возвраты) * Ваша себестоимость." />
                                                 </span>
                                                 <span className="font-bold text-orange-500">
                                                     -{Math.round(pnlData.summary.total_cost_price).toLocaleString()} ₽
@@ -434,7 +435,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                                 <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Логистика
-                                                    <InfoTooltip text="Доставка до клиента + Обратная логистика." />
+                                                    <InfoTooltip text="Сумма удержаний за доставку товаров до покупателя и за обратную логистику при возвратах." />
                                                 </span>
                                                 <span className="font-bold text-blue-500">
                                                     -{Math.round(pnlData.summary.total_logistics).toLocaleString()} ₽
@@ -444,7 +445,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                                 <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Штрафы
-                                                    <InfoTooltip text="Штрафы и прочие удержания." />
+                                                    <InfoTooltip text="Штрафы, удержания и прочие доплаты, отраженные в еженедельных отчетах." />
                                                 </span>
                                                 <span className="font-bold text-red-500">
                                                     -{Math.round(pnlData.summary.total_penalty).toLocaleString()} ₽
@@ -524,7 +525,7 @@ const FinancePage = ({ user, onNavigate }) => {
                             const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
-                            // Метаданные (Фото и название)
+                            // Извлекаем метаданные для фото и названия
                             const meta = item.meta || {};
                             const photoUrl = meta.photo || null;
                             
