@@ -104,7 +104,7 @@ const FinancePage = ({ user, onNavigate }) => {
             
             if (res.ok) {
                 const json = await res.json();
-                // API возвращает { data: [...] }, где [...] это массив дней
+                // API возвращает { data: [...] } где [...] это массив дней
                 if (json.data && Array.isArray(json.data)) {
                     setPnlRawData(json.data);
                 } else {
@@ -223,7 +223,7 @@ const FinancePage = ({ user, onNavigate }) => {
 
         const sum = pnlRawData.reduce((acc, item) => {
             acc.total_revenue += (item.gross_sales || 0);
-            acc.total_transferred += (item.net_sales || 0); // net_sales in item usually approximates transferred
+            acc.total_transferred += (item.net_sales || 0); 
             acc.total_cost_price += (item.cogs || 0);
             acc.total_logistics += (item.logistics || 0);
             acc.total_penalty += (item.penalties || 0);
@@ -242,16 +242,21 @@ const FinancePage = ({ user, onNavigate }) => {
         sum.roi = sum.total_cost_price > 0 
             ? (sum.net_profit / sum.total_cost_price) * 100 
             : 0;
+            
+        // Assuming sales count isn't directly summed from raw rows in this structure, 
+        // we might not have it unless backend provides it or we guess.
+        // For now, let's omit or mock if unavailable.
+        sum.sales_count = 0; 
+        sum.returns_count = 0;
 
         return sum;
     }, [pnlRawData]);
 
-    // Data prep for Chart (rename keys if necessary for clarity in Recharts)
     const pnlChartData = useMemo(() => {
         return pnlRawData.map(item => ({
             ...item,
-            date: item.date, // 'YYYY-MM-DD'
-            profit: item.cm3 // Using CM3 as Net Profit for chart
+            date: item.date, 
+            profit: item.cm3 
         }));
     }, [pnlRawData]);
 
@@ -508,13 +513,11 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider mb-1">ROI</div>
                                             <div className="text-lg font-black text-emerald-700">{pnlSummary.roi?.toFixed(1)}%</div>
                                         </div>
+                                        {/* Placeholder for Sales count as it's not currently aggregated in summary */}
                                         <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
-                                            {/* Можно добавить кол-во продаж, если оно есть в данных */}
-                                            <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Маржа</div>
+                                            <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Маржинальность</div>
                                             <div className="text-sm font-bold text-slate-700">
-                                                {pnlSummary.total_revenue > 0 
-                                                    ? Math.round((pnlSummary.net_profit / pnlSummary.total_revenue) * 100) 
-                                                    : 0}%
+                                                {pnlSummary.total_revenue > 0 ? ((pnlSummary.net_profit / pnlSummary.total_revenue) * 100).toFixed(1) : 0}%
                                             </div>
                                         </div>
                                     </div>
@@ -568,12 +571,12 @@ const FinancePage = ({ user, onNavigate }) => {
                             const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
-                            // Извлекаем метаданные (Фото и Название)
-                            // Поддерживаем разные структуры, которые могут прийти из Redis
+                            // Safe Meta Extraction
                             const meta = item.meta || {};
-                            const photoUrl = meta.photo || (meta.photos && meta.photos[0]?.big) || null;
+                            // Handle various potential meta structures from Redis
+                            const photoUrl = meta.photo || (meta.photos && meta.photos[0]?.big) || (meta.photos && meta.photos[0]?.c246x328) || null;
                             const brand = meta.brand || 'No Brand';
-                            const name = meta.name || `Товар ${item.sku}`;
+                            const name = meta.name || meta.imt_name || `Товар ${item.sku}`;
                             
                             return (
                                 <div key={item.sku} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative group overflow-hidden">
