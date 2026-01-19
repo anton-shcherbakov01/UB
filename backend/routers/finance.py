@@ -35,10 +35,6 @@ class TransitCalcRequest(BaseModel):
 
 # --- Helper for PDF Auth ---
 async def get_user_via_query(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    Извлекает пользователя из query-параметра x_tg_data.
-    Используется для скачивания файлов (window.open), где нельзя передать заголовки.
-    """
     x_tg_data = request.query_params.get("x_tg_data")
     if not x_tg_data:
         raise HTTPException(status_code=401, detail="Missing auth data")
@@ -49,9 +45,6 @@ async def get_user_via_query(request: Request, db: AsyncSession = Depends(get_db
     return user
 
 def calculate_auto_logistics(volume_l: float, tariffs_map: dict) -> float:
-    """
-    Считает логистику на основе тарифов склада.
-    """
     if not tariffs_map:
         return 50.0 
     
@@ -164,7 +157,6 @@ async def get_my_products_finance(
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
-    logger.info(f"📊 [UnitEconomy] Уникальных артикулов (SKU): {len(skus)}")
     
     # 3. Загружаем настройки расходов из БД
     try:
@@ -289,7 +281,7 @@ async def get_my_products_finance(
                     "margin": margin
                 },
                 "supply": supply_data,
-                "meta": meta  # <--- ISUE FIX: Возвращаем метаданные (фото, бренд)
+                "meta": meta  # <--- ВОТ ЭТА ВАЖНАЯ СТРОЧКА!
             })
         except Exception as e:
             logger.error(f"❌ [UnitEconomy] Ошибка расчета SKU {sku}: {e}")
@@ -305,7 +297,6 @@ async def set_product_cost(
     user: User = Depends(get_current_user), 
     db: AsyncSession = Depends(get_db)
 ):
-    logger.info(f"✏️ [UnitEconomy] Обновление костов SKU {sku} для юзера {user.id}")
     try:
         stmt = select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku == sku)
         cost_obj = (await db.execute(stmt)).scalars().first()
@@ -349,14 +340,10 @@ async def sync_pnl_data(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Принудительная синхронизация отчетов реализации для P&L"""
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="No WB Token")
     
-    # Lazy import to avoid circular dependency
     from tasks.report_loader import load_realization_reports_task
-    
-    # Запускаем в фоне загрузку за последние 90 дней
     background_tasks.add_task(load_realization_reports_task, user.id, user.wb_api_token, days=90)
     return {"status": "started", "message": "P&L data sync started (last 90 days)"}
 
@@ -367,37 +354,27 @@ async def get_pnl_data(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Get P&L (Profit & Loss) data for the user.
-    """
     from config.plans import has_feature
     
     now = datetime.utcnow()
     
-    # Check feature access based on plan
     if user.subscription_plan == "start":
-        # Start plan has pnl_demo feature - only yesterday
         if not has_feature(user.subscription_plan, "pnl_demo"):
-            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) lacks pnl_demo feature")
             raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
         yesterday = now - timedelta(days=1)
         date_from_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
         date_to_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
     else:
-        # Analyst+ plans have pnl_full feature - full date range
         if not has_feature(user.subscription_plan, "pnl_full"):
-            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) lacks pnl_full feature")
             raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
         
-        # Robust Date Parsing
         if date_from:
             try:
                 if 'T' in date_from:
                      date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
                 else:
                      date_from_dt = datetime.strptime(date_from, "%Y-%m-%d")
-            except Exception as e:
-                logger.warning(f"Date parsing failed for {date_from}: {e}")
+            except:
                 date_from_dt = now - timedelta(days=30)
         else:
             date_from_dt = now - timedelta(days=30)
@@ -408,43 +385,22 @@ async def get_pnl_data(
                     date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
                 else:
                     date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59)
-            except Exception as e:
-                logger.warning(f"Date parsing failed for {date_to}: {e}")
+            except:
                 date_to_dt = now
         else:
             date_to_dt = now
     
-    # Проверяем лимит history_days для analyst+ планов
-    if user.subscription_plan != "start":
-        from config.plans import get_limit
-        from config.plans import get_plan_config
-        
-        history_limit = get_limit(user.subscription_plan, "history_days")
-        # Ensure fallback if get_limit returns None
-        if history_limit is None: history_limit = 60 
-
-        days_requested = (date_to_dt - date_from_dt).days
-        if days_requested > history_limit:
-            plan_config = get_plan_config(user.subscription_plan)
-            logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) requested {days_requested} days, limit={history_limit}")
-            raise HTTPException(
-                status_code=403,
-                detail=f"Период {days_requested} дней недоступен на вашем тарифе. Доступно: {history_limit} дней. Текущий план: {plan_config.get('name', user.subscription_plan)}"
-            )
-    
-    # Get P&L data from analysis service
     try:
         pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
     except Exception as e:
         logger.error(f"Error fetching P&L data from service: {e}")
-        # Return empty structure instead of crashing
         pnl_data = []
 
     return {
         "plan": user.subscription_plan,
         "date_from": date_from_dt.isoformat(),
         "date_to": date_to_dt.isoformat(),
-        "data": pnl_data
+        "data": pnl_data 
     }
 
 executor = ThreadPoolExecutor(max_workers=2)
@@ -456,47 +412,20 @@ async def generate_pnl_pdf(
     user: User = Depends(get_user_via_query),
     db: AsyncSession = Depends(get_db)
 ):
-    """Generate P&L PDF report. Uses query param auth."""
     from config.plans import has_feature
-    
-    # Check access (same logic as get_pnl_data)
     now = datetime.utcnow()
-    if user.subscription_plan == "start":
-        if not has_feature(user.subscription_plan, "pnl_demo"):
-            raise HTTPException(status_code=403, detail="P&L PDF requires upgrade")
-        yesterday = now - timedelta(days=1)
-        date_from_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-        date_to_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
-    else:
-        if not has_feature(user.subscription_plan, "pnl_full"):
-            raise HTTPException(status_code=403, detail="P&L PDF requires upgrade")
-        
-        if date_from:
-            try:
-                if 'T' in date_from:
-                    date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
-                else:
-                    date_from_dt = datetime.strptime(date_from, "%Y-%m-%d")
-            except:
-                date_from_dt = now - timedelta(days=30)
-        else:
-            date_from_dt = now - timedelta(days=30)
-        
-        if date_to:
-            try:
-                if 'T' in date_to:
-                    date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
-                else:
-                    date_to_dt = datetime.strptime(date_to, "%Y-%m-%d")
-            except:
-                date_to_dt = now
-        else:
-            date_to_dt = now
     
-    # Get P&L data
+    date_from_dt = now - timedelta(days=30) 
+    date_to_dt = now
+    if date_from:
+        try: date_from_dt = datetime.fromisoformat(date_from.replace('Z', ''))
+        except: pass
+    if date_to:
+        try: date_to_dt = datetime.fromisoformat(date_to.replace('Z', ''))
+        except: pass
+
     pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
     
-    # Generate PDF in executor
     from services.pdf_generator import pdf_generator
     loop = asyncio.get_event_loop()
     pdf_bytes = await loop.run_in_executor(
@@ -510,7 +439,7 @@ async def generate_pnl_pdf(
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type='application/pdf',
-        headers={'Content-Disposition': f'attachment; filename="pnl_report_{date_from_dt.strftime("%Y%m%d")}_{date_to_dt.strftime("%Y%m%d")}.pdf"'}
+        headers={'Content-Disposition': f'attachment; filename="pnl_report.pdf"'}
     )
 
 @router.get("/finance/report/unit-economy-pdf")
@@ -518,27 +447,13 @@ async def generate_unit_economy_pdf(
     user: User = Depends(get_user_via_query),
     db: AsyncSession = Depends(get_db)
 ):
-    """Generate Unit Economy PDF report. Requires Analyst+ plan."""
     from config.plans import has_feature
-    
-    # Manual feature check instead of QuotaCheck dependency
     if not has_feature(user.subscription_plan, "unit_economy"):
          raise HTTPException(status_code=403, detail="Unit Economy requires upgrade")
 
-    if not user.wb_api_token:
-        raise HTTPException(status_code=400, detail="WB API Token required")
-    
-    # Get unit economy data (reuse existing endpoint logic)
-    from fastapi import BackgroundTasks
     background_tasks = BackgroundTasks()
-    
-    # Call the internal endpoint logic
     unit_data = await get_my_products_finance(background_tasks, user, db)
     
-    if not unit_data:
-        raise HTTPException(status_code=404, detail="Нет данных для Unit экономики")
-    
-    # Generate PDF in executor
     from services.pdf_generator import pdf_generator
     loop = asyncio.get_event_loop()
     pdf_bytes = await loop.run_in_executor(
@@ -547,13 +462,11 @@ async def generate_unit_economy_pdf(
         unit_data
     )
     
-    filename = f"unit_economy_{datetime.now().strftime('%Y%m%d')}.pdf"
-    
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type='application/pdf',
         headers={
-            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Disposition': f'attachment; filename="unit_economy.pdf"',
             'Content-Length': str(len(pdf_bytes)),
             'Cache-Control': 'no-cache'
         }
