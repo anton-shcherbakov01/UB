@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle, ArrowLeft, Download
+    Loader2, Calculator, DollarSign, Info, Truck, Percent, HelpCircle, ArrowLeft, Download, RefreshCw
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip, ResponsiveContainer, 
@@ -18,6 +18,7 @@ const FinancePage = ({ user, onNavigate }) => {
     const [pnlLoading, setPnlLoading] = useState(false);
     const [pnlError, setPnlError] = useState(null);
     const [pdfLoading, setPdfLoading] = useState(false);
+    const [syncLoading, setSyncLoading] = useState(false);
 
     const fetchProducts = async () => {
         setLoading(true);
@@ -51,7 +52,7 @@ const FinancePage = ({ user, onNavigate }) => {
             } else {
                 const errorData = await res.json().catch(() => ({ detail: 'Неизвестная ошибка' }));
                 if (res.status === 403) {
-                    setPnlError(errorData.detail || 'P&L недоступен на вашем тарифе. Обновите тариф для полного доступа.');
+                    setPnlError(errorData.detail || 'P&L недоступен на вашем тарифе.');
                 } else {
                     setPnlError(errorData.detail || 'Ошибка загрузки данных P&L');
                 }
@@ -71,6 +72,31 @@ const FinancePage = ({ user, onNavigate }) => {
             fetchPnlData();
         }
     }, [viewMode]);
+
+    // --- НОВАЯ ФУНКЦИЯ СИНХРОНИЗАЦИИ ---
+    const handleSync = async () => {
+        setSyncLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/finance/sync/pnl`, {
+                method: 'POST',
+                headers: getTgHeaders()
+            });
+            if (res.ok) {
+                alert("Синхронизация запущена. Данные появятся через 1-2 минуты. Пожалуйста, обновите страницу позже.");
+                // Можно попробовать обновить данные через небольшую задержку
+                setTimeout(() => {
+                    if (viewMode === 'pnl') fetchPnlData();
+                }, 5000);
+            } else {
+                alert("Ошибка запуска синхронизации");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Ошибка сети");
+        } finally {
+            setSyncLoading(false);
+        }
+    };
 
     const handleUpdateCost = async (sku, formData) => {
         try {
@@ -124,15 +150,11 @@ const FinancePage = ({ user, onNavigate }) => {
             const monthlySales = velocity * 30;
             
             if (monthlySales > 0) {
-                // Используем selling price (с учетом скидки)
                 const price = p.price_structure?.selling || 0;
                 grossSales += price * monthlySales;
-                
                 cogs += p.cost_price * monthlySales;
-                
                 const itemLogistics = p.logistics || 50; 
                 logisticsTotal += itemLogistics * monthlySales;
-                
                 const commPct = p.commission_percent || 25;
                 const itemCommission = price * (commPct / 100);
                 commissionTotal += itemCommission * monthlySales;
@@ -179,8 +201,19 @@ const FinancePage = ({ user, onNavigate }) => {
                         <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">P&L и Unit-экономика</p>
                     </div>
 
-                    {/* Download Button inside Header */}
-                    <div className="relative z-10">
+                    {/* Action Buttons inside Header */}
+                    <div className="relative z-10 flex gap-2">
+                         {/* Sync Button */}
+                         <button 
+                            onClick={handleSync}
+                            disabled={syncLoading}
+                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm disabled:opacity-50"
+                            title="Синхронизировать данные с WB (за 90 дней)"
+                        >
+                            <RefreshCw size={20} className={syncLoading ? "animate-spin" : ""} />
+                        </button>
+
+                         {/* Download Button */}
                          <button 
                             onClick={handleDownload}
                             disabled={pdfLoading}
@@ -210,10 +243,10 @@ const FinancePage = ({ user, onNavigate }) => {
                         <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
                             <HelpCircle size={24}/>
                         </button>
-                        {/* Tooltip positioned to the LEFT of the sidebar to avoid top overflow */}
                         <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-3 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50 max-h-[80vh] overflow-y-auto">
                             <div className="font-bold mb-2">P&L (Прибыль и Убытки)</div>
                             <p className="mb-2">Отчет о финансовых результатах: выручка, себестоимость, комиссии, логистика и итоговая прибыль.</p>
+                            <p className="mb-2 text-emerald-400">Нажмите кнопку обновления (круговые стрелки), чтобы загрузить свежие данные с WB.</p>
                             <div className="font-bold mb-2 mt-3">Unit Экономика</div>
                             <p>Анализ прибыльности каждого товара: ROI, маржа, себестоимость и рекомендации по оптимизации.</p>
                             <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
@@ -255,7 +288,7 @@ const FinancePage = ({ user, onNavigate }) => {
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="font-bold text-lg">
-                                {pnlData ? 'P&L (реальные данные)' : 'Проекция (по текущей скорости)'}
+                                {pnlData ? 'P&L (реальные данные)' : 'Нет данных'}
                             </h3>
                             {user?.plan === 'start' && (
                                 <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-bold">
@@ -270,8 +303,8 @@ const FinancePage = ({ user, onNavigate }) => {
                                 <div className="font-bold text-amber-900 mb-2">⚠️ {pnlError}</div>
                                 {user?.plan === 'start' && (
                                     <div className="text-amber-700 mt-2">
-                                        <p className="mb-2">На тарифе <strong>Старт</strong> доступен демо-режим P&L (только данные за вчера).</p>
-                                        <p>Для полного доступа к P&L обновите тариф на <strong>Аналитик</strong> или <strong>Стратег</strong>.</p>
+                                        <p className="mb-2">На тарифе <strong>Старт</strong> доступен демо-режим P&L.</p>
+                                        <p>Для полного доступа обновите тариф.</p>
                                     </div>
                                 )}
                             </div>
@@ -314,38 +347,17 @@ const FinancePage = ({ user, onNavigate }) => {
                                     })()}
                                 </div>
                             </>
-                        ) : pnlStats.length > 0 ? (
-                            <>
-                                <div className="h-64 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={pnlStats}>
-                                            <Tooltip 
-                                                cursor={{fill: '#f1f5f9'}}
-                                                contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.1)'}}
-                                            />
-                                            <ReferenceLine y={0} stroke="#cbd5e1" />
-                                            <Bar dataKey="value" radius={[4, 4, 4, 4]}>
-                                                {pnlStats.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={entry.value > 0 ? (entry.type === 'total' ? '#10b981' : '#3b82f6') : '#ef4444'} />
-                                                ))}
-                                            </Bar>
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2 mt-4">
-                                    {pnlStats.map((s, i) => (
-                                        <div key={i} className="flex justify-between text-sm border-b border-slate-50 last:border-0 py-2">
-                                            <span className="text-slate-500">{s.name}</span>
-                                            <span className={`font-bold ${s.value > 0 ? 'text-slate-800' : 'text-red-500'}`}>
-                                                {s.value.toLocaleString()} ₽
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>
                         ) : (
-                            <div className="text-center text-slate-400 py-10">
-                                Нет данных о продажах для прогноза P&L.
+                            <div className="text-center text-slate-400 py-10 flex flex-col items-center gap-4">
+                                <p>Нет данных о продажах за выбранный период.</p>
+                                <button 
+                                    onClick={handleSync}
+                                    disabled={syncLoading}
+                                    className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-emerald-600 transition-colors flex items-center gap-2"
+                                >
+                                    <RefreshCw size={16} className={syncLoading ? "animate-spin" : ""} />
+                                    {syncLoading ? "Загрузка..." : "Загрузить отчеты с WB"}
+                                </button>
                             </div>
                         )}
                     </div>
@@ -353,7 +365,7 @@ const FinancePage = ({ user, onNavigate }) => {
                     <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex gap-3 items-start">
                         <Info className="text-blue-600 min-w-[20px]" size={20}/>
                         <p className="text-xs text-blue-800 leading-relaxed">
-                            <strong>Обратите внимание:</strong> Выручка рассчитывается от Вашей цены реализации (до СПП). Скидка Постоянного Покупателя (СПП) предоставляется за счет Wildberries и не уменьшает вашу базу для выплат (обычно).
+                            <strong>Обратите внимание:</strong> P&L строится на основе официальных еженедельных отчетов реализации WB. Если вы только подключили API, нажмите кнопку обновления, чтобы загрузить историю.
                         </p>
                     </div>
                 </div>
@@ -383,8 +395,6 @@ const FinancePage = ({ user, onNavigate }) => {
                                     <div className="flex justify-between items-start mb-4">
                                         <div className="min-w-0">
                                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
-                                            
-                                            {/* Блок Цены - ВОДОПАД */}
                                             <div className="flex flex-col relative">
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-sm text-slate-400 line-through decoration-slate-300">{basicPrice} ₽</span>
@@ -392,14 +402,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                                 </div>
                                                 <div className="flex items-baseline gap-2">
                                                     <div className="font-bold text-xl leading-tight text-slate-800">{price} ₽</div>
-                                                    <div className="group/tooltip relative">
-                                                        <HelpCircle size={12} className="text-slate-300 cursor-help" />
-                                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2 bg-slate-800 text-white text-[10px] rounded-lg opacity-0 group-hover/tooltip:opacity-100 pointer-events-none transition-opacity z-10">
-                                                                Это ваша цена (до СПП). Комиссия считается от неё. На сайте цена может быть ниже (напр. {Math.round(price * 0.7)}₽) за счет скидки WB.
-                                                        </div>
-                                                    </div>
                                                 </div>
-                                                <div className="text-[9px] text-emerald-600 font-medium mt-0.5">База для выплат</div>
                                             </div>
                                         </div>
                                         <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
