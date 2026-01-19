@@ -20,6 +20,9 @@ class ClickHouseService:
         'acquiring_fee', 'acquiring_bank', 'ppvz_vw', 'ppvz_vw_nds', 'ppvz_office_id', 
         'penalty', 'additional_payment', 'rebill_logistic_cost'
     }
+    
+    # Столбцы, требующие преобразования в datetime
+    DATE_COLUMNS = {'create_dt', 'order_dt', 'sale_dt', 'rr_dt'}
     # ----------------------------------------------------------------------
 
     def __init__(self):
@@ -182,44 +185,36 @@ class ClickHouseService:
         """
         Defines the High-Performance OLAP Schema.
         Mirrors WB API v5 /supplier/reportDetailByPeriod.
-        Engine: ReplacingMergeTree for deduplication/updates based on rrd_id.
         """
         schema_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.database}.realization_reports (
-            -- Identity & Meta
-            rrd_id UInt64, -- Unique row ID from WB
-            realizationreport_id UInt64, -- Report ID
-            supplier_id UInt64, -- Internal User ID (Tenancy)
-            
-            -- Dimensions (LowCardinality for compression)
+            rrd_id UInt64,
+            realizationreport_id UInt64,
+            supplier_id UInt64,
             gi_id UInt64,
-            subject_name LowCardinality(String), -- Category
-            nm_id UInt64, -- SKU
+            subject_name LowCardinality(String),
+            nm_id UInt64,
             brand_name LowCardinality(String),
-            sa_name String, -- Article
-            ts_name String, -- Size
+            sa_name String,
+            ts_name String,
             barcode String,
-            doc_type_name LowCardinality(String), -- 'Продажа', 'Возврат'
-            office_name LowCardinality(String), -- Warehouse
+            doc_type_name LowCardinality(String),
+            office_name LowCardinality(String),
             supplier_oper_name LowCardinality(String),
             site_country LowCardinality(String),
-            
-            -- Dates
             create_dt DateTime,
             order_dt DateTime,
             sale_dt DateTime,
             rr_dt DateTime,
-            
-            -- Metrics (Decimal for Money)
             quantity UInt32,
             retail_price Decimal(18, 2),
             retail_amount Decimal(18, 2),
             sale_percent UInt16,
             commission_percent Decimal(10, 2),
-            retail_price_withdisc_rub Decimal(18, 2), -- Actual Revenue
+            retail_price_withdisc_rub Decimal(18, 2),
             delivery_amount UInt32,
             return_amount UInt32,
-            delivery_rub Decimal(18, 2), -- Logistics Cost
+            delivery_rub Decimal(18, 2),
             gi_box_type_name LowCardinality(String),
             product_discount_for_report Decimal(10, 2),
             supplier_promo Decimal(10, 2),
@@ -229,7 +224,7 @@ class ClickHouseService:
             ppvz_kvw_prc Decimal(10, 2),
             sup_rating_prc_up Decimal(10, 2),
             is_kgvp_v2 UInt8,
-            ppvz_sales_commission Decimal(18, 2), -- WB Commission
+            ppvz_sales_commission Decimal(18, 2),
             ppvz_for_pay Decimal(18, 2),
             ppvz_reward Decimal(18, 2),
             acquiring_fee Decimal(18, 2),
@@ -237,11 +232,9 @@ class ClickHouseService:
             ppvz_vw Decimal(18, 2),
             ppvz_vw_nds Decimal(18, 2),
             ppvz_office_id UInt64,
-            penalty Decimal(18, 2), -- Fines
+            penalty Decimal(18, 2),
             additional_payment Decimal(18, 2),
             rebill_logistic_cost Decimal(18, 2),
-            
-            -- Versioning
             inserted_at DateTime DEFAULT now()
         ) 
         ENGINE = ReplacingMergeTree(inserted_at)
@@ -261,11 +254,27 @@ class ClickHouseService:
             return
         
         try:
-            # 1. Фильтрация данных (удаляем лишние поля, которых нет в схеме)
+            # 1. Фильтрация данных и преобразование типов
             clean_reports = []
             for r in reports:
-                # Оставляем только ключи, которые есть в VALID_COLUMNS
-                clean_r = {k: v for k, v in r.items() if k in self.VALID_COLUMNS}
+                clean_r = {}
+                for k, v in r.items():
+                    # Пропускаем неизвестные поля
+                    if k not in self.VALID_COLUMNS:
+                        continue
+                    
+                    # Преобразование дат из строк в datetime для драйвера
+                    if k in self.DATE_COLUMNS and isinstance(v, str):
+                        try:
+                            # Убираем 'Z' если есть, так как fromisoformat в 3.9 может капризничать
+                            # (хотя в целом ISO строка обычно парсится, но драйвер требует datetime объект)
+                            clean_r[k] = datetime.fromisoformat(v.replace('Z', ''))
+                        except (ValueError, TypeError):
+                            # Если дата битая, используем epoch 0 (1970-01-01), чтобы не падать
+                            clean_r[k] = datetime.fromtimestamp(0)
+                    else:
+                        clean_r[k] = v
+                
                 if clean_r:
                     clean_reports.append(clean_r)
             
@@ -278,8 +287,8 @@ class ClickHouseService:
             columns = list(clean_reports[0].keys())
             
             # --- FIX: Конвертируем список словарей в список списков ---
-            # Библиотека clickhouse_connect иногда дает сбой на списке словарей при расчете размера блока
-            # Преобразуем явно в список значений, строго соблюдая порядок columns
+            # Библиотека clickhouse_connect иногда дает сбой на списке словарей (KeyError: 4)
+            # или на датах-строках (AttributeError: 'str' object has no attribute 'timestamp')
             data_values = []
             for r in clean_reports:
                 row = [r.get(col) for col in columns]
@@ -292,7 +301,6 @@ class ClickHouseService:
             )
         except Exception as e:
             logger.error(f"ClickHouse Insert Error: {e}")
-            # Reset client to force reconnection on next use
             self.client = None
             raise e
 
