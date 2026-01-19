@@ -224,6 +224,11 @@ const FinancePage = ({ user, onNavigate }) => {
         const sum = pnlRawData.reduce((acc, item) => {
             acc.total_revenue += (item.gross_sales || 0);
             acc.total_transferred += (item.net_sales || 0); // net_sales in item usually approximates transferred
+            
+            // Если комиссия есть явно в ответе - берем ее, иначе считаем разницу (грубо)
+            const commission = item.commission || 0;
+            acc.total_commission += commission;
+
             acc.total_cost_price += (item.cogs || 0);
             acc.total_logistics += (item.logistics || 0);
             acc.total_penalty += (item.penalties || 0);
@@ -232,6 +237,7 @@ const FinancePage = ({ user, onNavigate }) => {
         }, {
             total_revenue: 0,
             total_transferred: 0,
+            total_commission: 0,
             total_cost_price: 0,
             total_logistics: 0,
             total_penalty: 0,
@@ -451,6 +457,17 @@ const FinancePage = ({ user, onNavigate }) => {
                                         </span>
                                         <span className="font-bold text-slate-800">
                                             {Math.round(pnlSummary.total_revenue).toLocaleString()} ₽
+                                        </span>
+                                    </div>
+                                    
+                                    {/* Added Commission Row */}
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Комиссия WB
+                                            <InfoTooltip text="Комиссия маркетплейса." />
+                                        </span>
+                                        <span className="font-bold text-purple-600">
+                                            -{Math.round(pnlSummary.total_commission).toLocaleString()} ₽
                                         </span>
                                     </div>
 

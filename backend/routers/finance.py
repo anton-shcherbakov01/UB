@@ -35,8 +35,8 @@ class TransitCalcRequest(BaseModel):
 # --- Helper: Force Generate WB Image URL ---
 def get_wb_image_url(nm_id: int) -> str:
     """
-    Генерирует ссылку на фото WB математически, без запросов к API.
-    Обновлено для поддержки новых корзин (basket-18+)
+    Генерирует ссылку на фото WB, используя актуальную карту корзин (vol).
+    Поддерживает новые сервера вплоть до basket-32.
     """
     try:
         nm_id = int(nm_id)
@@ -69,7 +69,13 @@ def get_wb_image_url(nm_id: int) -> str:
         elif 3918 <= vol <= 4133: basket = "23"
         elif 4134 <= vol <= 4349: basket = "24"
         elif 4350 <= vol <= 4565: basket = "25"
-        else: basket = "26"
+        elif 4566 <= vol <= 4781: basket = "26"
+        elif 4782 <= vol <= 4997: basket = "27"
+        elif 4998 <= vol <= 5213: basket = "28"
+        elif 5214 <= vol <= 5429: basket = "29"
+        elif 5430 <= vol <= 5645: basket = "30"
+        elif 5646 <= vol <= 5861: basket = "31"
+        else: basket = "32"
 
         return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/c246x328/1.webp"
     except:
