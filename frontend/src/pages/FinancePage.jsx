@@ -28,7 +28,7 @@ const FinancePage = ({ user, onNavigate }) => {
     const [editingCost, setEditingCost] = useState(null);
     const [viewMode, setViewMode] = useState('unit'); // 'unit' | 'pnl'
     
-    // Dates for P&L
+    // Даты для P&L
     const [dateRange, setDateRange] = useState(() => {
         const end = new Date();
         const start = new Date();
@@ -40,12 +40,12 @@ const FinancePage = ({ user, onNavigate }) => {
         };
     });
 
-    // P&L Data
-    const [pnlRawData, setPnlRawData] = useState([]); // Массив данных от API
+    // Данные P&L
+    const [pnlRawData, setPnlRawData] = useState([]); 
     const [pnlLoading, setPnlLoading] = useState(false);
     const [pnlError, setPnlError] = useState(null);
     
-    // UI Loading States
+    // Состояния загрузки UI
     const [pdfLoading, setPdfLoading] = useState(false);
     const [syncLoading, setSyncLoading] = useState(false);
 
@@ -104,7 +104,6 @@ const FinancePage = ({ user, onNavigate }) => {
             
             if (res.ok) {
                 const json = await res.json();
-                // API возвращает { data: [...] } где [...] это массив дней
                 if (json.data && Array.isArray(json.data)) {
                     setPnlRawData(json.data);
                 } else {
@@ -217,15 +216,14 @@ const FinancePage = ({ user, onNavigate }) => {
         </div>
     );
 
-    // --- Data Calculation for P&L Summary ---
+    // --- Расчет итогов P&L (Берем данные как есть от бэкенда) ---
     const pnlSummary = useMemo(() => {
         if (!pnlRawData || pnlRawData.length === 0) return null;
 
         const sum = pnlRawData.reduce((acc, item) => {
             acc.total_revenue += (item.gross_sales || 0);
-            // Теперь берем комиссию напрямую, так как на бэке мы её починили
-            acc.total_commission += (item.commission || 0);
             acc.total_transferred += (item.net_sales || 0); 
+            acc.total_commission += (item.commission || 0); // Используем прямое поле без заглушек
             acc.total_cost_price += (item.cogs || 0);
             acc.total_logistics += (item.logistics || 0);
             acc.total_penalty += (item.penalties || 0);
@@ -241,22 +239,15 @@ const FinancePage = ({ user, onNavigate }) => {
             net_profit: 0
         });
 
-        // ROI calculation
-        sum.roi = sum.total_cost_price > 0 
-            ? (sum.net_profit / sum.total_cost_price) * 100 
-            : 0;
-            
-        sum.sales_count = 0; 
-        sum.returns_count = 0;
-
+        sum.roi = sum.total_cost_price > 0 ? (sum.net_profit / sum.total_cost_price) * 100 : 0;
         return sum;
     }, [pnlRawData]);
 
     const pnlChartData = useMemo(() => {
         return pnlRawData.map(item => ({
             ...item,
-            date: item.date, // 'YYYY-MM-DD'
-            profit: item.cm3 // Using CM3 as Net Profit for chart
+            date: item.date,
+            profit: item.cm3 
         }));
     }, [pnlRawData]);
 
@@ -445,12 +436,12 @@ const FinancePage = ({ user, onNavigate }) => {
                                     </ResponsiveContainer>
                                 </div>
 
-                                {/* Summary Table WITH REAL DATA */}
+                                {/* Summary Table WITH Tooltips */}
                                 <div className="space-y-1 bg-slate-50 p-4 rounded-3xl border border-slate-100">
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Выручка 
-                                            <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). База для комиссий." />
+                                            <InfoTooltip text="Сумма продаж товаров за период (продажи минус возвраты по розничной цене)." />
                                         </span>
                                         <span className="font-bold text-slate-800">
                                             {Math.round(pnlSummary.total_revenue).toLocaleString()} ₽
@@ -460,7 +451,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Комиссия WB
-                                            <InfoTooltip text="Суммарное вознаграждение Wildberries (ppvz_sales_commission) за период." />
+                                            <InfoTooltip text="Суммарное вознаграждение Wildberries (ppvz_sales_commission)." />
                                         </span>
                                         <span className="font-bold text-purple-600">
                                             -{Math.round(pnlSummary.total_commission).toLocaleString()} ₽
@@ -480,20 +471,19 @@ const FinancePage = ({ user, onNavigate }) => {
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Штрафы
-                                            <InfoTooltip text="Штрафы и прочие удержания из отчетов." />
+                                            <InfoTooltip text="Штрафы и прочие удержания." />
                                         </span>
                                         <span className="font-bold text-red-500">
                                             -{Math.round(pnlSummary.total_penalty).toLocaleString()} ₽
                                         </span>
                                     </div>
 
-                                    {/* К Перечислению - Якорный финансовый показатель */}
-                                    <div className="flex justify-between items-center py-3 my-1 bg-indigo-50/50 rounded-xl px-3 border border-indigo-100/50">
-                                        <span className="text-sm font-bold text-indigo-700 flex items-center">
+                                    <div className="flex justify-between items-center py-3 my-1 bg-white rounded-xl px-3 border border-slate-200/60">
+                                        <span className="text-sm font-bold text-indigo-600 flex items-center">
                                             К перечислению
-                                            <InfoTooltip text="Фактическая сумма от WB за реализованный товар (ppvz_for_pay)." />
+                                            <InfoTooltip text="Фактическая сумма от WB за реализованный товар (уже за вычетом комиссии)." />
                                         </span>
-                                        <span className="font-black text-indigo-700">
+                                        <span className="font-black text-indigo-600">
                                             {Math.round(pnlSummary.total_transferred).toLocaleString()} ₽
                                         </span>
                                     </div>
@@ -512,7 +502,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                     <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
                                         <span className="text-sm font-black text-slate-800 flex items-center">
                                             Чистая прибыль
-                                            <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость." />
+                                            <InfoTooltip text="Итоговый финансовый результат (К перечислению - Себестоимость - Логистика - Штрафы)." />
                                         </span>
                                         <span className={`text-xl font-black ${pnlSummary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                             {Math.round(pnlSummary.net_profit).toLocaleString()} ₽
@@ -579,7 +569,9 @@ const FinancePage = ({ user, onNavigate }) => {
                             const price = item.price_structure?.selling || 0;
                             const basicPrice = item.price_structure?.basic || 0;
                             const discount = item.price_structure?.discount || 0;
-                            const commPct = item.commission_percent || 25;
+                            
+                            // Исправленная комиссия: берем commission_percent из объекта или дефолт 25, если в API пусто
+                            const commPct = item.commission_percent; 
                             const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
@@ -608,6 +600,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="absolute inset-0 flex items-center justify-center text-slate-300 z-0">
                                                 <Package size={24} />
                                             </div>
+
                                             <div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] text-center py-0.5 font-medium backdrop-blur-sm z-20">
                                                 {item.quantity} шт
                                             </div>
@@ -646,6 +639,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                     
                                     {/* Waterfall */}
                                     <div className="space-y-2.5 relative bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                                        {/* Комиссия */}
                                         <div className="flex justify-between items-center text-xs relative">
                                             <span className="text-slate-500 flex items-center gap-1.5">
                                                 <div className="w-1.5 h-1.5 bg-purple-400 rounded-full"></div>
@@ -654,6 +648,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <span className="font-medium text-slate-700">-{commVal} ₽</span>
                                         </div>
 
+                                        {/* Логистика */}
                                         <div className="flex justify-between items-center text-xs relative">
                                             <span className="text-slate-500 flex items-center gap-1.5">
                                                 <div className="w-1.5 h-1.5 bg-blue-400 rounded-full"></div>
@@ -662,6 +657,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <span className="font-medium text-slate-700">-{logVal} ₽</span>
                                         </div>
 
+                                        {/* Себестоимость */}
                                         <div className="flex justify-between items-center text-xs relative">
                                             <span className="text-slate-500 flex items-center gap-1.5">
                                                 <div className="w-1.5 h-1.5 bg-orange-400 rounded-full"></div>
@@ -672,6 +668,7 @@ const FinancePage = ({ user, onNavigate }) => {
 
                                         <div className="border-t border-slate-200 my-2"></div>
 
+                                        {/* ИТОГ */}
                                         <div className="flex justify-between items-center">
                                             <span className="text-sm font-bold text-slate-800">Прибыль с шт.</span>
                                             <span className={`text-base font-black ${item.unit_economy.profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
