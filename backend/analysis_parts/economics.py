@@ -93,14 +93,17 @@ class EconomicsModule:
         }
 
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
+        # Исправлено: использование quantity вместо countIf, добавлено логирование
+        logger.info(f"📊 [PnL] Request for user={user_id} range={date_from} to {date_to}")
+
         ch_query = """
         SELECT 
             toDate(sale_dt) as report_date,
             nm_id,
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Продажа') as gross_sales,
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Возврат') as returns_sum,
-            countIf(doc_type_name = 'Продажа') as qty_sold,
-            countIf(doc_type_name = 'Возврат') as qty_returned,
+            sumIf(quantity, doc_type_name = 'Продажа') as qty_sold,
+            sumIf(quantity, doc_type_name = 'Возврат') as qty_returned,
             sum(ppvz_sales_commission) as commission,
             sum(delivery_rub) as logistics,
             sum(penalty) as penalties,
@@ -118,30 +121,50 @@ class EconomicsModule:
         try:
             ch_client = ch_service.get_client()
             if not ch_client:
-                logger.warning("ClickHouse client not available for P&L query")
+                logger.warning("⚠️ ClickHouse client not available for P&L query")
                 return []
+            
+            logger.debug(f"Executing CH Query with params: {params}")
             result = ch_client.query(ch_query, parameters=params)
             rows = result.result_rows
+            logger.info(f"✅ ClickHouse returned {len(rows)} rows")
+            
         except Exception as e:
-            logger.error(f"ClickHouse Query Error: {e}")
+            logger.error(f"❌ ClickHouse Query Error: {e}")
             return []
 
-        if not rows: return []
+        if not rows: 
+            logger.warning(f"No P&L data found for user {user_id} in specified period.")
+            return []
 
         unique_skus = list(set([row[1] for row in rows]))
-        stmt = select(ProductCost).where(ProductCost.user_id == user_id, ProductCost.sku.in_(unique_skus))
-        cogs_result = await db.execute(stmt)
-        costs_map = {c.sku: c.cost_price for c in cogs_result.scalars().all()}
+        
+        # Получаем себестоимость
+        try:
+            stmt = select(ProductCost).where(ProductCost.user_id == user_id, ProductCost.sku.in_(unique_skus))
+            cogs_result = await db.execute(stmt)
+            costs_map = {c.sku: c.cost_price for c in cogs_result.scalars().all()}
+        except Exception as e:
+            logger.error(f"Error fetching product costs: {e}")
+            costs_map = {}
 
         daily_pnl = {}
         for row in rows:
             r_date, sku, gross_sales, returns_sum, qty_sold, qty_returned, commission, logistics, penalties, adjustments = row
-            gross_sales, returns_sum = float(gross_sales), float(returns_sum)
-            qty_sold, qty_returned = int(qty_sold), int(qty_returned)
-            commission, logistics, penalties, adjustments = float(commission), float(logistics), float(penalties), float(adjustments)
+            
+            # Приведение типов для безопасности
+            gross_sales = float(gross_sales) if gross_sales else 0.0
+            returns_sum = float(returns_sum) if returns_sum else 0.0
+            qty_sold = int(qty_sold) if qty_sold else 0
+            qty_returned = int(qty_returned) if qty_returned else 0
+            commission = float(commission) if commission else 0.0
+            logistics = float(logistics) if logistics else 0.0
+            penalties = float(penalties) if penalties else 0.0
+            adjustments = float(adjustments) if adjustments else 0.0
 
             unit_cost = costs_map.get(sku, 0)
-            total_cogs = (qty_sold * unit_cost) - (qty_returned * unit_cost)
+            # COGS считаем как (Продано - Вернуто) * Себестоимость
+            total_cogs = (qty_sold - qty_returned) * unit_cost
 
             date_str = r_date.strftime("%Y-%m-%d")
             if date_str not in daily_pnl:
@@ -166,6 +189,7 @@ class EconomicsModule:
             for k, v in metrics.items():
                 if isinstance(v, float): metrics[k] = round(v, 2)
             final_output.append(metrics)
+            
         return final_output
 
     def calculate_metrics(self, raw_data: dict):
@@ -217,10 +241,9 @@ class EconomicsModule:
         cost = base_price + (extra_liters * liter_price)
         return round(cost, 2)
 
-    def calculate_abc_xyz(sales_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def calculate_abc_xyz(self, sales_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Расчет ABC/XYZ анализа.
-        Вход sales_data: список словарей [{'sku': 123, 'date': '2023-10-01', 'revenue': 1000, 'qty': 5}, ...]
         """
         if not sales_data:
             return {"status": "error", "message": "Нет данных для анализа"}
@@ -329,8 +352,8 @@ class EconomicsModule:
         SELECT 
             nm_id,
             ts_name as size,
-            countIf(doc_type_name = 'Продажа') as sales,
-            countIf(doc_type_name = 'Возврат') as returns,
+            sumIf(quantity, doc_type_name = 'Продажа') as sales,
+            sumIf(quantity, doc_type_name = 'Возврат') as returns,
             sumIf(delivery_rub, doc_type_name = 'Возврат') as return_logistics_cost,
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Продажа') as revenue
         FROM wb_analytics.realization_reports
@@ -347,8 +370,8 @@ class EconomicsModule:
         SELECT 
             nm_id,
             office_name as warehouse,
-            countIf(doc_type_name = 'Продажа') as sales,
-            countIf(doc_type_name = 'Возврат') as returns,
+            sumIf(quantity, doc_type_name = 'Продажа') as sales,
+            sumIf(quantity, doc_type_name = 'Возврат') as returns,
             sumIf(delivery_rub, doc_type_name = 'Возврат') as return_logistics_cost
         FROM wb_analytics.realization_reports
         WHERE supplier_id = %(uid)s 
@@ -376,6 +399,10 @@ class EconomicsModule:
         size_anomalies = []
         for r in rows_sizes:
             nm_id, size, sales, returns, ret_cost, rev = r
+            # Приведение типов
+            sales = int(sales) if sales else 0
+            returns = int(returns) if returns else 0
+            
             total_ops = sales + returns
             buyout_rate = round((sales / total_ops) * 100, 1) if total_ops > 0 else 0
             
@@ -393,7 +420,7 @@ class EconomicsModule:
                 "buyout_rate": buyout_rate,
                 "sales": sales,
                 "returns": returns,
-                "loss_on_returns": round(ret_cost, 2),
+                "loss_on_returns": round(float(ret_cost), 2) if ret_cost else 0.0,
                 "verdict": verdict
             })
 
@@ -401,6 +428,9 @@ class EconomicsModule:
         wh_stats = []
         for r in rows_wh:
             nm_id, wh, sales, returns, ret_cost = r
+            sales = int(sales) if sales else 0
+            returns = int(returns) if returns else 0
+            
             total_ops = sales + returns
             return_rate = round((returns / total_ops) * 100, 1) if total_ops > 0 else 0
             
@@ -409,7 +439,7 @@ class EconomicsModule:
                 "warehouse": wh,
                 "return_rate": return_rate,
                 "returns_count": returns,
-                "cost": round(ret_cost, 2)
+                "cost": round(float(ret_cost), 2) if ret_cost else 0.0
             })
 
         return {

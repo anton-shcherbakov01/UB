@@ -352,13 +352,9 @@ async def get_pnl_data(
     """
     Get P&L (Profit & Loss) data for the user.
     """
-    from datetime import timedelta
     from config.plans import has_feature
     
     now = datetime.utcnow()
-    
-    import logging
-    logger = logging.getLogger("FinanceRouter")
     
     # Check feature access based on plan
     if user.subscription_plan == "start":
@@ -375,20 +371,27 @@ async def get_pnl_data(
             logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) lacks pnl_full feature")
             raise HTTPException(status_code=403, detail="P&L feature requires upgrade")
         
-        # For analyst+ plans, allow full date range
+        # Robust Date Parsing
         if date_from:
             try:
-                date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
-            except:
-                # Fallback to 30 days ago if parsing fails
+                if 'T' in date_from:
+                     date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                else:
+                     date_from_dt = datetime.strptime(date_from, "%Y-%m-%d")
+            except Exception as e:
+                logger.warning(f"Date parsing failed for {date_from}: {e}")
                 date_from_dt = now - timedelta(days=30)
         else:
             date_from_dt = now - timedelta(days=30)
         
         if date_to:
             try:
-                date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
-            except:
+                if 'T' in date_to:
+                    date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                else:
+                    date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59)
+            except Exception as e:
+                logger.warning(f"Date parsing failed for {date_to}: {e}")
                 date_to_dt = now
         else:
             date_to_dt = now
@@ -396,10 +399,14 @@ async def get_pnl_data(
     # Проверяем лимит history_days для analyst+ планов
     if user.subscription_plan != "start":
         from config.plans import get_limit
+        from config.plans import get_plan_config
+        
         history_limit = get_limit(user.subscription_plan, "history_days")
+        # Ensure fallback if get_limit returns None
+        if history_limit is None: history_limit = 60 
+
         days_requested = (date_to_dt - date_from_dt).days
         if days_requested > history_limit:
-            from config.plans import get_plan_config
             plan_config = get_plan_config(user.subscription_plan)
             logger.warning(f"P&L 403: User {user.id} (plan={user.subscription_plan}) requested {days_requested} days, limit={history_limit}")
             raise HTTPException(
@@ -408,8 +415,13 @@ async def get_pnl_data(
             )
     
     # Get P&L data from analysis service
-    pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
-    
+    try:
+        pnl_data = await analysis_service.get_pnl_data(user.id, date_from_dt, date_to_dt, db)
+    except Exception as e:
+        logger.error(f"Error fetching P&L data from service: {e}")
+        # Return empty structure instead of crashing
+        pnl_data = []
+
     return {
         "plan": user.subscription_plan,
         "date_from": date_from_dt.isoformat(),
@@ -443,7 +455,10 @@ async def generate_pnl_pdf(
         
         if date_from:
             try:
-                date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                if 'T' in date_from:
+                    date_from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                else:
+                    date_from_dt = datetime.strptime(date_from, "%Y-%m-%d")
             except:
                 date_from_dt = now - timedelta(days=30)
         else:
@@ -451,7 +466,10 @@ async def generate_pnl_pdf(
         
         if date_to:
             try:
-                date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                if 'T' in date_to:
+                    date_to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                else:
+                    date_to_dt = datetime.strptime(date_to, "%Y-%m-%d")
             except:
                 date_to_dt = now
         else:
