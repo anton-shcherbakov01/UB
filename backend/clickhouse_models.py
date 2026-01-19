@@ -279,11 +279,9 @@ class ClickHouseService:
             
             # --- FIX: Конвертируем список словарей в список списков ---
             # Библиотека clickhouse_connect иногда дает сбой на списке словарей при расчете размера блока
-            # Преобразуем явно в список значений
+            # Преобразуем явно в список значений, строго соблюдая порядок columns
             data_values = []
             for r in clean_reports:
-                # Извлекаем значения в строгом порядке columns
-                # Используем .get() для безопасности, хотя clean_reports уже отфильтрован
                 row = [r.get(col) for col in columns]
                 data_values.append(row)
 
