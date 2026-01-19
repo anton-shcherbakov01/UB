@@ -10,7 +10,7 @@ import {
 import { API_URL, getTgHeaders } from '../config';
 import CostEditModal from '../components/CostEditModal';
 
-// Компонент подсказки (Tooltip)
+// Компонент подсказки (Tooltip) - Улучшенный стиль
 const InfoTooltip = ({ text }) => (
     <div className="group/tooltip relative inline-flex items-center ml-1.5 align-middle">
         <HelpCircle size={14} className="text-slate-300 cursor-help hover:text-indigo-400 transition-colors" />
@@ -41,7 +41,7 @@ const FinancePage = ({ user, onNavigate }) => {
     });
 
     // P&L Data
-    const [pnlData, setPnlData] = useState(null);
+    const [pnlResponse, setPnlResponse] = useState(null); // Весь ответ от сервера
     const [pnlLoading, setPnlLoading] = useState(false);
     const [pnlError, setPnlError] = useState(null);
     
@@ -103,8 +103,8 @@ const FinancePage = ({ user, onNavigate }) => {
             });
             
             if (res.ok) {
-                const data = await res.json();
-                setPnlData(data);
+                const json = await res.json();
+                setPnlResponse(json);
             } else {
                 const errorData = await res.json().catch(() => ({ detail: 'Неизвестная ошибка' }));
                 if (res.status === 403) {
@@ -112,12 +112,12 @@ const FinancePage = ({ user, onNavigate }) => {
                 } else {
                     setPnlError(errorData.detail || 'Ошибка загрузки данных P&L');
                 }
-                setPnlData(null);
+                setPnlResponse(null);
             }
         } catch(e) { 
             console.error(e);
             setPnlError('Ошибка соединения с сервером');
-            setPnlData(null);
+            setPnlResponse(null);
         } finally {
             setPnlLoading(false);
         }
@@ -212,6 +212,11 @@ const FinancePage = ({ user, onNavigate }) => {
             {Icon && <Icon className="absolute -bottom-2 -right-2 text-slate-50 w-20 h-20 -z-0 transform rotate-12" />}
         </div>
     );
+
+    // --- Data Extractors ---
+    // Извлекаем правильные данные из ответа бэкенда
+    const pnlChartData = pnlResponse?.data?.chart || [];
+    const pnlSummary = pnlResponse?.data?.summary || null;
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -362,12 +367,12 @@ const FinancePage = ({ user, onNavigate }) => {
                                     </div>
                                 )}
                             </div>
-                        ) : (pnlData?.data && pnlData.data.length > 0) ? (
+                        ) : (pnlChartData.length > 0 && pnlSummary) ? (
                             <>
                                 {/* Graph */}
                                 <div className="h-64 w-full mb-8">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={pnlData.data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+                                        <BarChart data={pnlChartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                             <XAxis 
                                                 dataKey="date" 
@@ -389,9 +394,9 @@ const FinancePage = ({ user, onNavigate }) => {
                                                 labelFormatter={(label) => `Дата: ${label}`}
                                             />
                                             <ReferenceLine y={0} stroke="#cbd5e1" />
-                                            <Bar dataKey="cm3" name="Чистая прибыль" radius={[6, 6, 6, 6]} barSize={20}>
-                                                {pnlData.data.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={entry.cm3 > 0 ? '#10b981' : '#ef4444'} />
+                                            <Bar dataKey="profit" name="Чистая прибыль" radius={[6, 6, 6, 6]} barSize={20}>
+                                                {pnlChartData.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.profit > 0 ? '#10b981' : '#ef4444'} />
                                                 ))}
                                             </Bar>
                                         </BarChart>
@@ -400,81 +405,77 @@ const FinancePage = ({ user, onNavigate }) => {
 
                                 {/* Summary Table WITH TOOLTIPS */}
                                 <div className="space-y-1 bg-slate-50 p-4 rounded-3xl border border-slate-100">
-                                    {pnlData.summary && (
-                                        <>
-                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                                <span className="text-sm text-slate-500 font-medium flex items-center">
-                                                    Выручка 
-                                                    <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). Это база для начисления комиссий." />
-                                                </span>
-                                                <span className="font-bold text-slate-800">
-                                                    {Math.round(pnlData.summary.total_revenue).toLocaleString()} ₽
-                                                </span>
-                                            </div>
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Выручка 
+                                            <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). База для комиссий." />
+                                        </span>
+                                        <span className="font-bold text-slate-800">
+                                            {Math.round(pnlSummary.total_revenue).toLocaleString()} ₽
+                                        </span>
+                                    </div>
 
-                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                                <span className="text-sm text-slate-500 font-medium flex items-center">
-                                                    К перечислению
-                                                    <InfoTooltip text="Сумма, которую Wildberries фактически перечислил вам на счет за этот период (Выручка минус Комиссия WB, но до вычета Логистики и Штрафов в некоторых отчетах)." />
-                                                </span>
-                                                <span className="font-bold text-indigo-600">
-                                                    {Math.round(pnlData.summary.total_transferred).toLocaleString()} ₽
-                                                </span>
-                                            </div>
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            К перечислению
+                                            <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия WB)." />
+                                        </span>
+                                        <span className="font-bold text-indigo-600">
+                                            {Math.round(pnlSummary.total_transferred).toLocaleString()} ₽
+                                        </span>
+                                    </div>
 
-                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                                <span className="text-sm text-slate-500 font-medium flex items-center">
-                                                    Себестоимость
-                                                    <InfoTooltip text="Закупочная стоимость проданных товаров. Рассчитывается как: (Кол-во продаж - Возвраты) * Ваша себестоимость." />
-                                                </span>
-                                                <span className="font-bold text-orange-500">
-                                                    -{Math.round(pnlData.summary.total_cost_price).toLocaleString()} ₽
-                                                </span>
-                                            </div>
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Себестоимость
+                                            <InfoTooltip text="Закупочная стоимость реализованного товара." />
+                                        </span>
+                                        <span className="font-bold text-orange-500">
+                                            -{Math.round(pnlSummary.total_cost_price).toLocaleString()} ₽
+                                        </span>
+                                    </div>
 
-                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                                <span className="text-sm text-slate-500 font-medium flex items-center">
-                                                    Логистика
-                                                    <InfoTooltip text="Сумма удержаний за доставку товаров до покупателя и за обратную логистику при возвратах." />
-                                                </span>
-                                                <span className="font-bold text-blue-500">
-                                                    -{Math.round(pnlData.summary.total_logistics).toLocaleString()} ₽
-                                                </span>
-                                            </div>
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Логистика
+                                            <InfoTooltip text="Доставка до клиента + Обратная логистика." />
+                                        </span>
+                                        <span className="font-bold text-blue-500">
+                                            -{Math.round(pnlSummary.total_logistics).toLocaleString()} ₽
+                                        </span>
+                                    </div>
 
-                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                                <span className="text-sm text-slate-500 font-medium flex items-center">
-                                                    Штрафы
-                                                    <InfoTooltip text="Штрафы, удержания и прочие доплаты, отраженные в еженедельных отчетах." />
-                                                </span>
-                                                <span className="font-bold text-red-500">
-                                                    -{Math.round(pnlData.summary.total_penalty).toLocaleString()} ₽
-                                                </span>
-                                            </div>
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Штрафы
+                                            <InfoTooltip text="Штрафы и прочие удержания." />
+                                        </span>
+                                        <span className="font-bold text-red-500">
+                                            -{Math.round(pnlSummary.total_penalty).toLocaleString()} ₽
+                                        </span>
+                                    </div>
 
-                                            {/* Net Profit */}
-                                            <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
-                                                <span className="text-sm font-black text-slate-800 flex items-center">
-                                                    Чистая прибыль
-                                                    <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость - Логистика - Штрафы." />
-                                                </span>
-                                                <span className={`text-xl font-black ${pnlData.summary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                    {Math.round(pnlData.summary.net_profit).toLocaleString()} ₽
-                                                </span>
-                                            </div>
-                                            
-                                            <div className="grid grid-cols-2 gap-2 mt-3">
-                                                <div className="bg-emerald-100/50 border border-emerald-100 rounded-2xl p-3 text-center">
-                                                    <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider mb-1">ROI</div>
-                                                    <div className="text-lg font-black text-emerald-700">{pnlData.summary.roi?.toFixed(1)}%</div>
-                                                </div>
-                                                <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
-                                                    <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Продаж / Возвратов</div>
-                                                    <div className="text-sm font-bold text-slate-700">{pnlData.summary.sales_count} / {pnlData.summary.returns_count} шт</div>
-                                                </div>
-                                            </div>
-                                        </>
-                                    )}
+                                    {/* Net Profit */}
+                                    <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
+                                        <span className="text-sm font-black text-slate-800 flex items-center">
+                                            Чистая прибыль
+                                            <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость - Логистика - Штрафы." />
+                                        </span>
+                                        <span className={`text-xl font-black ${pnlSummary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                            {Math.round(pnlSummary.net_profit).toLocaleString()} ₽
+                                        </span>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-2 mt-3">
+                                        <div className="bg-emerald-100/50 border border-emerald-100 rounded-2xl p-3 text-center">
+                                            <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider mb-1">ROI</div>
+                                            <div className="text-lg font-black text-emerald-700">{pnlSummary.roi?.toFixed(1)}%</div>
+                                        </div>
+                                        <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
+                                            <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Продаж / Возвратов</div>
+                                            <div className="text-sm font-bold text-slate-700">{pnlSummary.sales_count} / {pnlSummary.returns_count} шт</div>
+                                        </div>
+                                    </div>
                                 </div>
                             </>
                         ) : (
@@ -525,7 +526,7 @@ const FinancePage = ({ user, onNavigate }) => {
                             const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
-                            // Извлекаем метаданные для фото и названия
+                            // Метаданные (Фото и название)
                             const meta = item.meta || {};
                             const photoUrl = meta.photo || null;
                             

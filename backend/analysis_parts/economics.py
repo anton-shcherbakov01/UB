@@ -93,9 +93,9 @@ class EconomicsModule:
         }
 
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
-        # Исправлено: использование quantity вместо countIf, добавлено логирование
         logger.info(f"📊 [PnL] Request for user={user_id} range={date_from} to {date_to}")
 
+        # --- ISUE FIX: Added FINAL to query to prevent stacking duplicates ---
         ch_query = """
         SELECT 
             toDate(sale_dt) as report_date,
@@ -108,7 +108,7 @@ class EconomicsModule:
             sum(delivery_rub) as logistics,
             sum(penalty) as penalties,
             sum(additional_payment) as adjustments
-        FROM wb_analytics.realization_reports
+        FROM wb_analytics.realization_reports FINAL
         WHERE supplier_id = %(uid)s 
           AND sale_dt >= %(start)s 
           AND sale_dt <= %(end)s
