@@ -217,53 +217,68 @@ const FinancePage = ({ user, onNavigate }) => {
         </div>
     );
 
-// Расчет общих итогов по периоду
-const pnlSummary = useMemo(() => {
-    if (!pnlRawData || pnlRawData.length === 0) return null;
+    // --- Data Calculation for P&L Summary ---
+    const pnlSummary = useMemo(() => {
+        if (!pnlRawData || pnlRawData.length === 0) return null;
 
-    const totals = pnlRawData.reduce((acc, item) => {
-        acc.total_revenue += item.gross_sales || 0;
-        acc.total_transferred += item.net_sales || 0; // К перечислению (после комиссии)
-        acc.total_commission += item.commission || 0;
-        acc.total_cost_price += item.cogs || 0;
-        acc.total_logistics += item.logistics || 0;
-        acc.total_penalty += item.penalties || 0;
+        const sum = pnlRawData.reduce((acc, item) => {
+            const gross = item.gross_sales || 0;
+            const net_sales = item.net_sales || 0;
+            const logistics = item.logistics || 0;
+            const penalties = item.penalties || 0;
+            const cogs = item.cogs || 0;
+            
+            // --- COMMISSION LOGIC ---
+            // 1. Попытка взять явное поле из отчета
+            let commission = item.commission || item.wb_commission || 0;
+            
+            // 2. Если явного поля нет, считаем разрыв: 
+            // Gross - Net - Logistics - Penalties
+            if (!commission) {
+                 const gap = gross - net_sales;
+                 const calc_comm = gap - logistics - penalties;
+                 // Если разрыв положительный, считаем это комиссией
+                 if (calc_comm > 0) commission = calc_comm;
+            }
+            
+            acc.total_revenue += gross;
+            acc.total_transferred += net_sales;
+            acc.total_commission += commission;
+            acc.total_cost_price += cogs;
+            acc.total_logistics += logistics;
+            acc.total_penalty += penalties;
+            
+            // Пересчитываем Net Profit от базы перечисления
+            acc.net_profit += (net_sales - cogs - penalties);
+            
+            return acc;
+        }, {
+            total_revenue: 0,
+            total_transferred: 0,
+            total_commission: 0,
+            total_cost_price: 0,
+            total_logistics: 0,
+            total_penalty: 0,
+            net_profit: 0
+        });
         
-        // Прибыль = Перечисление - Логистика - Штрафы - Себестоимость
-        acc.net_profit += (item.net_sales - item.logistics - item.penalties - item.cogs);
-        
-        return acc;
-    }, {
-        total_revenue: 0,
-        total_transferred: 0,
-        total_commission: 0,
-        total_cost_price: 0,
-        total_logistics: 0,
-        total_penalty: 0,
-        net_profit: 0
-    });
+        // Гарантируем сходимость
+        sum.net_profit = sum.total_transferred - sum.total_cost_price;
 
-    // Расчет метрик эффективности
-    totals.roi = totals.total_cost_price > 0 
-        ? (totals.net_profit / totals.total_cost_price) * 100 
-        : 0;
-        
-    totals.margin = totals.total_revenue > 0
-        ? (totals.net_profit / totals.total_revenue) * 100
-        : 0;
+        sum.roi = sum.total_cost_price > 0 
+            ? (sum.net_profit / sum.total_cost_price) * 100 
+            : 0;
+            
+        return sum;
+    }, [pnlRawData]);
 
-    return totals;
-}, [pnlRawData]);
-
-// Данные для графика
-const chartData = useMemo(() => {
-    return pnlRawData.map(item => ({
-        name: item.date,
-        revenue: item.gross_sales,
-        profit: item.cm3, // Уже рассчитанная на бэкенде прибыль
-        logistics: item.logistics
-    }));
-}, [pnlRawData]);
+    const pnlChartData = useMemo(() => {
+        return pnlRawData.map(item => ({
+            ...item,
+            date: item.date, // 'YYYY-MM-DD'
+            profit: (item.net_sales || 0) - (item.cogs || 0) 
+        }));
+    }, [pnlRawData]);
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
