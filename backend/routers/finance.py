@@ -264,9 +264,9 @@ async def get_my_products_finance(
             forecast_json = cache_entry.get("forecast")
             
             # --- ГАРАНТИЯ META ДАННЫХ (Fix) ---
-            # Принудительно генерируем фото, если нет в кэше
-            if not meta.get('photo'):
-                meta['photo'] = get_wb_image_url(sku)
+            # Принудительно генерируем фото, ДАЖЕ ЕСЛИ ОНО ЕСТЬ В КЭШЕ
+            # Это лечит проблему, когда в Redis сохранилась битая ссылка со старого алгоритма
+            meta['photo'] = get_wb_image_url(sku)
             
             # Принудительно заполняем название и бренд, если пусто
             if not meta.get('name'):

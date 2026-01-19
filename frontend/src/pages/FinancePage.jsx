@@ -222,17 +222,34 @@ const FinancePage = ({ user, onNavigate }) => {
         if (!pnlRawData || pnlRawData.length === 0) return null;
 
         const sum = pnlRawData.reduce((acc, item) => {
-            acc.total_revenue += (item.gross_sales || 0);
-            acc.total_transferred += (item.net_sales || 0); // net_sales in item usually approximates transferred
+            const gross = item.gross_sales || 0;
+            const net_sales = item.net_sales || 0;
+            const logistics = item.logistics || 0;
+            const penalties = item.penalties || 0;
+            const cogs = item.cogs || 0;
             
-            // Если комиссия есть явно в ответе - берем ее, иначе считаем разницу (грубо)
-            const commission = item.commission || 0;
-            acc.total_commission += commission;
+            // Основной расчет "Комиссии и услуг WB":
+            // Выручка (Gross) - К перечислению (Net) = (Комиссия + Логистика + Штрафы)
+            // Следовательно: Комиссия = (Gross - Net) - Логистика - Штрафы
+            const gap = gross - net_sales;
+            const calculated_commission = gap - logistics - penalties;
 
-            acc.total_cost_price += (item.cogs || 0);
-            acc.total_logistics += (item.logistics || 0);
-            acc.total_penalty += (item.penalties || 0);
-            acc.net_profit += (item.cm3 || 0);
+            acc.total_revenue += gross;
+            acc.total_transferred += net_sales;
+            acc.total_commission += calculated_commission;
+            acc.total_cost_price += cogs;
+            acc.total_logistics += logistics;
+            acc.total_penalty += penalties;
+            
+            // Чистая прибыль: К перечислению - Себестоимость
+            // Или: Выручка - Комиссия - Логистика - Штрафы - Себестоимость
+            acc.net_profit += (net_sales - cogs - penalties); // Обычно в net_sales штрафы уже учтены, но завист от API.
+            // Верный классический P&L:
+            // Net Profit = Gross - Commission - Logistics - Penalties - COGS
+            // Так как мы вычислили Commission так, чтобы Gross - Comm - Log - Pen = Net Sales,
+            // То Net Profit = Net Sales - COGS.
+            // *Примечание: иногда API возвращает cm3 готовым, но лучше пересчитать для консистентности таблицы*
+            
             return acc;
         }, {
             total_revenue: 0,
@@ -243,6 +260,9 @@ const FinancePage = ({ user, onNavigate }) => {
             total_penalty: 0,
             net_profit: 0
         });
+        
+        // Пересчет net_profit для гарантии сходимости таблицы
+        sum.net_profit = sum.total_transferred - sum.total_cost_price;
 
         // ROI calculation
         sum.roi = sum.total_cost_price > 0 
@@ -259,7 +279,7 @@ const FinancePage = ({ user, onNavigate }) => {
         return pnlRawData.map(item => ({
             ...item,
             date: item.date, // 'YYYY-MM-DD'
-            profit: item.cm3 // Using CM3 as Net Profit for chart
+            profit: (item.net_sales || 0) - (item.cogs || 0) // Consistent with summary
         }));
     }, [pnlRawData]);
 
@@ -460,34 +480,14 @@ const FinancePage = ({ user, onNavigate }) => {
                                         </span>
                                     </div>
                                     
-                                    {/* Added Commission Row */}
+                                    {/* Added Commission Row - Calculated from gap */}
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Комиссия WB
-                                            <InfoTooltip text="Комиссия маркетплейса." />
+                                            <InfoTooltip text="Комиссия маркетплейса (Расчетная: Выручка - Перечисление - Логистика - Штрафы)." />
                                         </span>
                                         <span className="font-bold text-purple-600">
                                             -{Math.round(pnlSummary.total_commission).toLocaleString()} ₽
-                                        </span>
-                                    </div>
-
-                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                        <span className="text-sm text-slate-500 font-medium flex items-center">
-                                            К перечислению
-                                            <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия WB)." />
-                                        </span>
-                                        <span className="font-bold text-indigo-600">
-                                            {Math.round(pnlSummary.total_transferred).toLocaleString()} ₽
-                                        </span>
-                                    </div>
-
-                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
-                                        <span className="text-sm text-slate-500 font-medium flex items-center">
-                                            Себестоимость
-                                            <InfoTooltip text="Закупочная стоимость реализованного товара." />
-                                        </span>
-                                        <span className="font-bold text-orange-500">
-                                            -{Math.round(pnlSummary.total_cost_price).toLocaleString()} ₽
                                         </span>
                                     </div>
 
@@ -511,11 +511,31 @@ const FinancePage = ({ user, onNavigate }) => {
                                         </span>
                                     </div>
 
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            К перечислению
+                                            <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия - Логистика - Штрафы)." />
+                                        </span>
+                                        <span className="font-bold text-indigo-600">
+                                            {Math.round(pnlSummary.total_transferred).toLocaleString()} ₽
+                                        </span>
+                                    </div>
+
+                                    <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                        <span className="text-sm text-slate-500 font-medium flex items-center">
+                                            Себестоимость
+                                            <InfoTooltip text="Закупочная стоимость реализованного товара." />
+                                        </span>
+                                        <span className="font-bold text-orange-500">
+                                            -{Math.round(pnlSummary.total_cost_price).toLocaleString()} ₽
+                                        </span>
+                                    </div>
+
                                     {/* Net Profit */}
                                     <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
                                         <span className="text-sm font-black text-slate-800 flex items-center">
                                             Чистая прибыль
-                                            <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость - Логистика - Штрафы." />
+                                            <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость." />
                                         </span>
                                         <span className={`text-xl font-black ${pnlSummary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                             {Math.round(pnlSummary.net_profit).toLocaleString()} ₽
@@ -527,7 +547,6 @@ const FinancePage = ({ user, onNavigate }) => {
                                             <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider mb-1">ROI</div>
                                             <div className="text-lg font-black text-emerald-700">{pnlSummary.roi?.toFixed(1)}%</div>
                                         </div>
-                                        {/* Placeholder for Sales count as it's not currently aggregated in summary */}
                                         <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
                                             <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Маржинальность</div>
                                             <div className="text-sm font-bold text-slate-700">
