@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Loader2, Calculator, DollarSign, Info, Truck, HelpCircle, ArrowLeft, Download, RefreshCw, Calendar, ChevronDown
+    Loader2, Calculator, DollarSign, Info, Truck, HelpCircle, 
+    ArrowLeft, Download, RefreshCw, Calendar, Package, TrendingUp, AlertTriangle
 } from 'lucide-react';
 import { 
     BarChart, Bar, Tooltip as RechartsTooltip, ResponsiveContainer, 
@@ -13,7 +14,7 @@ import CostEditModal from '../components/CostEditModal';
 const InfoTooltip = ({ text }) => (
     <div className="group/tooltip relative inline-flex items-center ml-1.5 align-middle">
         <HelpCircle size={14} className="text-slate-300 cursor-help hover:text-indigo-400 transition-colors" />
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 p-2.5 bg-slate-800 text-white text-[11px] leading-relaxed rounded-xl opacity-0 group-hover/tooltip:opacity-100 pointer-events-none transition-all duration-200 z-50 shadow-xl border border-white/10">
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-3 bg-slate-800 text-white text-[11px] leading-relaxed rounded-xl opacity-0 group-hover/tooltip:opacity-100 pointer-events-none transition-all duration-200 z-50 shadow-xl border border-white/10">
             {text}
             <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
         </div>
@@ -35,7 +36,7 @@ const FinancePage = ({ user, onNavigate }) => {
         return {
             start: start.toISOString().split('T')[0],
             end: end.toISOString().split('T')[0],
-            label: 'month' // 'week', 'month', '90', 'custom'
+            label: 'month' 
         };
     });
 
@@ -92,7 +93,6 @@ const FinancePage = ({ user, onNavigate }) => {
         setPnlLoading(true);
         setPnlError(null);
         try {
-            // Формируем query параметры с датами
             const query = new URLSearchParams({
                 date_from: dateRange.start,
                 date_to: dateRange.end
@@ -123,7 +123,6 @@ const FinancePage = ({ user, onNavigate }) => {
         }
     };
     
-    // Перезагружаем P&L при смене режима просмотра ИЛИ дат
     useEffect(() => {
         if (viewMode === 'pnl') {
             fetchPnlData();
@@ -139,7 +138,6 @@ const FinancePage = ({ user, onNavigate }) => {
             });
             if (res.ok) {
                 alert("Синхронизация запущена! Данные обновляются в фоне. Пожалуйста, подождите 1-2 минуты и обновите страницу.");
-                // Авто-обновление через 5 секунд, вдруг быстро пролетит
                 setTimeout(() => {
                     if (viewMode === 'pnl') fetchPnlData();
                 }, 5000);
@@ -187,7 +185,6 @@ const FinancePage = ({ user, onNavigate }) => {
                 ? '/api/finance/report/unit-economy-pdf'
                 : '/api/finance/report/pnl-pdf';
             
-            // Добавляем даты в параметры PDF
             const query = viewMode === 'pnl' 
                 ? `&date_from=${dateRange.start}&date_to=${dateRange.end}`
                 : '';
@@ -201,52 +198,17 @@ const FinancePage = ({ user, onNavigate }) => {
         }
     };
 
-    // --- Calculations ---
-    const pnlStats = useMemo(() => {
-        // ... (расчет unit-экономики остается без изменений для режима Unit)
-        let grossSales = 0;
-        let cogs = 0;
-        let logisticsTotal = 0; 
-        let commissionTotal = 0; 
-        
-        products.forEach(p => {
-            const velocity = p.supply?.metrics?.avg_daily_demand || 0;
-            const monthlySales = velocity * 30;
-            if (monthlySales > 0) {
-                const price = p.price_structure?.selling || 0;
-                grossSales += price * monthlySales;
-                cogs += p.cost_price * monthlySales;
-                const itemLogistics = p.logistics || 50; 
-                logisticsTotal += itemLogistics * monthlySales;
-                const commPct = p.commission_percent || 25;
-                const itemCommission = price * (commPct / 100);
-                commissionTotal += itemCommission * monthlySales;
-            }
-        });
-
-        if (grossSales === 0 && cogs === 0) return [];
-        const netSales = grossSales;
-        const cm1 = netSales - cogs;
-        const cm2 = cm1 - logisticsTotal - commissionTotal;
-        const marketing = cm2 * 0.1; 
-        const ebitda = cm2 - marketing;
-
-        return [
-            { name: 'Выручка (Seller)', value: Math.round(grossSales), type: 'income' },
-            { name: 'Себестоимость', value: -Math.round(cogs), type: 'expense' },
-            { name: 'Комиссия WB', value: -Math.round(commissionTotal), type: 'expense' },
-            { name: 'Логистика', value: -Math.round(logisticsTotal), type: 'expense' },
-            { name: 'Маркетинг (10%)', value: -Math.round(marketing), type: 'expense' },
-            { name: 'EBITDA', value: Math.round(ebitda), type: 'total' }
-        ];
-    }, [products]);
-
-    // Компонент карточки метрики
-    const MetricCard = ({ title, value, subvalue, color }) => (
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{title}</span>
-            <div className={`text-xl font-black ${color}`}>{value}</div>
-            {subvalue && <div className="text-[10px] text-slate-400 mt-1">{subvalue}</div>}
+    const MetricCard = ({ title, value, subvalue, color, icon: Icon }) => (
+        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between relative overflow-hidden">
+            <div className="flex justify-between items-start z-10">
+                <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block mb-1">{title}</span>
+                    <div className={`text-xl font-black ${color}`}>{value}</div>
+                    {subvalue && <div className="text-[10px] text-slate-400 mt-1">{subvalue}</div>}
+                </div>
+                {Icon && <Icon className="text-slate-100" size={32} />}
+            </div>
+            {Icon && <Icon className="absolute -bottom-2 -right-2 text-slate-50 w-20 h-20 -z-0 transform rotate-12" />}
         </div>
     );
 
@@ -254,47 +216,45 @@ const FinancePage = ({ user, onNavigate }) => {
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
             
             {/* Header */}
-            <div className="flex justify-between items-stretch h-20">
-                 <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-6 rounded-[28px] text-white shadow-xl shadow-emerald-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between">
-                    <div className="relative z-10">
-                        <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
-                            <DollarSign className="text-white" size={24} /> Финансы
-                        </h1>
-                        <p className="text-xs md:text-sm opacity-90 mt-1 font-medium text-white/90">
-                            {viewMode === 'unit' ? 'Unit-экономика товаров' : 'P&L Отчет о прибылях'}
-                        </p>
+            <div className="flex justify-between items-stretch h-24 mb-2">
+                 <div className="bg-gradient-to-r from-emerald-600 to-teal-500 p-5 rounded-[28px] text-white shadow-xl shadow-emerald-200/50 relative overflow-hidden flex-1 mr-3 flex flex-col justify-center">
+                    <div className="relative z-10 flex justify-between items-center w-full">
+                        <div>
+                            <h1 className="text-xl font-black flex items-center gap-2 mb-1">
+                                <DollarSign className="text-white fill-white/20" size={22} /> Финансы
+                            </h1>
+                            <p className="text-xs font-medium text-emerald-100/90">
+                                {viewMode === 'unit' ? 'Unit-экономика товаров' : 'P&L Отчет о прибылях'}
+                            </p>
+                        </div>
+                        <div className="flex gap-2">
+                             <button 
+                                onClick={handleSync}
+                                disabled={syncLoading}
+                                className="bg-white/20 backdrop-blur-md h-10 w-10 rounded-full hover:bg-white/30 transition-all flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-lg disabled:opacity-50"
+                                title="Синхронизировать данные"
+                            >
+                                <RefreshCw size={18} className={syncLoading ? "animate-spin" : ""} />
+                            </button>
+                             <button 
+                                onClick={handleDownload}
+                                disabled={pdfLoading}
+                                className="bg-white/20 backdrop-blur-md h-10 w-10 rounded-full hover:bg-white/30 transition-all flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-lg disabled:opacity-50"
+                                title="Скачать PDF"
+                            >
+                                {pdfLoading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                            </button>
+                        </div>
                     </div>
-
-                    <div className="relative z-10 flex gap-2">
-                         {/* Sync Button */}
-                         <button 
-                            onClick={handleSync}
-                            disabled={syncLoading}
-                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm disabled:opacity-50"
-                            title="Синхронизировать данные с WB (за 90 дней)"
-                        >
-                            <RefreshCw size={20} className={syncLoading ? "animate-spin" : ""} />
-                        </button>
-
-                         {/* Download Button */}
-                         <button 
-                            onClick={handleDownload}
-                            disabled={pdfLoading}
-                            className="bg-white/20 backdrop-blur-md p-2.5 rounded-full hover:bg-white/30 transition-colors flex items-center justify-center text-white border border-white/10 active:scale-95 shadow-sm disabled:opacity-50"
-                            title="Скачать PDF"
-                        >
-                            {pdfLoading ? <Loader2 size={20} className="animate-spin" /> : <Download size={20} />}
-                        </button>
-                    </div>
-                    
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+                    <div className="absolute bottom-0 left-0 w-24 h-24 bg-black/5 rounded-full -ml-8 -mb-8 blur-2xl"></div>
                  </div>
                  
                  <div className="flex flex-col gap-2 w-14 shrink-0">
                      {onNavigate && (
                          <button 
                             onClick={() => onNavigate('home')} 
-                            className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
+                            className="bg-white h-full rounded-2xl shadow-sm border border-slate-100 text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95"
                          >
                              <ArrowLeft size={24}/>
                          </button>
@@ -302,70 +262,58 @@ const FinancePage = ({ user, onNavigate }) => {
                  </div>
             </div>
 
-            {/* Controls: Toggle & Dates */}
-            <div className="flex flex-col gap-4">
-                {/* 1. Режимы */}
-                <div className="flex bg-white rounded-xl p-1 shadow-sm border border-slate-100 mx-auto w-full max-w-sm">
-                    <button
-                        onClick={() => setViewMode('unit')}
-                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'unit' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
-                        Unit Экономика
-                    </button>
-                    <button 
-                        onClick={() => setViewMode('pnl')}
-                        className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${viewMode === 'pnl' ? 'bg-slate-900 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
-                        P&L Отчет
-                    </button>
-                </div>
-
-                {/* 2. Даты (только для P&L) */}
-                {viewMode === 'pnl' && (
-                    <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm animate-in slide-in-from-top-2">
-                        <div className="flex justify-between items-center mb-2 px-1">
-                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                                <Calendar size={12} /> Период анализа
-                            </span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 mb-3">
-                            <button 
-                                onClick={() => handleDatePreset(7)}
-                                className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${dateRange.label === 'week' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-500 border border-slate-100'}`}
-                            >
-                                Неделя
-                            </button>
-                            <button 
-                                onClick={() => handleDatePreset(30)}
-                                className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${dateRange.label === 'month' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-500 border border-slate-100'}`}
-                            >
-                                Месяц
-                            </button>
-                            <button 
-                                onClick={() => handleDatePreset(90)}
-                                className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-colors ${dateRange.label === '90' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' : 'bg-slate-50 text-slate-500 border border-slate-100'}`}
-                            >
-                                90 Дней
-                            </button>
-                        </div>
-                        <div className="flex gap-2 items-center bg-slate-50 p-2 rounded-xl border border-slate-100">
-                            <input 
-                                type="date" 
-                                value={dateRange.start}
-                                onChange={(e) => handleDateChange('start', e.target.value)}
-                                className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full text-center"
-                            />
-                            <span className="text-slate-300">-</span>
-                            <input 
-                                type="date" 
-                                value={dateRange.end}
-                                onChange={(e) => handleDateChange('end', e.target.value)}
-                                className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full text-center"
-                            />
-                        </div>
-                    </div>
-                )}
+            {/* View Mode Switcher */}
+            <div className="flex bg-white rounded-2xl p-1.5 shadow-sm border border-slate-100 mx-auto w-full">
+                <button
+                    onClick={() => setViewMode('unit')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 ${viewMode === 'unit' ? 'bg-slate-900 text-white shadow-md transform scale-[1.02]' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                >
+                    Unit Экономика
+                </button>
+                <button 
+                    onClick={() => setViewMode('pnl')}
+                    className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 ${viewMode === 'pnl' ? 'bg-slate-900 text-white shadow-md transform scale-[1.02]' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}`}
+                >
+                    P&L Отчет
+                </button>
             </div>
+
+            {/* Dates (P&L only) */}
+            {viewMode === 'pnl' && (
+                <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm animate-in slide-in-from-top-2">
+                    <div className="flex justify-between items-center mb-3">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <Calendar size={14} className="text-slate-300" /> Период анализа
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                        {[{l: 'Неделя', v: 'week', d: 7}, {l: 'Месяц', v: 'month', d: 30}, {l: '90 Дней', v: '90', d: 90}].map((opt) => (
+                            <button 
+                                key={opt.v}
+                                onClick={() => handleDatePreset(opt.d)}
+                                className={`py-2 px-2 rounded-xl text-xs font-bold transition-colors ${dateRange.label === opt.v ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-50 text-slate-500 border border-slate-100 hover:bg-slate-100'}`}
+                            >
+                                {opt.l}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="flex gap-2 items-center bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
+                        <input 
+                            type="date" 
+                            value={dateRange.start}
+                            onChange={(e) => handleDateChange('start', e.target.value)}
+                            className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full text-center"
+                        />
+                        <span className="text-slate-300 font-light px-1">→</span>
+                        <input 
+                            type="date" 
+                            value={dateRange.end}
+                            onChange={(e) => handleDateChange('end', e.target.value)}
+                            className="bg-transparent text-xs font-bold text-slate-600 outline-none w-full text-center"
+                        />
+                    </div>
+                </div>
+            )}
 
             {editingCost && (
                 <CostEditModal 
@@ -375,51 +323,55 @@ const FinancePage = ({ user, onNavigate }) => {
                 />
             )}
 
-            {/* CONTENT AREA */}
             {loading ? (
                 <div className="flex justify-center p-20"><Loader2 className="animate-spin text-emerald-600" size={32}/></div>
             ) : viewMode === 'pnl' ? (
+                // --- P&L VIEW ---
                 <div className="space-y-4 animate-in slide-in-from-right-8">
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                         <div className="flex justify-between items-center mb-6">
                             <div>
                                 <h3 className="font-bold text-lg text-slate-800">Финансовый результат</h3>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                    Данные из еженедельных отчетов WB
+                                <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider font-bold">
+                                    Net Profit & Loss
                                 </p>
                             </div>
                             {user?.plan === 'start' && (
-                                <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded-lg font-bold">
+                                <span className="text-[10px] bg-amber-100 text-amber-700 px-2.5 py-1 rounded-full font-bold border border-amber-200">
                                     Демо-режим
                                 </span>
                             )}
                         </div>
 
                         {pnlLoading ? (
-                            <div className="flex flex-col items-center justify-center p-10 gap-3">
+                            <div className="flex flex-col items-center justify-center p-10 gap-3 min-h-[300px]">
                                 <Loader2 className="animate-spin text-indigo-500" size={32}/>
-                                <span className="text-xs text-slate-400">Считаем прибыль...</span>
+                                <span className="text-xs text-slate-400 font-medium">Анализируем отчеты...</span>
                             </div>
                         ) : pnlError ? (
-                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-center">
-                                <div className="font-bold text-amber-900 mb-2">⚠️ {pnlError}</div>
+                            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center">
+                                <div className="bg-amber-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
+                                    <AlertTriangle className="text-amber-600" size={24} />
+                                </div>
+                                <div className="font-bold text-amber-900 mb-2">Данные не загружены</div>
+                                <p className="text-xs text-amber-700 mb-4">{pnlError}</p>
                                 {user?.plan === 'start' && (
-                                    <div className="text-amber-700 mt-2 text-xs">
-                                        <p>На тарифе Start доступен только демо-режим.</p>
+                                    <div className="text-amber-800 text-xs bg-amber-100/50 p-3 rounded-xl">
+                                        На тарифе Start доступен только демо-режим.
                                     </div>
                                 )}
                             </div>
                         ) : (pnlData?.data && pnlData.data.length > 0) ? (
                             <>
-                                {/* --- ГРАФИК --- */}
-                                <div className="h-64 w-full mb-6">
+                                {/* Graph */}
+                                <div className="h-64 w-full mb-8">
                                     <ResponsiveContainer width="100%" height="100%">
                                         <BarChart data={pnlData.data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                             <XAxis 
                                                 dataKey="date" 
                                                 tick={{fontSize: 10, fill: '#94a3b8'}} 
-                                                tickFormatter={(val) => val.split('-').slice(1).join('.')} // MM.DD
+                                                tickFormatter={(val) => val.split('-').slice(1).join('.')} 
                                                 axisLine={false}
                                                 tickLine={false}
                                                 dy={10}
@@ -431,12 +383,12 @@ const FinancePage = ({ user, onNavigate }) => {
                                                 tickFormatter={(val) => `${(val / 1000).toFixed(0)}k`}
                                             />
                                             <RechartsTooltip 
-                                                cursor={{fill: '#f8fafc'}}
-                                                contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 30px -5px rgba(0,0,0,0.15)', fontSize: '12px'}}
+                                                cursor={{fill: '#f8fafc', radius: 4}}
+                                                contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 40px -5px rgba(0,0,0,0.1)', fontSize: '12px', padding: '12px'}}
                                                 labelFormatter={(label) => `Дата: ${label}`}
                                             />
                                             <ReferenceLine y={0} stroke="#cbd5e1" />
-                                            <Bar dataKey="cm3" name="Чистая прибыль" radius={[4, 4, 4, 4]}>
+                                            <Bar dataKey="cm3" name="Чистая прибыль" radius={[6, 6, 6, 6]} barSize={20}>
                                                 {pnlData.data.map((entry, index) => (
                                                     <Cell key={`cell-${index}`} fill={entry.cm3 > 0 ? '#10b981' : '#ef4444'} />
                                                 ))}
@@ -445,84 +397,79 @@ const FinancePage = ({ user, onNavigate }) => {
                                     </ResponsiveContainer>
                                 </div>
 
-                                {/* --- СВОДНАЯ ТАБЛИЦА С ПОДСКАЗКАМИ --- */}
-                                <div className="space-y-1">
+                                {/* Summary Table */}
+                                <div className="space-y-1 bg-slate-50 p-4 rounded-3xl border border-slate-100">
                                     {pnlData.summary && (
                                         <>
-                                            {/* Выручка */}
-                                            <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                                                <span className="text-sm text-slate-500 flex items-center">
+                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                                <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Выручка 
-                                                    <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП Wildberries). Это база для начисления комиссий." />
+                                                    <InfoTooltip text="Сумма продаж товаров по цене, установленной вами (до вычета СПП). База для комиссий." />
                                                 </span>
                                                 <span className="font-bold text-slate-800">
                                                     {Math.round(pnlData.summary.total_revenue).toLocaleString()} ₽
                                                 </span>
                                             </div>
 
-                                            {/* К перечислению (от WB) */}
-                                            <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                                                <span className="text-sm text-slate-500 flex items-center">
+                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                                <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     К перечислению
-                                                    <InfoTooltip text="Сумма, которую Wildberries фактически перечислил вам на счет за этот период (Выручка минус Комиссия WB, но до вычета Логистики и Штрафов в некоторых отчетах)." />
+                                                    <InfoTooltip text="Фактическая сумма от WB (Выручка - Комиссия WB)." />
                                                 </span>
                                                 <span className="font-bold text-indigo-600">
                                                     {Math.round(pnlData.summary.total_transferred).toLocaleString()} ₽
                                                 </span>
                                             </div>
 
-                                            {/* Себестоимость */}
-                                            <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                                                <span className="text-sm text-slate-500 flex items-center">
-                                                    Себестоимость (COGS)
-                                                    <InfoTooltip text="Закупочная стоимость проданных товаров. Рассчитывается как: (Кол-во продаж - Возвраты) * Ваша себестоимость." />
+                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                                <span className="text-sm text-slate-500 font-medium flex items-center">
+                                                    Себестоимость
+                                                    <InfoTooltip text="Закупочная стоимость реализованного товара." />
                                                 </span>
                                                 <span className="font-bold text-orange-500">
                                                     -{Math.round(pnlData.summary.total_cost_price).toLocaleString()} ₽
                                                 </span>
                                             </div>
 
-                                            {/* Логистика */}
-                                            <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                                                <span className="text-sm text-slate-500 flex items-center">
+                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                                <span className="text-sm text-slate-500 font-medium flex items-center">
                                                     Логистика
-                                                    <InfoTooltip text="Сумма удержаний за доставку товаров до покупателя и за обратную логистику при возвратах." />
+                                                    <InfoTooltip text="Доставка до клиента + Обратная логистика." />
                                                 </span>
                                                 <span className="font-bold text-blue-500">
                                                     -{Math.round(pnlData.summary.total_logistics).toLocaleString()} ₽
                                                 </span>
                                             </div>
 
-                                            {/* Штрафы */}
-                                            <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                                                <span className="text-sm text-slate-500 flex items-center">
-                                                    Штрафы и доплаты
-                                                    <InfoTooltip text="Штрафы, удержания и прочие доплаты, отраженные в еженедельных отчетах." />
+                                            <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
+                                                <span className="text-sm text-slate-500 font-medium flex items-center">
+                                                    Штрафы
+                                                    <InfoTooltip text="Штрафы и прочие удержания." />
                                                 </span>
                                                 <span className="font-bold text-red-500">
                                                     -{Math.round(pnlData.summary.total_penalty).toLocaleString()} ₽
                                                 </span>
                                             </div>
 
-                                            {/* ИТОГ */}
-                                            <div className="flex justify-between items-center py-3 mt-2 bg-slate-50 rounded-xl px-3">
-                                                <span className="text-sm font-bold text-slate-800 flex items-center">
-                                                    Чистая прибыль (Net)
-                                                    <InfoTooltip text="Финальный результат: К перечислению - Себестоимость - Логистика - Штрафы." />
+                                            {/* Net Profit */}
+                                            <div className="flex justify-between items-center py-4 mt-2 bg-white rounded-2xl px-4 shadow-sm border border-slate-100">
+                                                <span className="text-sm font-black text-slate-800 flex items-center">
+                                                    Чистая прибыль
+                                                    <InfoTooltip text="Итоговый результат: К перечислению - Себестоимость - Логистика - Штрафы." />
                                                 </span>
-                                                <span className={`text-lg font-black ${pnlData.summary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                <span className={`text-xl font-black ${pnlData.summary.net_profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                                     {Math.round(pnlData.summary.net_profit).toLocaleString()} ₽
                                                 </span>
                                             </div>
                                             
-                                            <div className="grid grid-cols-2 gap-2 mt-2">
-                                                <div className="bg-emerald-50 rounded-lg p-2 text-center">
-                                                    <div className="text-[10px] text-emerald-600 uppercase font-bold">Рентабельность</div>
-                                                    <div className="text-sm font-black text-emerald-700">{pnlData.summary.roi?.toFixed(1)}% ROI</div>
+                                            <div className="grid grid-cols-2 gap-2 mt-3">
+                                                <div className="bg-emerald-100/50 border border-emerald-100 rounded-2xl p-3 text-center">
+                                                    <div className="text-[10px] text-emerald-600 uppercase font-bold tracking-wider mb-1">ROI</div>
+                                                    <div className="text-lg font-black text-emerald-700">{pnlData.summary.roi?.toFixed(1)}%</div>
                                                 </div>
-                                                <div className="bg-slate-100 rounded-lg p-2 text-center">
-                                                    <div className="text-[10px] text-slate-500 uppercase font-bold">Продаж / Возвратов</div>
-                                                    <div className="text-sm font-black text-slate-700">{pnlData.summary.sales_count} / {pnlData.summary.returns_count}</div>
+                                                <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
+                                                    <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Продаж / Возвратов</div>
+                                                    <div className="text-sm font-bold text-slate-700">{pnlData.summary.sales_count} / {pnlData.summary.returns_count} шт</div>
                                                 </div>
                                             </div>
                                         </>
@@ -530,36 +477,45 @@ const FinancePage = ({ user, onNavigate }) => {
                                 </div>
                             </>
                         ) : (
-                            <div className="text-center text-slate-400 py-10 flex flex-col items-center gap-4">
-                                <p className="text-sm">Нет данных за выбранный период ({dateRange.start} — {dateRange.end})</p>
+                            <div className="text-center text-slate-400 py-16 flex flex-col items-center gap-6">
+                                <div className="bg-slate-50 p-4 rounded-full">
+                                    <Package size={32} className="text-slate-300" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium text-slate-600 mb-1">Нет данных за период</p>
+                                    <p className="text-xs text-slate-400">{dateRange.start} — {dateRange.end}</p>
+                                </div>
                                 <button 
                                     onClick={handleSync}
                                     disabled={syncLoading}
-                                    className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-200"
+                                    className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-slate-800 transition-all flex items-center gap-2 shadow-lg shadow-slate-200 active:scale-95"
                                 >
                                     <RefreshCw size={18} className={syncLoading ? "animate-spin" : ""} />
-                                    {syncLoading ? "Загружаем..." : "Загрузить данные с WB"}
+                                    {syncLoading ? "Загружаем..." : "Загрузить отчеты с WB"}
                                 </button>
-                                <p className="text-[10px] max-w-[200px] leading-tight opacity-70">
-                                    Нажмите кнопку, чтобы скачать архив финансовых отчетов за последние 90 дней.
-                                </p>
                             </div>
                         )}
                     </div>
                 </div>
             ) : (
-                /* --- UNIT ECONOMY VIEW (Остался без сильных изменений, только стиль карточек подправил) --- */
+                // --- UNIT ECONOMY VIEW ---
                 <div className="space-y-4 animate-in slide-in-from-left-8">
                     <div className="grid grid-cols-2 gap-3">
-                        <MetricCard title="Товаров в анализе" value={products.length} color="text-slate-800" />
+                        <MetricCard 
+                            title="Артикулов" 
+                            value={products.length} 
+                            color="text-slate-800" 
+                            icon={Package}
+                        />
                         <MetricCard 
                             title="Средний ROI" 
                             value={`${Math.round(products.reduce((acc, p) => acc + (p.unit_economy?.roi || 0), 0) / (products.length || 1))}%`} 
                             color="text-emerald-600" 
+                            icon={TrendingUp}
                         />
                     </div>
 
-                    <div className="space-y-3">
+                    <div className="space-y-4">
                         {products.map((item) => {
                             const price = item.price_structure?.selling || 0;
                             const basicPrice = item.price_structure?.basic || 0;
@@ -568,61 +524,108 @@ const FinancePage = ({ user, onNavigate }) => {
                             const commVal = Math.round(price * (commPct / 100));
                             const logVal = Math.round(item.logistics || 50);
                             
+                            // Метаданные (Фото и название)
+                            const meta = item.meta || {};
+                            const photoUrl = meta.photo || null;
+                            
                             return (
-                                <div key={item.sku} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative group">
-                                    {/* ... тут логика карточки товара осталась прежней ... */}
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div className="min-w-0">
-                                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">SKU {item.sku}</div>
-                                            <div className="flex flex-col relative">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm text-slate-400 line-through decoration-slate-300">{basicPrice} ₽</span>
-                                                    <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md">-{discount}%</span>
+                                <div key={item.sku} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative group overflow-hidden">
+                                    
+                                    {/* Header: Photo & Title */}
+                                    <div className="flex gap-4 mb-5">
+                                        <div className="w-20 h-24 shrink-0 rounded-xl bg-slate-100 overflow-hidden relative border border-slate-200">
+                                            {photoUrl ? (
+                                                <img src={photoUrl} alt="" className="w-full h-full object-cover" />
+                                            ) : (
+                                                <div className="w-full h-full flex items-center justify-center text-slate-300">
+                                                    <Package size={24} />
                                                 </div>
-                                                <div className="flex items-baseline gap-2">
-                                                    <div className="font-bold text-xl leading-tight text-slate-800">{price} ₽</div>
-                                                </div>
-                                                <div className="text-[9px] text-emerald-600 font-medium mt-0.5">База для выплат</div>
+                                            )}
+                                            <div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] text-center py-0.5 font-medium backdrop-blur-sm">
+                                                {item.quantity} шт
                                             </div>
                                         </div>
-                                        <button onClick={() => setEditingCost(item)} className="p-3 bg-slate-50 text-slate-500 rounded-2xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
-                                            <Calculator size={20} />
-                                        </button>
+                                        
+                                        <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
+                                            <div>
+                                                <div className="flex justify-between items-start">
+                                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                                        {meta.brand || 'No Brand'} 
+                                                        <span className="text-slate-300">•</span>
+                                                        <span className="font-mono">{item.sku}</span>
+                                                    </div>
+                                                    <button onClick={() => setEditingCost(item)} className="p-2 -mt-2 -mr-2 text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors">
+                                                        <Calculator size={18} />
+                                                    </button>
+                                                </div>
+                                                <div className="text-sm font-bold text-slate-800 leading-tight line-clamp-2" title={meta.name}>
+                                                    {meta.name || `Товар ${item.sku}`}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-end gap-2 mt-2">
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] text-slate-400 line-through">{basicPrice} ₽</span>
+                                                    <div className="text-xl font-black text-slate-800 leading-none">
+                                                        {price} ₽
+                                                    </div>
+                                                </div>
+                                                <span className="text-[10px] font-bold bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded-md mb-0.5">
+                                                    -{discount}%
+                                                </span>
+                                            </div>
+                                        </div>
                                     </div>
                                     
-                                    <div className="space-y-2 mb-4 relative">
-                                        <div className="absolute left-[3px] top-2 bottom-2 w-0.5 bg-slate-100 rounded-full"></div>
-                                        <div className="flex justify-between items-center text-sm pl-4 relative">
-                                            <div className="w-2 h-2 bg-purple-300 rounded-full absolute -left-[4px]"></div>
-                                            <span className="text-slate-400 flex items-center gap-1">Комиссия WB <span className="text-[10px] bg-purple-50 text-purple-600 px-1 rounded">{commPct}%</span></span>
-                                            <span className="text-purple-400">-{commVal} ₽</span>
+                                    {/* Waterfall */}
+                                    <div className="space-y-2.5 relative bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                                        {/* Комиссия */}
+                                        <div className="flex justify-between items-center text-xs relative">
+                                            <span className="text-slate-500 flex items-center gap-1.5">
+                                                <div className="w-1.5 h-1.5 bg-purple-400 rounded-full"></div>
+                                                Комиссия <span className="bg-purple-50 text-purple-600 px-1 rounded font-bold">{commPct}%</span>
+                                            </span>
+                                            <span className="font-medium text-slate-700">-{commVal} ₽</span>
                                         </div>
-                                        <div className="flex justify-between items-center text-sm pl-4 relative">
-                                            <div className="w-2 h-2 bg-blue-300 rounded-full absolute -left-[4px]"></div>
-                                            <span className="text-slate-400 flex items-center gap-1">Логистика <Truck size={10} /></span>
-                                            <span className="text-blue-400">-{logVal} ₽</span>
+
+                                        {/* Логистика */}
+                                        <div className="flex justify-between items-center text-xs relative">
+                                            <span className="text-slate-500 flex items-center gap-1.5">
+                                                <div className="w-1.5 h-1.5 bg-blue-400 rounded-full"></div>
+                                                Логистика
+                                            </span>
+                                            <span className="font-medium text-slate-700">-{logVal} ₽</span>
                                         </div>
-                                        <div className="flex justify-between items-center text-sm pl-4 relative">
-                                            <div className="w-2 h-2 bg-orange-300 rounded-full absolute -left-[4px]"></div>
-                                            <span className="text-slate-400">Себестоимость</span>
-                                            <span className="text-orange-400">-{item.cost_price} ₽</span>
+
+                                        {/* Себестоимость */}
+                                        <div className="flex justify-between items-center text-xs relative">
+                                            <span className="text-slate-500 flex items-center gap-1.5">
+                                                <div className="w-1.5 h-1.5 bg-orange-400 rounded-full"></div>
+                                                Себестоимость
+                                            </span>
+                                            <span className="font-medium text-slate-700">-{item.cost_price} ₽</span>
                                         </div>
-                                        <div className="flex justify-between items-center text-base pl-4 relative pt-1 border-t border-slate-50 mt-1">
-                                            <div className={`w-2 h-2 rounded-full absolute -left-[4px] ${item.unit_economy.profit > 0 ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-                                            <span className="font-bold text-slate-800">Чистая прибыль (Unit)</span>
-                                            <span className={`font-black ${item.unit_economy.profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+
+                                        <div className="border-t border-slate-200 my-2"></div>
+
+                                        {/* ИТОГ */}
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-sm font-bold text-slate-800">Прибыль с шт.</span>
+                                            <span className={`text-base font-black ${item.unit_economy.profit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                                 {item.unit_economy.profit} ₽
                                             </span>
                                         </div>
                                     </div>
 
-                                    <div className="flex gap-2">
-                                        <span className={`flex-1 text-center py-2 rounded-xl text-xs font-bold ${item.unit_economy.roi > 100 ? 'bg-emerald-100 text-emerald-700' : item.unit_economy.roi > 30 ? 'bg-blue-100 text-blue-700' : 'bg-red-50 text-red-600'}`}>
-                                            ROI: {item.unit_economy.roi}%
-                                        </span>
-                                        <span className="flex-1 text-center py-2 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
-                                            Маржа: {item.unit_economy.margin}%
-                                        </span>
+                                    <div className="grid grid-cols-2 gap-2 mt-3">
+                                        <div className={`text-center py-2.5 rounded-xl border ${item.unit_economy.roi > 100 ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : item.unit_economy.roi > 30 ? 'bg-blue-50 border-blue-100 text-blue-700' : 'bg-red-50 border-red-100 text-red-700'}`}>
+                                            <div className="text-[9px] uppercase font-bold opacity-70 mb-0.5">ROI</div>
+                                            <div className="text-sm font-black">{item.unit_economy.roi}%</div>
+                                        </div>
+                                        <div className="text-center py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600">
+                                            <div className="text-[9px] uppercase font-bold opacity-60 mb-0.5">Маржа</div>
+                                            <div className="text-sm font-black">{item.unit_economy.margin}%</div>
+                                        </div>
                                     </div>
                                 </div>
                             );
