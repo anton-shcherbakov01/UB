@@ -713,9 +713,10 @@ class WBStatisticsAPI:
     async def get_realization_reports(self, date_from: datetime, date_to: datetime) -> List[Dict[str, Any]]:
         """
         Получение финансового отчета (реализации).
-        https://openapi.wildberries.ru/statistics/api/ru/#tag/Statistika/paths/~1api~1v1~1supplier~1reportDetailByPeriod/get
+        Используем V5 API, т.к. V1 deprecated.
         """
-        url = "/api/v1/supplier/reportDetailByPeriod"
+        # ИСПРАВЛЕНИЕ: V1 -> V5
+        url = "/api/v5/supplier/reportDetailByPeriod"
         all_reports = []
         rrdid = 0
         
