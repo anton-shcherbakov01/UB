@@ -342,6 +342,23 @@ async def get_supply_coefficients(user: User = Depends(get_current_user)):
 async def calculate_transit(req: TransitCalcRequest, user: User = Depends(get_current_user)):
     return await wb_api_service.calculate_transit(req.volume, req.destination)
 
+@router.post("/finance/sync/pnl")
+async def sync_pnl_data(
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Принудительная синхронизация отчетов реализации для P&L"""
+    if not user.wb_api_token:
+        raise HTTPException(status_code=400, detail="No WB Token")
+    
+    # Lazy import to avoid circular dependency
+    from tasks.report_loader import load_realization_reports_task
+    
+    # Запускаем в фоне загрузку за последние 90 дней
+    background_tasks.add_task(load_realization_reports_task, user.id, user.wb_api_token, days=90)
+    return {"status": "started", "message": "P&L data sync started (last 90 days)"}
+
 @router.get("/finance/pnl")
 async def get_pnl_data(
     date_from: Optional[str] = None,

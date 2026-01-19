@@ -676,7 +676,7 @@ class WBStatisticsAPI:
                 if not items:
                     # Log only if really no items found to avoid spam if it's just end of list
                     if offset == 0:
-                         logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                          logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                     is_more = False
                     break
                 
@@ -708,3 +708,54 @@ class WBStatisticsAPI:
         except Exception as e:
             logger.error(f"Failed to fetch full sales funnel in API class: {e}")
             return {}
+
+    # --- НОВЫЙ МЕТОД ДЛЯ P&L: Реализация ---
+    async def get_realization_reports(self, date_from: datetime, date_to: datetime) -> List[Dict[str, Any]]:
+        """
+        Получение финансового отчета (реализации).
+        https://openapi.wildberries.ru/statistics/api/ru/#tag/Statistika/paths/~1api~1v1~1supplier~1reportDetailByPeriod/get
+        """
+        url = "/api/v1/supplier/reportDetailByPeriod"
+        all_reports = []
+        rrdid = 0
+        
+        # Защита от вечного цикла
+        max_pages = 500 
+        page = 0
+        
+        while page < max_pages:
+            params = {
+                "dateFrom": date_from.strftime("%Y-%m-%d"),
+                "dateTo": date_to.strftime("%Y-%m-%d"),
+                "limit": 10000,
+                "rrdid": rrdid
+            }
+            
+            # Используем _request который уже имеет ретраи
+            data = await self._request(url, params=params)
+            
+            if not data:
+                break
+                
+            # API может вернуть None вместо списка
+            if not isinstance(data, list):
+                logger.warning(f"Realization report API returned non-list: {type(data)}")
+                break
+                
+            all_reports.extend(data)
+            
+            if len(data) < 10000:
+                break
+                
+            # Берем rrd_id последнего элемента для пагинации
+            last_item = data[-1]
+            rrdid = last_item.get("rrd_id")
+            
+            if not rrdid:
+                break
+            
+            page += 1
+            # Пауза, чтобы не душить API
+            await asyncio.sleep(0.5)
+            
+        return all_reports
