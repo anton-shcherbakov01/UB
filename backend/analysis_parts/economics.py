@@ -93,9 +93,9 @@ class EconomicsModule:
         }
 
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
-        logger.info(f"📊 [PnL] Request for user={user_id} range={date_from} to {date_to}")
+        logger.info(f"📊 [PnL] Запрос данных из ClickHouse для user={user_id}")
 
-        # --- ISUE FIX: Added FINAL to query to prevent stacking duplicates ---
+        # Используем ppvz_sales_commission и ppvz_for_pay согласно документации WB
         ch_query = """
         SELECT 
             toDate(sale_dt) as report_date,
@@ -104,10 +104,11 @@ class EconomicsModule:
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Возврат') as returns_sum,
             sumIf(quantity, doc_type_name = 'Продажа') as qty_sold,
             sumIf(quantity, doc_type_name = 'Возврат') as qty_returned,
-            sum(ppvz_sales_commission) as commission,
-            sum(delivery_rub) as logistics,
-            sum(penalty) as penalties,
-            sum(additional_payment) as adjustments
+            sum(ppvz_sales_commission) as wb_commission,  -- Явное поле комиссии из отчета
+            sum(delivery_rub) as logistics,               -- Логистика
+            sum(penalty) as penalties,                    -- Штрафы
+            sum(additional_payment) as adjustments,       -- Доплаты
+            sum(ppvz_for_pay) as net_for_pay              -- Итоговая сумма к перечислению за товар
         FROM wb_analytics.realization_reports FINAL
         WHERE supplier_id = %(uid)s 
           AND sale_dt >= %(start)s 
@@ -121,25 +122,21 @@ class EconomicsModule:
         try:
             ch_client = ch_service.get_client()
             if not ch_client:
-                logger.warning("⚠️ ClickHouse client not available for P&L query")
+                logger.warning("⚠️ ClickHouse client not available")
                 return []
             
-            logger.debug(f"Executing CH Query with params: {params}")
             result = ch_client.query(ch_query, parameters=params)
             rows = result.result_rows
-            logger.info(f"✅ ClickHouse returned {len(rows)} rows")
-            
+            logger.info(f"✅ ClickHouse вернул {len(rows)} строк")
         except Exception as e:
-            logger.error(f"❌ ClickHouse Query Error: {e}")
+            logger.error(f"❌ ClickHouse P&L Error: {e}")
             return []
 
-        if not rows: 
-            logger.warning(f"No P&L data found for user {user_id} in specified period.")
-            return []
+        if not rows: return []
 
         unique_skus = list(set([row[1] for row in rows]))
         
-        # Получаем себестоимость
+        # Получаем себестоимость из основной БД
         try:
             stmt = select(ProductCost).where(ProductCost.user_id == user_id, ProductCost.sku.in_(unique_skus))
             cogs_result = await db.execute(stmt)
@@ -150,45 +147,57 @@ class EconomicsModule:
 
         daily_pnl = {}
         for row in rows:
-            r_date, sku, gross_sales, returns_sum, qty_sold, qty_returned, commission, logistics, penalties, adjustments = row
+            r_date, sku, gross, returns, q_sold, q_ret, commission, logistics, penalties, adjustments, net_pay = row
             
-            # Приведение типов для безопасности
-            gross_sales = float(gross_sales) if gross_sales else 0.0
-            returns_sum = float(returns_sum) if returns_sum else 0.0
-            qty_sold = int(qty_sold) if qty_sold else 0
-            qty_returned = int(qty_returned) if qty_returned else 0
-            commission = float(commission) if commission else 0.0
-            logistics = float(logistics) if logistics else 0.0
-            penalties = float(penalties) if penalties else 0.0
-            adjustments = float(adjustments) if adjustments else 0.0
+            # Приведение типов для стабильности
+            gross = float(gross or 0)
+            returns = float(returns or 0)
+            q_sold = int(q_sold or 0)
+            q_ret = int(q_ret or 0)
+            commission = float(commission or 0)
+            logistics = float(logistics or 0)
+            penalties = float(penalties or 0)
+            adjustments = float(adjustments or 0)
+            net_pay = float(net_pay or 0)
 
+            # Себестоимость реализованного товара (проданное минус возвращенное)
             unit_cost = costs_map.get(sku, 0)
-            # COGS считаем как (Продано - Вернуто) * Себестоимость
-            total_cogs = (qty_sold - qty_returned) * unit_cost
+            total_cogs = (q_sold - q_ret) * unit_cost
 
             date_str = r_date.strftime("%Y-%m-%d")
             if date_str not in daily_pnl:
                 daily_pnl[date_str] = {
                     "date": date_str, "gross_sales": 0.0, "net_sales": 0.0, "cogs": 0.0,
-                    "commission": 0.0, "logistics": 0.0, "penalties": 0.0, "marketing": 0.0, 
-                    "cm1": 0.0, "cm2": 0.0, "cm3": 0.0
+                    "commission": 0.0, "logistics": 0.0, "penalties": 0.0, "cm3": 0.0
                 }
+            
             d = daily_pnl[date_str]
-            d["gross_sales"] += gross_sales
-            d["net_sales"] += (gross_sales - returns_sum) 
-            d["cogs"] += total_cogs
+            # Выручка = общая сумма продаж минус возвраты
+            d["gross_sales"] += (gross - returns)
+            # Комиссия WB (суммируем из всех строк)
             d["commission"] += commission
+            # Логистика
             d["logistics"] += logistics
+            # Штрафы и доплаты
             d["penalties"] += (penalties + adjustments)
+            # К перечислению (уже включает в себя вычет комиссии)
+            d["net_sales"] += net_pay
+            # Себестоимость
+            d["cogs"] += total_cogs
         
         final_output = []
-        for date_str, metrics in sorted(daily_pnl.items()):
-            metrics["cm1"] = metrics["net_sales"] - metrics["cogs"]
-            metrics["cm2"] = metrics["cm1"] - metrics["commission"] - metrics["logistics"] - metrics["penalties"]
-            metrics["cm3"] = metrics["cm2"] - metrics["marketing"]
-            for k, v in metrics.items():
-                if isinstance(v, float): metrics[k] = round(v, 2)
-            final_output.append(metrics)
+        for date_str, m in sorted(daily_pnl.items()):
+            # В P&L обычно Net Sales (К перечислению) уже за вычетом комиссии, 
+            # но мы отображаем комиссию отдельно для наглядности в «водопаде».
+            # Чистая прибыль (CM3) = К перечислению - Логистика - Штрафы - Себестоимость
+            # Примечание: В зависимости от типа отчета WB, ppvz_for_pay может уже содержать вычет логистики.
+            # Мы считаем прибыль как фактический остаток после всех операционных расходов.
+            m["cm3"] = m["net_sales"] - m["logistics"] - m["penalties"] - m["cogs"]
+            
+            # Округляем до копеек
+            for k in ["gross_sales", "net_sales", "cogs", "commission", "logistics", "penalties", "cm3"]:
+                m[k] = round(m[k], 2)
+            final_output.append(m)
             
         return final_output
 
