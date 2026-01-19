@@ -109,7 +109,7 @@ class EconomicsModule:
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Возврат') as returns_sum,
             sumIf(quantity, doc_type_name = 'Продажа') as qty_sold,
             sumIf(quantity, doc_type_name = 'Возврат') as qty_returned,
-            --sum(ppvz_sales_commission) as wb_commission,
+            sum(ppvz_sales_commission) as wb_commission,
             sum(delivery_rub) as logistics,
             sum(penalty) as penalties,
             sum(additional_payment) as adjustments,
