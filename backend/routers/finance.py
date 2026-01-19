@@ -134,168 +134,139 @@ async def get_my_products_finance(
     # 1. Получаем остатки из WB API
     try:
         stocks = await wb_api_service.get_my_stocks(user.wb_api_token)
-        logger.info(f"📦 [UnitEconomy] Получено {len(stocks) if stocks else 0} записей остатков")
-        
         if not stocks: 
-            logger.warning("⚠️ [UnitEconomy] WB вернул пустой список остатков")
             return []
     except Exception as e:
         logger.error(f"❌ [UnitEconomy] Ошибка получения остатков: {e}")
         return []
     
-    # 2. Группируем остатки по SKU
+    # 2. Группируем по SKU
     sku_map = {}
     for s in stocks:
         sku = s.get('nmId')
         if not sku: continue
-        
         if sku not in sku_map:
             sku_map[sku] = {
                 "sku": sku, 
                 "quantity": 0, 
-                "basic_price": s.get('Price', 0),    # Цена до скидки
-                "discount": s.get('Discount', 0),    # Скидка продавца
-                "brand": s.get('brand', s.get('Brand', '')), # Пробуем достать бренд из остатков
+                "basic_price": s.get('Price', 0),
+                "discount": s.get('Discount', 0),
+                "brand": s.get('brand', s.get('Brand', '')),
                 "subject": s.get('subject', s.get('Subject', ''))
             }
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
     skus = list(sku_map.keys())
     
-    # 3. Загружаем настройки расходов из БД
-    try:
-        costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
-        costs_map = {c.sku: c for c in costs_res.scalars().all()}
-    except Exception as e:
-        logger.error(f"❌ [UnitEconomy] Ошибка БД (Cost): {e}")
-        costs_map = {}
+    # 3. Загружаем расходы из БД и глобальные настройки из Redis
+    costs_res = await db.execute(select(ProductCost).where(ProductCost.user_id == user.id, ProductCost.sku.in_(skus)))
+    costs_map = {c.sku: c for c in costs_res.scalars().all()}
     
-    # 4. Redis кеш
     r_client = get_redis_client()
-    
-    commissions_global = {}
-    logistics_tariffs = {}
-    products_meta_cache = {}
+    commissions_global, logistics_tariffs, products_meta_cache = {}, {}, {}
 
     if r_client:
         try:
             comm_data = r_client.get(f"meta:commissions:{user.id}")
             tariffs_data = r_client.get("meta:logistics_tariffs")
             
-            if comm_data: commissions_global = json.loads(comm_data)
-            if tariffs_data: logistics_tariffs = json.loads(tariffs_data)
+            # Если глобальных данных нет, запускаем синхронизацию в фоне
+            if not comm_data or not tariffs_data:
+                background_tasks.add_task(sync_product_metadata, user.id)
 
+            commissions_global = json.loads(comm_data) if comm_data else {}
+            logistics_tariffs = json.loads(tariffs_data) if tariffs_data else {}
+
+            # Пакетное получение меты товаров и прогнозов
             pipe = r_client.pipeline()
             for sku in skus:
                 pipe.get(f"meta:product:{user.id}:{sku}")
                 pipe.get(f"forecast:{user.id}:{sku}")
             
             redis_results = pipe.execute()
-            
             for i, sku in enumerate(skus):
                 meta_raw = redis_results[i * 2]
                 forecast_raw = redis_results[i * 2 + 1]
-                
                 products_meta_cache[sku] = {
                     "meta": json.loads(meta_raw) if meta_raw else None,
                     "forecast": json.loads(forecast_raw) if forecast_raw else None
                 }
         except Exception as e:
-            logger.error(f"⚠️ [UnitEconomy] Ошибка Redis: {e}")
+            logger.error(f"⚠️ [UnitEconomy] Ошибка кэша: {e}")
 
-    # --- 5. PARSER INTEGRATION (PHOTO RECOVERY) ---
-    # Находим товары без фото в кэше и парсим их параллельно через ProductParser
+    # 4. ВОССТАНОВЛЕНИЕ МЕТАДАННЫХ (Лучшее из Варианта 1)
     parser = ProductParser()
-    missing_photo_skus = []
-    
+    missing_meta_skus = []
     for sku in skus:
-        cache = products_meta_cache.get(sku, {})
-        meta = cache.get("meta") or {}
-        # Если фото нет или это старый плейсхолдер
+        meta = products_meta_cache.get(sku, {}).get("meta") or {}
+        # Проверяем на отсутствие фото или старый формат ссылок
         if not meta.get('photo') or "basket" not in str(meta.get('photo', '')):
-            missing_photo_skus.append(sku)
-            
-    if missing_photo_skus:
-        logger.info(f"🕵️ [Parser] Запуск поиска фото для {len(missing_photo_skus)} товаров...")
-        # Запускаем параллельно
-        parse_tasks = [parser._find_card_json(sku) for sku in missing_photo_skus]
+            missing_meta_skus.append(sku)
+
+    if missing_meta_skus:
+        logger.info(f"🕵️ [Parser] Догружаем данные для {len(missing_meta_skus)} SKU")
+        parse_tasks = [parser._find_card_json(sku) for sku in missing_meta_skus]
         parsed_results = await asyncio.gather(*parse_tasks)
         
-        # Обновляем кэш и Redis
         if r_client:
             pipe = r_client.pipeline()
             for i, p_data in enumerate(parsed_results):
-                sku = missing_photo_skus[i]
-                if p_data and p_data.get('image_url'):
-                    # Обновляем структуру
-                    current_cache = products_meta_cache.get(sku, {})
-                    meta = current_cache.get("meta") or {}
-                    
-                    meta['photo'] = p_data.get('image_url')
-                    meta['name'] = p_data.get('imt_name') or meta.get('name')
-                    meta['brand'] = p_data.get('selling', {}).get('brand_name') or meta.get('brand')
-                    
+                sku = missing_meta_skus[i]
+                if p_data:
+                    current_cache = products_meta_cache.get(sku, {"meta": {}, "forecast": None})
+                    meta = current_cache["meta"] or {}
+                    # Обновляем поля из парсера
+                    meta.update({
+                        'photo': p_data.get('image_url') or get_wb_image_url(sku),
+                        'name': p_data.get('imt_name') or meta.get('name'),
+                        'brand': p_data.get('selling', {}).get('brand_name') or meta.get('brand')
+                    })
                     current_cache['meta'] = meta
                     products_meta_cache[sku] = current_cache
-                    
-                    # Сохраняем в Redis на сутки
                     pipe.setex(f"meta:product:{user.id}:{sku}", 86400, json.dumps(meta))
-            try:
-                pipe.execute()
-                logger.info("💾 [Parser] Новые фото сохранены в Redis")
-            except: pass
+            pipe.execute()
 
+    # 5. ФИНАНСОВЫЙ РАСЧЕТ (Лучшее из Варианта 2)
     result = []
-
     for sku, data in sku_map.items():
         try:
             cost_obj = costs_map.get(sku)
-            
             cache_entry = products_meta_cache.get(sku, {})
             meta = cache_entry.get("meta") or {}
             forecast_json = cache_entry.get("forecast")
-            
-            # Если фото все еще нет (даже после парсера), ставим заглушку
-            if not meta.get('photo'):
-                meta['photo'] = "" # Frontend покажет плейсхолдер
-            
-            if not meta.get('name'):
-                meta['name'] = data.get('subject') or f"Товар {sku}"
-            
-            if not meta.get('brand'):
-                meta['brand'] = data.get('brand') or "Wildberries"
+
+            # Гарантия наличия базовых полей для фронтенда
+            if not meta.get('photo'): meta['photo'] = get_wb_image_url(sku)
+            if not meta.get('name'): meta['name'] = data.get('subject') or f"Товар {sku}"
+            if not meta.get('brand'): meta['brand'] = data.get('brand') or "Wildberries"
 
             # --- ЛОГИСТИКА ---
             if cost_obj and cost_obj.logistics is not None:
-                logistics_val = cost_obj.logistics
+                log_val = cost_obj.logistics
             else:
-                volume = meta.get('volume', 1.0) 
-                logistics_val = calculate_auto_logistics(volume, logistics_tariffs)
+                log_val = calculate_auto_logistics(meta.get('volume', 1.0), logistics_tariffs)
 
             # --- КОМИССИЯ ---
             if cost_obj and cost_obj.commission_percent is not None:
-                commission_pct = cost_obj.commission_percent
+                comm_pct = cost_obj.commission_percent
             else:
-                subj_id = str(meta.get('subject_id', ''))
-                commission_pct = commissions_global.get(subj_id, 25.0)
+                comm_pct = commissions_global.get(str(meta.get('subject_id', '')), 25.0)
 
+            # --- ЮНИТ-ЭКОНОМИКА ---
+            price_raw = data['basic_price']
+            discount = data['discount']
+            # Цена после скидки продавца (то, что платит покупатель без учета СПП)
+            selling_price = price_raw * (1 - discount / 100)
+            
             cost_price = cost_obj.cost_price if cost_obj else 0
+            comm_rub = selling_price * (comm_pct / 100)
             
-            # --- ЦЕНООБРАЗОВАНИЕ ---
-            basic_price = data['basic_price']
-            discount_percent = data['discount']
-            
-            selling_price = basic_price * (1 - discount_percent/100)
-            
-            commission_rub = selling_price * (commission_pct / 100.0)
-            
-            profit = selling_price - commission_rub - logistics_val - cost_price
-            
+            profit = selling_price - comm_rub - log_val - cost_price
             roi = round((profit / cost_price * 100), 1) if cost_price > 0 else 0
-            margin = int(profit / selling_price * 100) if selling_price > 0 else 0
-            
-            # --- SUPPLY ---
-            supply_data = None
+            margin = int((profit / selling_price * 100)) if selling_price > 0 else 0
+
+            # --- ПОСТАВКИ ---
+            supply_data = {"status": "unknown", "metrics": {"current_stock": data['quantity']}}
             if forecast_json:
                 try:
                     supply_data = analysis_service.calculate_supply_metrics(
@@ -304,28 +275,18 @@ async def get_my_products_finance(
                         forecast_data=forecast_json
                     )
                 except: pass
-            
-            if not supply_data:
-                supply_data = {
-                    "status": "unknown",
-                    "recommendation": "Анализ...",
-                    "metrics": {
-                        "safety_stock": 0, "rop": 0, "days_left": 0, 
-                        "avg_daily_demand": 0, "current_stock": data['quantity']
-                    }
-                }
 
             result.append({
                 "sku": sku,
                 "quantity": data['quantity'],
                 "price_structure": {
-                    "basic": int(basic_price),
-                    "discount": int(discount_percent),
+                    "basic": int(price_raw),
+                    "discount": int(discount),
                     "selling": int(selling_price)
                 },
                 "cost_price": cost_price,
-                "logistics": logistics_val,
-                "commission_percent": commission_pct,
+                "logistics": log_val,
+                "commission_percent": comm_pct,
                 "unit_economy": {
                     "profit": int(profit),
                     "roi": roi,
@@ -335,10 +296,8 @@ async def get_my_products_finance(
                 "meta": meta 
             })
         except Exception as e:
-            logger.error(f"❌ [UnitEconomy] Ошибка расчета SKU {sku}: {e}")
-            continue
-            
-    logger.info(f"🏁 [UnitEconomy] Итог: {len(result)} товаров")
+            logger.error(f"❌ [UnitEconomy] Ошибка SKU {sku}: {e}")
+
     return result
 
 @router.post("/internal/cost/{sku}")
