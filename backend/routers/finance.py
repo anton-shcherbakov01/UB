@@ -18,6 +18,9 @@ from wb_api_service import wb_api_service
 from analysis_service import analysis_service
 from tasks.finance import sync_product_metadata
 
+# Import ProductParser
+from parser_parts.product import ProductParser
+
 # Настройка логгера
 logger = logging.getLogger("FinanceRouter")
 
@@ -31,55 +34,6 @@ class CostUpdateRequest(BaseModel):
 class TransitCalcRequest(BaseModel):
     volume: int 
     destination: str = "Koledino"
-
-# --- Helper: Force Generate WB Image URL ---
-def get_wb_image_url(nm_id: int) -> str:
-    """
-    Генерирует ссылку на фото WB, используя актуальную карту корзин (vol).
-    Поддерживает новые сервера вплоть до basket-32.
-    """
-    try:
-        nm_id = int(nm_id)
-        vol = nm_id // 100000
-        part = nm_id // 1000
-        basket = "01"
-
-        if 0 <= vol <= 143: basket = "01"
-        elif 144 <= vol <= 287: basket = "02"
-        elif 288 <= vol <= 431: basket = "03"
-        elif 432 <= vol <= 719: basket = "04"
-        elif 720 <= vol <= 1007: basket = "05"
-        elif 1008 <= vol <= 1061: basket = "06"
-        elif 1062 <= vol <= 1115: basket = "07"
-        elif 1116 <= vol <= 1169: basket = "08"
-        elif 1170 <= vol <= 1313: basket = "09"
-        elif 1314 <= vol <= 1601: basket = "10"
-        elif 1602 <= vol <= 1655: basket = "11"
-        elif 1656 <= vol <= 1919: basket = "12"
-        elif 1920 <= vol <= 2045: basket = "13"
-        elif 2046 <= vol <= 2189: basket = "14"
-        elif 2190 <= vol <= 2405: basket = "15"
-        elif 2406 <= vol <= 2621: basket = "16"
-        elif 2622 <= vol <= 2837: basket = "17"
-        elif 2838 <= vol <= 3053: basket = "18"
-        elif 3054 <= vol <= 3269: basket = "19"
-        elif 3270 <= vol <= 3485: basket = "20"
-        elif 3486 <= vol <= 3701: basket = "21"
-        elif 3702 <= vol <= 3917: basket = "22"
-        elif 3918 <= vol <= 4133: basket = "23"
-        elif 4134 <= vol <= 4349: basket = "24"
-        elif 4350 <= vol <= 4565: basket = "25"
-        elif 4566 <= vol <= 4781: basket = "26"
-        elif 4782 <= vol <= 4997: basket = "27"
-        elif 4998 <= vol <= 5213: basket = "28"
-        elif 5214 <= vol <= 5429: basket = "29"
-        elif 5430 <= vol <= 5645: basket = "30"
-        elif 5646 <= vol <= 5861: basket = "31"
-        else: basket = "32"
-
-        return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/c246x328/1.webp"
-    except:
-        return ""
 
 # --- Helper for PDF Auth ---
 async def get_user_via_query(request: Request, db: AsyncSession = Depends(get_db)):
@@ -231,10 +185,6 @@ async def get_my_products_finance(
             if comm_data: commissions_global = json.loads(comm_data)
             if tariffs_data: logistics_tariffs = json.loads(tariffs_data)
 
-            # Фоновое обновление если кэш пуст
-            if not comm_data or not tariffs_data:
-                background_tasks.add_task(sync_product_metadata, user.id)
-
             pipe = r_client.pipeline()
             for sku in skus:
                 pipe.get(f"meta:product:{user.id}:{sku}")
@@ -253,6 +203,48 @@ async def get_my_products_finance(
         except Exception as e:
             logger.error(f"⚠️ [UnitEconomy] Ошибка Redis: {e}")
 
+    # --- 5. PARSER INTEGRATION (PHOTO RECOVERY) ---
+    # Находим товары без фото в кэше и парсим их параллельно через ProductParser
+    parser = ProductParser()
+    missing_photo_skus = []
+    
+    for sku in skus:
+        cache = products_meta_cache.get(sku, {})
+        meta = cache.get("meta") or {}
+        # Если фото нет или это старый плейсхолдер
+        if not meta.get('photo') or "basket" not in str(meta.get('photo', '')):
+            missing_photo_skus.append(sku)
+            
+    if missing_photo_skus:
+        logger.info(f"🕵️ [Parser] Запуск поиска фото для {len(missing_photo_skus)} товаров...")
+        # Запускаем параллельно
+        parse_tasks = [parser._find_card_json(sku) for sku in missing_photo_skus]
+        parsed_results = await asyncio.gather(*parse_tasks)
+        
+        # Обновляем кэш и Redis
+        if r_client:
+            pipe = r_client.pipeline()
+            for i, p_data in enumerate(parsed_results):
+                sku = missing_photo_skus[i]
+                if p_data and p_data.get('image_url'):
+                    # Обновляем структуру
+                    current_cache = products_meta_cache.get(sku, {})
+                    meta = current_cache.get("meta") or {}
+                    
+                    meta['photo'] = p_data.get('image_url')
+                    meta['name'] = p_data.get('imt_name') or meta.get('name')
+                    meta['brand'] = p_data.get('selling', {}).get('brand_name') or meta.get('brand')
+                    
+                    current_cache['meta'] = meta
+                    products_meta_cache[sku] = current_cache
+                    
+                    # Сохраняем в Redis на сутки
+                    pipe.setex(f"meta:product:{user.id}:{sku}", 86400, json.dumps(meta))
+            try:
+                pipe.execute()
+                logger.info("💾 [Parser] Новые фото сохранены в Redis")
+            except: pass
+
     result = []
 
     for sku, data in sku_map.items():
@@ -263,12 +255,10 @@ async def get_my_products_finance(
             meta = cache_entry.get("meta") or {}
             forecast_json = cache_entry.get("forecast")
             
-            # --- ГАРАНТИЯ META ДАННЫХ (Fix) ---
-            # Принудительно генерируем фото, ДАЖЕ ЕСЛИ ОНО ЕСТЬ В КЭШЕ
-            # Это лечит проблему, когда в Redis сохранилась битая ссылка со старого алгоритма
-            meta['photo'] = get_wb_image_url(sku)
+            # Если фото все еще нет (даже после парсера), ставим заглушку
+            if not meta.get('photo'):
+                meta['photo'] = "" # Frontend покажет плейсхолдер
             
-            # Принудительно заполняем название и бренд, если пусто
             if not meta.get('name'):
                 meta['name'] = data.get('subject') or f"Товар {sku}"
             
@@ -295,7 +285,6 @@ async def get_my_products_finance(
             basic_price = data['basic_price']
             discount_percent = data['discount']
             
-            # Реальная цена реализации = База - Скидка
             selling_price = basic_price * (1 - discount_percent/100)
             
             commission_rub = selling_price * (commission_pct / 100.0)

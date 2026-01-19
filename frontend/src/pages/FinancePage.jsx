@@ -228,27 +228,28 @@ const FinancePage = ({ user, onNavigate }) => {
             const penalties = item.penalties || 0;
             const cogs = item.cogs || 0;
             
-            // Основной расчет "Комиссии и услуг WB":
-            // Выручка (Gross) - К перечислению (Net) = (Комиссия + Логистика + Штрафы)
-            // Следовательно: Комиссия = (Gross - Net) - Логистика - Штрафы
-            const gap = gross - net_sales;
-            const calculated_commission = gap - logistics - penalties;
-
+            // --- COMMISSION LOGIC ---
+            // 1. Попытка взять явное поле из отчета
+            let commission = item.commission || item.wb_commission || 0;
+            
+            // 2. Если явного поля нет, считаем разрыв: 
+            // Gross - Net - Logistics - Penalties
+            if (!commission) {
+                 const gap = gross - net_sales;
+                 const calc_comm = gap - logistics - penalties;
+                 // Если разрыв положительный, считаем это комиссией
+                 if (calc_comm > 0) commission = calc_comm;
+            }
+            
             acc.total_revenue += gross;
             acc.total_transferred += net_sales;
-            acc.total_commission += calculated_commission;
+            acc.total_commission += commission;
             acc.total_cost_price += cogs;
             acc.total_logistics += logistics;
             acc.total_penalty += penalties;
             
-            // Чистая прибыль: К перечислению - Себестоимость
-            // Или: Выручка - Комиссия - Логистика - Штрафы - Себестоимость
-            acc.net_profit += (net_sales - cogs - penalties); // Обычно в net_sales штрафы уже учтены, но завист от API.
-            // Верный классический P&L:
-            // Net Profit = Gross - Commission - Logistics - Penalties - COGS
-            // Так как мы вычислили Commission так, чтобы Gross - Comm - Log - Pen = Net Sales,
-            // То Net Profit = Net Sales - COGS.
-            // *Примечание: иногда API возвращает cm3 готовым, но лучше пересчитать для консистентности таблицы*
+            // Пересчитываем Net Profit от базы перечисления
+            acc.net_profit += (net_sales - cogs - penalties);
             
             return acc;
         }, {
@@ -261,17 +262,13 @@ const FinancePage = ({ user, onNavigate }) => {
             net_profit: 0
         });
         
-        // Пересчет net_profit для гарантии сходимости таблицы
+        // Гарантируем сходимость
         sum.net_profit = sum.total_transferred - sum.total_cost_price;
 
-        // ROI calculation
         sum.roi = sum.total_cost_price > 0 
             ? (sum.net_profit / sum.total_cost_price) * 100 
             : 0;
             
-        sum.sales_count = 0; 
-        sum.returns_count = 0;
-
         return sum;
     }, [pnlRawData]);
 
@@ -279,7 +276,7 @@ const FinancePage = ({ user, onNavigate }) => {
         return pnlRawData.map(item => ({
             ...item,
             date: item.date, // 'YYYY-MM-DD'
-            profit: (item.net_sales || 0) - (item.cogs || 0) // Consistent with summary
+            profit: (item.net_sales || 0) - (item.cogs || 0) 
         }));
     }, [pnlRawData]);
 
@@ -480,11 +477,11 @@ const FinancePage = ({ user, onNavigate }) => {
                                         </span>
                                     </div>
                                     
-                                    {/* Added Commission Row - Calculated from gap */}
+                                    {/* Commission Row */}
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Комиссия WB
-                                            <InfoTooltip text="Комиссия маркетплейса (Расчетная: Выручка - Перечисление - Логистика - Штрафы)." />
+                                            <InfoTooltip text="Комиссия маркетплейса + Эквайринг + СПП." />
                                         </span>
                                         <span className="font-bold text-purple-600">
                                             -{Math.round(pnlSummary.total_commission).toLocaleString()} ₽
