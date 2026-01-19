@@ -223,7 +223,7 @@ const FinancePage = ({ user, onNavigate }) => {
 
         const sum = pnlRawData.reduce((acc, item) => {
             acc.total_revenue += (item.gross_sales || 0);
-            acc.total_transferred += (item.net_sales || 0); 
+            acc.total_transferred += (item.net_sales || 0); // net_sales in item usually approximates transferred
             acc.total_cost_price += (item.cogs || 0);
             acc.total_logistics += (item.logistics || 0);
             acc.total_penalty += (item.penalties || 0);
@@ -243,9 +243,6 @@ const FinancePage = ({ user, onNavigate }) => {
             ? (sum.net_profit / sum.total_cost_price) * 100 
             : 0;
             
-        // Assuming sales count isn't directly summed from raw rows in this structure, 
-        // we might not have it unless backend provides it or we guess.
-        // For now, let's omit or mock if unavailable.
         sum.sales_count = 0; 
         sum.returns_count = 0;
 
@@ -255,8 +252,8 @@ const FinancePage = ({ user, onNavigate }) => {
     const pnlChartData = useMemo(() => {
         return pnlRawData.map(item => ({
             ...item,
-            date: item.date, 
-            profit: item.cm3 
+            date: item.date, // 'YYYY-MM-DD'
+            profit: item.cm3 // Using CM3 as Net Profit for chart
         }));
     }, [pnlRawData]);
 
@@ -517,7 +514,9 @@ const FinancePage = ({ user, onNavigate }) => {
                                         <div className="bg-white border border-slate-200 rounded-2xl p-3 text-center">
                                             <div className="text-[10px] text-slate-400 uppercase font-bold tracking-wider mb-1">Маржинальность</div>
                                             <div className="text-sm font-bold text-slate-700">
-                                                {pnlSummary.total_revenue > 0 ? ((pnlSummary.net_profit / pnlSummary.total_revenue) * 100).toFixed(1) : 0}%
+                                                {pnlSummary.total_revenue > 0 
+                                                    ? Math.round((pnlSummary.net_profit / pnlSummary.total_revenue) * 100) 
+                                                    : 0}%
                                             </div>
                                         </div>
                                     </div>
