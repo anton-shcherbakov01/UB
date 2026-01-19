@@ -33,6 +33,40 @@ class TransitCalcRequest(BaseModel):
     volume: int 
     destination: str = "Koledino"
 
+# --- Helper: Force Generate WB Image URL ---
+def get_wb_image_url(nm_id: int) -> str:
+    """
+    Генерирует ссылку на фото WB математически, без запросов к API.
+    Логика корзин соответствует backend/parser_parts/product.py
+    """
+    try:
+        nm_id = int(nm_id)
+        vol = nm_id // 100000
+        part = nm_id // 1000
+        basket = "01"
+        if 0 <= vol <= 143: basket = "01"
+        elif 144 <= vol <= 287: basket = "02"
+        elif 288 <= vol <= 431: basket = "03"
+        elif 432 <= vol <= 719: basket = "04"
+        elif 720 <= vol <= 1007: basket = "05"
+        elif 1008 <= vol <= 1061: basket = "06"
+        elif 1062 <= vol <= 1115: basket = "07"
+        elif 1116 <= vol <= 1169: basket = "08"
+        elif 1170 <= vol <= 1313: basket = "09"
+        elif 1314 <= vol <= 1601: basket = "10"
+        elif 1602 <= vol <= 1655: basket = "11"
+        elif 1656 <= vol <= 1919: basket = "12"
+        elif 1920 <= vol <= 2045: basket = "13"
+        elif 2046 <= vol <= 2189: basket = "14"
+        elif 2190 <= vol <= 2405: basket = "15"
+        elif 2406 <= vol <= 2621: basket = "16"
+        elif 2622 <= vol <= 2837: basket = "17"
+        else: basket = "18"
+        
+        return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/c246x328/1.webp"
+    except:
+        return ""
+
 # --- Helper for PDF Auth ---
 async def get_user_via_query(request: Request, db: AsyncSession = Depends(get_db)):
     x_tg_data = request.query_params.get("x_tg_data")
@@ -152,7 +186,9 @@ async def get_my_products_finance(
                 "sku": sku, 
                 "quantity": 0, 
                 "basic_price": s.get('Price', 0),    # Цена до скидки
-                "discount": s.get('Discount', 0)     # Скидка продавца
+                "discount": s.get('Discount', 0),    # Скидка продавца
+                "brand": s.get('brand', s.get('Brand', '')), # Пробуем достать бренд из остатков
+                "subject": s.get('subject', s.get('Subject', ''))
             }
         sku_map[sku]['quantity'] += s.get('quantity', 0)
     
@@ -181,7 +217,7 @@ async def get_my_products_finance(
             if comm_data: commissions_global = json.loads(comm_data)
             if tariffs_data: logistics_tariffs = json.loads(tariffs_data)
 
-            # Фоновое обновление
+            # Фоновое обновление если кэш пуст
             if not comm_data or not tariffs_data:
                 background_tasks.add_task(sync_product_metadata, user.id)
 
@@ -213,6 +249,19 @@ async def get_my_products_finance(
             meta = cache_entry.get("meta") or {}
             forecast_json = cache_entry.get("forecast")
             
+            # --- ГАРАНТИЯ META ДАННЫХ (Fix) ---
+            # Принудительно генерируем фото, если нет в кэше
+            if not meta.get('photo'):
+                meta['photo'] = get_wb_image_url(sku)
+            
+            # Принудительно заполняем название и бренд, если пусто
+            if not meta.get('name'):
+                # Если названия нет в Redis, берем из данных остатков (если есть) или заглушку
+                meta['name'] = data.get('subject') or f"Товар {sku}"
+            
+            if not meta.get('brand'):
+                meta['brand'] = data.get('brand') or "Wildberries"
+
             # --- ЛОГИСТИКА ---
             if cost_obj and cost_obj.logistics is not None:
                 logistics_val = cost_obj.logistics
@@ -281,7 +330,7 @@ async def get_my_products_finance(
                     "margin": margin
                 },
                 "supply": supply_data,
-                "meta": meta  # <--- ВОТ ЭТА ВАЖНАЯ СТРОЧКА!
+                "meta": meta 
             })
         except Exception as e:
             logger.error(f"❌ [UnitEconomy] Ошибка расчета SKU {sku}: {e}")
@@ -355,7 +404,6 @@ async def get_pnl_data(
     db: AsyncSession = Depends(get_db)
 ):
     from config.plans import has_feature
-    
     now = datetime.utcnow()
     
     if user.subscription_plan == "start":
@@ -414,7 +462,6 @@ async def generate_pnl_pdf(
 ):
     from config.plans import has_feature
     now = datetime.utcnow()
-    
     date_from_dt = now - timedelta(days=30) 
     date_to_dt = now
     if date_from:
