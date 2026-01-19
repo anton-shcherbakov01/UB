@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from database import get_db, User, ProductCost
 from dependencies import get_current_user, get_redis_client, check_telegram_auth
 from dependencies.quota import QuotaCheck
-from fastapi import HTTPException
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
 from tasks.finance import sync_product_metadata
@@ -37,13 +36,14 @@ class TransitCalcRequest(BaseModel):
 def get_wb_image_url(nm_id: int) -> str:
     """
     Генерирует ссылку на фото WB математически, без запросов к API.
-    Логика корзин соответствует backend/parser_parts/product.py
+    Обновлено для поддержки новых корзин (basket-18+)
     """
     try:
         nm_id = int(nm_id)
         vol = nm_id // 100000
         part = nm_id // 1000
         basket = "01"
+
         if 0 <= vol <= 143: basket = "01"
         elif 144 <= vol <= 287: basket = "02"
         elif 288 <= vol <= 431: basket = "03"
@@ -61,8 +61,16 @@ def get_wb_image_url(nm_id: int) -> str:
         elif 2190 <= vol <= 2405: basket = "15"
         elif 2406 <= vol <= 2621: basket = "16"
         elif 2622 <= vol <= 2837: basket = "17"
-        else: basket = "18"
-        
+        elif 2838 <= vol <= 3053: basket = "18"
+        elif 3054 <= vol <= 3269: basket = "19"
+        elif 3270 <= vol <= 3485: basket = "20"
+        elif 3486 <= vol <= 3701: basket = "21"
+        elif 3702 <= vol <= 3917: basket = "22"
+        elif 3918 <= vol <= 4133: basket = "23"
+        elif 4134 <= vol <= 4349: basket = "24"
+        elif 4350 <= vol <= 4565: basket = "25"
+        else: basket = "26"
+
         return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/c246x328/1.webp"
     except:
         return ""
@@ -256,7 +264,6 @@ async def get_my_products_finance(
             
             # Принудительно заполняем название и бренд, если пусто
             if not meta.get('name'):
-                # Если названия нет в Redis, берем из данных остатков (если есть) или заглушку
                 meta['name'] = data.get('subject') or f"Товар {sku}"
             
             if not meta.get('brand'):

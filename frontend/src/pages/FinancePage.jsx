@@ -583,14 +583,24 @@ const FinancePage = ({ user, onNavigate }) => {
                                     {/* Header: Photo & Title */}
                                     <div className="flex gap-4 mb-5">
                                         <div className="w-20 h-24 shrink-0 rounded-xl bg-slate-100 overflow-hidden relative border border-slate-200">
-                                            {photoUrl ? (
-                                                <img src={photoUrl} alt="" className="w-full h-full object-cover" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-slate-300">
-                                                    <Package size={24} />
-                                                </div>
+                                            {/* --- UPDATED IMAGE LOGIC WITH ERROR HANDLING --- */}
+                                            {photoUrl && (
+                                                <img 
+                                                    src={photoUrl} 
+                                                    alt="" 
+                                                    className="w-full h-full object-cover relative z-10 bg-slate-100" 
+                                                    onError={(e) => {
+                                                        // Hide broken image to reveal the placeholder underneath
+                                                        e.currentTarget.style.display = 'none';
+                                                    }}
+                                                />
                                             )}
-                                            <div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] text-center py-0.5 font-medium backdrop-blur-sm">
+                                            {/* Placeholder is always rendered underneath, visible if img is missing or hidden */}
+                                            <div className="absolute inset-0 flex items-center justify-center text-slate-300 z-0">
+                                                <Package size={24} />
+                                            </div>
+
+                                            <div className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[9px] text-center py-0.5 font-medium backdrop-blur-sm z-20">
                                                 {item.quantity} шт
                                             </div>
                                         </div>
