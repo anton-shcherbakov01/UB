@@ -8,7 +8,10 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ProductCost
-from clickhouse_models import ch_service
+try:
+    from services.clickhouse_models import ch_service
+except ImportError:
+    from clickhouse_models import ch_service
 
 logger = logging.getLogger("Analysis-Economics")
 
@@ -95,8 +98,16 @@ class EconomicsModule:
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
         logger.info(f"📊 [PnL] Формирование финансового отчета для user={user_id}")
 
-        # Основной запрос в ClickHouse
-        # Обрати внимание: additional_payment (Доплаты) - это доход, penalty - расход.
+        # 1. Получаем клиент ClickHouse
+        ch_client = ch_service.get_client()
+        
+        # Если клиент не получен (база недоступна), логируем и возвращаем пустой список
+        if not ch_client:
+            logger.warning("⚠️ ClickHouse client not available (check connection or VPN)")
+            return []
+
+        # 2. Формируем запрос
+        # Обратите внимание: для clickhouse_connect параметры в запросе пишутся как {name:Type}
         ch_query = """
         SELECT 
             toDate(sale_dt) as report_date,
@@ -111,44 +122,45 @@ class EconomicsModule:
             sum(additional_payment) as adjustments,
             sum(ppvz_for_pay) as net_for_pay
         FROM wb_analytics.realization_reports FINAL
-        WHERE supplier_id = %(uid)s 
-          AND sale_dt >= %(start)s 
-          AND sale_dt <= %(end)s
+        WHERE supplier_id = {uid:UInt64} 
+          AND sale_dt >= {start:DateTime} 
+          AND sale_dt <= {end:DateTime}
         GROUP BY report_date, nm_id
         ORDER BY report_date ASC
         """
         
-        params = {'uid': user_id, 'start': date_from, 'end': date_to}
+        params = {
+            'uid': user_id, 
+            'start': date_from, 
+            'end': date_to
+        }
         
         try:
-            # ch_client = ch_service.get_client() # Раскомментировать в реальном коде
-            # Имитация для примера, используй свой ch_client
-            if 'ch_client' not in locals(): 
-                logger.warning("⚠️ ClickHouse client placeholder used")
-                return []
-            
             result = ch_client.query(ch_query, parameters=params)
             rows = result.result_rows
         except Exception as e:
             logger.error(f"❌ ClickHouse Query Error: {e}")
             return []
 
-        if not rows: return []
+        if not rows: 
+            return []
 
         unique_skus = list(set([row[1] for row in rows]))
         
-        # Получаем себестоимость (COGS)
+        # 3. Получаем себестоимость (COGS) из Postgres
         costs_map = {}
         try:
+            # --- ВАЖНО: Раскомментируйте этот блок, если у вас есть модель ProductCost ---
             # stmt = select(ProductCost).where(ProductCost.user_id == user_id, ProductCost.sku.in_(unique_skus))
             # cogs_result = await db.execute(stmt)
             # costs_map = {c.sku: c.cost_price for c in cogs_result.scalars().all()}
-            pass # Раскомментировать получение себестоимости
+            pass 
         except Exception as e:
             logger.error(f"Error fetching product costs: {e}")
 
         daily_pnl = {}
         
+        # 4. Обработка строк
         for row in rows:
             r_date, sku, gross, returns, q_sold, q_ret, commission, logistics, penalties, adjustments, net_pay = row
             
@@ -162,8 +174,7 @@ class EconomicsModule:
             adjustments = float(adjustments or 0)
             net_pay = float(net_pay or 0)
 
-            # COGS = (Продано - Возвращено) * UnitCost
-            # Если возвратов больше чем продаж в этот день, COGS будет отрицательным (восстановление стока)
+            # COGS
             unit_cost = costs_map.get(sku, 0)
             total_cogs = (q_sold - q_ret) * unit_cost
 
@@ -171,48 +182,31 @@ class EconomicsModule:
             if date_str not in daily_pnl:
                 daily_pnl[date_str] = {
                     "date": date_str, 
-                    "gross_sales": 0.0,    # Грязная выручка (Продажи - Возвраты в ценах ритейла)
-                    "net_sales": 0.0,      # "К перечислению" (за вычетом комиссии WB)
-                    "cogs": 0.0,           # Себестоимость
-                    "commission": 0.0,     # Комиссия WB
-                    "logistics": 0.0,      # Логистика (расход)
-                    "penalties": 0.0,      # Штрафы (расход)
-                    "adjustments": 0.0,    # Доплаты (доход)
-                    "cm3": 0.0             # Маржинальная прибыль
+                    "gross_sales": 0.0,
+                    "net_sales": 0.0,
+                    "cogs": 0.0,
+                    "commission": 0.0,
+                    "logistics": 0.0,
+                    "penalties": 0.0,
+                    "adjustments": 0.0,
+                    "cm3": 0.0
                 }
             
             d = daily_pnl[date_str]
-            
-            # 1. Выручка (GMV)
             d["gross_sales"] += (gross - returns)
-            
-            # 2. К перечислению (WB Revenue) - это база, из которой мы платим логистику
             d["net_sales"] += net_pay
-            
-            # 3. Расходы WB
             d["commission"] += commission
             d["logistics"] += logistics
             d["penalties"] += penalties
-            
-            # 4. Прочие доходы (компенсации за потерянный товар и т.д.)
             d["adjustments"] += adjustments
-            
-            # 5. Себестоимость товаров
             d["cogs"] += total_cogs
         
         final_output = []
         for date_str, m in sorted(daily_pnl.items()):
-            # --- FORMULA CORRECTION ---
-            # Чистая прибыль (CM3) = 
-            #   (К перечислению) 
-            # + (Доплаты) 
-            # - (Логистика) 
-            # - (Штрафы) 
-            # - (Себестоимость)
+            # Итоговый расчет прибыли (CM3)
+            # Прибыль = (К перечислению + Доплаты) - Логистика - Штрафы - Себестоимость
+            m["cm3"] = (m["net_sales"] + m["adjustments"]) - m["logistics"] - m["penalties"] - m["cogs"]
             
-            m["cm3"] = m["net_sales"] + m["adjustments"] - m["logistics"] - m["penalties"] - m["cogs"]
-            
-            # Округляем
             for k in ["gross_sales", "net_sales", "cogs", "commission", "logistics", "penalties", "adjustments", "cm3"]:
                 m[k] = round(m[k], 2)
             

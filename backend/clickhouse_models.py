@@ -244,33 +244,23 @@ class ClickHouseService:
         self.client.command(schema_sql)
 
     def insert_reports(self, reports: list):
-        """Batch insert raw reports with schema validation."""
-        if not reports:
-            return
+        """Batch insert raw reports."""
+        if not reports: return
         
         client = self.get_client()
-        if not client:
-            logger.warning("ClickHouse client not available, skipping insert")
-            return
+        if not client: return
         
         try:
-            # 1. Фильтрация данных и преобразование типов
             clean_reports = []
             for r in reports:
                 clean_r = {}
                 for k, v in r.items():
-                    # Пропускаем неизвестные поля
-                    if k not in self.VALID_COLUMNS:
-                        continue
+                    if k not in self.VALID_COLUMNS: continue
                     
-                    # Преобразование дат из строк в datetime для драйвера
                     if k in self.DATE_COLUMNS and isinstance(v, str):
                         try:
-                            # Убираем 'Z' если есть, так как fromisoformat в 3.9 может капризничать
-                            # (хотя в целом ISO строка обычно парсится, но драйвер требует datetime объект)
                             clean_r[k] = datetime.fromisoformat(v.replace('Z', ''))
                         except (ValueError, TypeError):
-                            # Если дата битая, используем epoch 0 (1970-01-01), чтобы не падать
                             clean_r[k] = datetime.fromtimestamp(0)
                     else:
                         clean_r[k] = v
@@ -278,17 +268,9 @@ class ClickHouseService:
                 if clean_r:
                     clean_reports.append(clean_r)
             
-            if not clean_reports:
-                logger.warning("No valid data left after schema filtering")
-                return
+            if not clean_reports: return
 
-            # 2. Вставка
-            # Берем колонки из первого очищенного элемента
             columns = list(clean_reports[0].keys())
-            
-            # --- FIX: Конвертируем список словарей в список списков ---
-            # Библиотека clickhouse_connect иногда дает сбой на списке словарей (KeyError: 4)
-            # или на датах-строках (AttributeError: 'str' object has no attribute 'timestamp')
             data_values = []
             for r in clean_reports:
                 row = [r.get(col) for col in columns]
