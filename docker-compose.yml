@@ -79,6 +79,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_api
+    # Добавлено: автоматический перезапуск при падении
+    restart: always
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes: 
       - ./backend:/app
@@ -117,6 +119,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_worker
+    # Добавлено: автоматический перезапуск при падении (критично для уведомлений)
+    restart: always
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -155,6 +159,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_selenium_worker
+    # Добавлено: автоматический перезапуск
+    restart: always
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -195,6 +201,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: wb_beat
+    # Добавлено: автоматический перезапуск
+    restart: always
     command: celery -A celery_app beat --loglevel=info
     volumes: 
       - ./backend:/app

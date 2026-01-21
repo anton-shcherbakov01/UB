@@ -33,7 +33,7 @@ const DashboardPage = ({ onNavigate, user }) => {
         return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
     }
 
-    // UPDATED: Check for no_token but allows rendering the rest of the page
+    // Check for no_token but allows rendering the rest of the page
     const noToken = data?.status === 'no_token';
 
     return (
@@ -117,7 +117,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                     
-                    {/* 1. Finance (Full Width) */}
+                    {/* 1. Finance (Full Width) - Requires Token generally, but allows nav */}
                     <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                         <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
                             <PieChart size={24} />
