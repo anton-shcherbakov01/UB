@@ -33,19 +33,8 @@ const DashboardPage = ({ onNavigate, user }) => {
         return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-indigo-600" size={32}/></div>;
     }
 
-    if (data?.status === 'no_token') {
-        return (
-            <div className="p-6 flex flex-col h-[80vh] justify-center text-center">
-                <div className="bg-indigo-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <Wallet size={32} className="text-indigo-600" />
-                </div>
-                <h2 className="text-2xl font-black mb-2">Подключите WB</h2>
-                <button onClick={() => onNavigate('profile')} className="bg-slate-900 text-white py-4 rounded-2xl font-bold mt-4 shadow-xl">
-                    В профиль
-                </button>
-            </div>
-        );
-    }
+    // UPDATED: Check for no_token but allows rendering the rest of the page
+    const noToken = data?.status === 'no_token';
 
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in slide-in-from-bottom-4">
@@ -53,40 +42,53 @@ const DashboardPage = ({ onNavigate, user }) => {
             {/* STORIES */}
             <StoriesBar stories={data?.stories} />
 
-            {/* BALANCE CARD */}
-            <div className="bg-slate-900 text-white p-6 rounded-[32px] shadow-xl shadow-slate-200 relative overflow-hidden">
-                <div className="absolute top-[-50%] right-[-10%] w-64 h-64 bg-indigo-600/30 rounded-full blur-3xl"></div>
-                <div className="absolute bottom-[-20%] left-[-10%] w-40 h-40 bg-emerald-500/20 rounded-full blur-3xl"></div>
-                
-                <div className="relative z-10">
-                    <div className="flex justify-between items-start mb-2">
-                        <span className="text-slate-400 text-xs font-bold uppercase tracking-wider">Выручка сегодня</span>
-                        {data?.header && (
-                            <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold ${data.header.growth ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
-                                {data.header.growth ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>}
-                                {data.header.growth ? 'Растем' : 'Падаем'}
-                            </div>
-                        )}
+            {/* BALANCE CARD or CONNECT BANNER */}
+            {noToken ? (
+                 <div className="bg-slate-900 text-white p-6 rounded-[32px] shadow-xl shadow-slate-200 relative overflow-hidden flex flex-col items-center text-center justify-center min-h-[200px]">
+                    <div className="bg-indigo-600/20 w-16 h-16 rounded-full flex items-center justify-center mb-4">
+                        <Wallet size={32} className="text-indigo-400" />
                     </div>
-                    <div className="text-4xl font-black tracking-tight mb-4">
-                        {data?.header?.balance.toLocaleString('ru-RU')} <span className="text-2xl text-slate-500">₽</span>
-                    </div>
+                    <h2 className="text-xl font-bold mb-2">Подключите WB</h2>
+                    <p className="text-slate-400 text-xs mb-4 max-w-[200px]">Для отображения баланса и статистики продаж</p>
+                    <button onClick={() => onNavigate('profile')} className="bg-white text-slate-900 px-6 py-2 rounded-xl font-bold text-sm hover:bg-indigo-50 transition-colors">
+                        В профиль
+                    </button>
+                </div>
+            ) : (
+                <div className="bg-slate-900 text-white p-6 rounded-[32px] shadow-xl shadow-slate-200 relative overflow-hidden">
+                    <div className="absolute top-[-50%] right-[-10%] w-64 h-64 bg-indigo-600/30 rounded-full blur-3xl"></div>
+                    <div className="absolute bottom-[-20%] left-[-10%] w-40 h-40 bg-emerald-500/20 rounded-full blur-3xl"></div>
                     
-                    <div className="flex items-center gap-6 pt-4 border-t border-white/10">
-                        <div>
-                            <div className="text-slate-400 text-[10px] mb-1">Заказов</div>
-                            <div className="font-bold text-lg">{data?.header?.orders_count}</div>
+                    <div className="relative z-10">
+                        <div className="flex justify-between items-start mb-2">
+                            <span className="text-slate-400 text-xs font-bold uppercase tracking-wider">Выручка сегодня</span>
+                            {data?.header && (
+                                <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold ${data.header.growth ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                                    {data.header.growth ? <ArrowUpRight size={12}/> : <ArrowDownRight size={12}/>}
+                                    {data.header.growth ? 'Растем' : 'Падаем'}
+                                </div>
+                            )}
                         </div>
-                        <div>
-                            <div className="text-slate-400 text-[10px] mb-1">Обновлено</div>
-                            <div className="font-bold text-lg flex items-center gap-2">
-                                {data?.last_updated}
-                                <RefreshCw size={14} className="opacity-50 active:rotate-180 transition-transform" onClick={loadData}/>
+                        <div className="text-4xl font-black tracking-tight mb-4">
+                            {data?.header?.balance?.toLocaleString('ru-RU') ?? 0} <span className="text-2xl text-slate-500">₽</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-6 pt-4 border-t border-white/10">
+                            <div>
+                                <div className="text-slate-400 text-[10px] mb-1">Заказов</div>
+                                <div className="font-bold text-lg">{data?.header?.orders_count ?? 0}</div>
+                            </div>
+                            <div>
+                                <div className="text-slate-400 text-[10px] mb-1">Обновлено</div>
+                                <div className="font-bold text-lg flex items-center gap-2">
+                                    {data?.last_updated ?? '--:--'}
+                                    <RefreshCw size={14} className="opacity-50 active:rotate-180 transition-transform" onClick={loadData}/>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
+            )}
 
             {/* АКТИВНЫЕ МОДУЛИ */}
             <div>
