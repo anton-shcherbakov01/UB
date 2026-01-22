@@ -3,11 +3,13 @@ from .statistics import WBStatisticsMixin
 from .promotion import WBPromotionMixin
 # Добавляем импорт Content Mixin, которого не хватало
 from .content import WBContentMixin
+from .prices import WBPricesMixin
 
 class WBApiService(
     WBStatisticsMixin, 
     WBPromotionMixin, 
-    WBContentMixin,  # <--- Обязательно добавляем сюда
+    WBContentMixin,
+    WBPricesMixin,  # <--- Обязательно добавляем сюда
     WBApiBase
 ):
     """

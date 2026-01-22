@@ -126,6 +126,11 @@ celery_app.conf.update(
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
             "schedule": crontab(hour=3, minute=30),
+        },
+        
+        "check-prices-fast": {
+            "task": "check_price_alerts",
+            "schedule": crontab(minute="*/15"), # Каждые 15 минут
         }
     }
 )
