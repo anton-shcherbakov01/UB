@@ -26,6 +26,7 @@ finance_router = APIRouter(prefix="/api/finance", tags=["Finance"])
 executor = ThreadPoolExecutor(max_workers=2)
 
 # --- НОВЫЙ СЕРВИС: ВОРОНКА ПРОДАЖ ---
+# --- ОБНОВЛЕННЫЙ СЕРВИС: ВОРОНКА ПРОДАЖ ---
 @router.get("/funnel")
 async def get_sales_funnel(
     days: int = Query(30, ge=7, le=365),
@@ -33,8 +34,8 @@ async def get_sales_funnel(
     user: User = Depends(get_current_user),
 ):
     """
-    Получение данных для построения воронки продаж.
-    Ограничивает глубину истории в зависимости от тарифа.
+    Получение точных исторических данных для воронки.
+    Приоритет отдается API Статистики (V1) для финансов.
     """
     # 1. Проверка лимитов тарифа
     limit_days = get_limit(user.subscription_plan, "history_days")
@@ -51,162 +52,178 @@ async def get_sales_funnel(
     date_from_str = date_from.strftime("%Y-%m-%d")
 
     # Parse nm_ids
-    filter_ids = []
+    filter_ids = set()
     if nm_ids:
         try:
-            filter_ids = [int(x.strip()) for x in nm_ids.split(",") if x.strip().isdigit()]
+            filter_ids = {int(x.strip()) for x in nm_ids.split(",") if x.strip().isdigit()}
         except ValueError:
             pass
 
     wb_api = WBStatisticsAPI(user.wb_api_token)
 
     try:
-        # 1. Получаем агрегированные данные воронки (Просмотры, Корзины) из V3
-        funnel_total = await wb_api.get_sales_funnel_full(user.wb_api_token, date_from_str, date_to_str, nm_ids=filter_ids)
+        # 1. Запускаем параллельные запросы
+        # V3 - для общих цифр трафика (Просмотры, Корзины)
+        # V1 - для точной истории Заказов и Выкупов
+        task_v3 = wb_api.get_sales_funnel_full(user.wb_api_token, date_from_str, date_to_str, nm_ids=list(filter_ids))
+        task_orders = wb_api.get_orders(days=days)
+        task_sales = wb_api.get_sales(days=days)
         
-        # 2. Получаем исторические данные по заказам и выкупам из V1 (они точные по дням)
-        await asyncio.sleep(1)
-        orders_history = await wb_api.get_orders(days=days)
-        
-        await asyncio.sleep(1) 
-        sales_history = await wb_api.get_sales(days=days)
+        funnel_total, orders_history, sales_history = await asyncio.gather(task_v3, task_orders, task_sales)
 
-        # Подготовка структуры графика
+        # 2. Инициализация структуры графика по дням
         chart_data = {}
         for i in range(days):
             d = (date_from + timedelta(days=i)).strftime("%Y-%m-%d")
             chart_data[d] = {
                 "date": d,
-                "visitors": 0,
-                "cart": 0,
-                "orders": 0,
-                "buyouts": 0,
-                "orders_sum": 0,
-                "buyouts_sum": 0
+                "visitors": 0,  # Будет распределено
+                "cart": 0,      # Будет распределено
+                "orders": 0,    # Точно из V1
+                "buyouts": 0,   # Точно из V1
+                "orders_sum": 0, # Точно из V1
+                "buyouts_sum": 0 # Точно из V1
             }
 
-        # Фильтруем и заполняем точные данные (Заказы)
-        total_orders_count_period = 0
-        total_orders_sum_v1 = 0
+        # 3. Обработка ЗАКАЗОВ (V1 - Точные данные)
+        total_orders_exact = 0
+        total_revenue_exact = 0
         
         if orders_history:
             for order in orders_history:
                 if filter_ids and order.get("nmId") not in filter_ids:
                     continue
+                if order.get("isCancel"): # Игнорируем отмены
+                    continue
 
-                d = order.get("date", "")[:10]
-                if d in chart_data and not order.get("isCancel"):
+                # Дата заказа (обрезаем время)
+                d_raw = order.get("date", "")
+                d = d_raw[:10]
+                
+                if d in chart_data:
+                    price = order.get("priceWithDiscount", 0)
                     chart_data[d]["orders"] += 1
-                    chart_data[d]["orders_sum"] += order.get("priceWithDiscount", 0)
-                    total_orders_count_period += 1
-                    total_orders_sum_v1 += order.get("priceWithDiscount", 0)
+                    chart_data[d]["orders_sum"] += price
+                    total_orders_exact += 1
+                    total_revenue_exact += price
 
-        # Фильтруем и заполняем точные данные (Выкупы)
-        total_buyouts_count_v1 = 0
-        total_buyouts_sum_v1 = 0
+        # 4. Обработка ВЫКУПОВ (V1 - Точные данные)
+        total_buyouts_exact = 0
+        total_buyouts_sum_exact = 0
 
         if sales_history:
             for sale in sales_history:
                 if filter_ids and sale.get("nmId") not in filter_ids:
                     continue
+                # Игнорируем возвраты (isStorno=1) и берем только продажи (S)
+                if sale.get("isStorno") or not sale.get("saleID", "").startswith("S"):
+                    continue
 
-                d = sale.get("date", "")[:10]
-                # isStorno - это возврат, saleID startswith S - продажа
-                if d in chart_data and not sale.get("isStorno") and sale.get("saleID", "").startswith("S"):
+                d_raw = sale.get("date", "")
+                d = d_raw[:10]
+                
+                if d in chart_data:
+                    price = sale.get("priceWithDiscount", 0)
                     chart_data[d]["buyouts"] += 1
-                    chart_data[d]["buyouts_sum"] += sale.get("priceWithDiscount", 0)
-                    total_buyouts_count_v1 += 1
-                    total_buyouts_sum_v1 += sale.get("priceWithDiscount", 0)
+                    chart_data[d]["buyouts_sum"] += price
+                    total_buyouts_exact += 1
+                    total_buyouts_sum_exact += price
 
-        # 3. Данные из V3 (Точные общие цифры)
+        # 5. Обработка ТРАФИКА (V3 - Агрегаты -> Распределение)
+        # WB не отдает историю просмотров по дням через легкое API, только общую сумму за период.
+        # Чтобы график был красивым и коррелировал, мы распределяем общие просмотры пропорционально заказам.
+        # Если заказов в день не было, используем равномерное распределение остатка.
+        
         v3_visitors = funnel_total.get("visitors", 0)
         v3_carts = funnel_total.get("addToCart", 0)
-        v3_orders_count = funnel_total.get("ordersCount", 0)
-        v3_orders_sum = funnel_total.get("ordersSum", 0)
-        v3_buyouts_count = funnel_total.get("buyoutsCount", 0)
-        v3_buyouts_sum = funnel_total.get("buyoutsSum", 0)
         
-        # --- FALLBACK MECHANISM ---
-        # Если API V1 отвалился (вернул 0 из-за лимитов), но V3 вернул данные - используем V3.
-        use_fallback = False
-        if total_orders_sum_v1 == 0 and v3_orders_sum > 0:
-            use_fallback = True
-            final_orders_count = v3_orders_count
-            final_orders_sum = v3_orders_sum
-            final_buyouts_count = v3_buyouts_count
-            final_buyouts_sum = v3_buyouts_sum
-        else:
-            final_orders_count = total_orders_count_period
-            final_orders_sum = total_orders_sum_v1
-            final_buyouts_count = total_buyouts_count_v1
-            final_buyouts_sum = total_buyouts_sum_v1
+        # Если V1 пустой (нет ключа или данных), берем цифры из V3 для итогов, но график будет плоским
+        is_exact = total_orders_exact > 0
+        
+        final_orders = total_orders_exact if is_exact else funnel_total.get("ordersCount", 0)
+        final_revenue = total_revenue_exact if is_exact else funnel_total.get("ordersSum", 0)
+        final_buyouts = total_buyouts_exact if is_exact else funnel_total.get("buyoutsCount", 0)
+        final_buyouts_sum = total_buyouts_sum_exact if is_exact else funnel_total.get("buyoutsSum", 0)
 
-        # Конверсии периода
-        cr_cart_order = (final_orders_count / v3_carts) if v3_carts > 0 else 0.0
-        cr_view_cart = (v3_carts / v3_visitors) if v3_visitors > 0 else 0.0
-
+        # Алгоритм распределения трафика
         sorted_dates = sorted(chart_data.keys())
-        final_chart = []
-
-        # Средние значения для fallback
-        avg_order_sum = final_orders_sum / days if days > 0 else 0
-        avg_order_cnt = final_orders_count / days if days > 0 else 0
-        avg_buyout_sum = final_buyouts_sum / days if days > 0 else 0
-        avg_buyout_cnt = final_buyouts_count / days if days > 0 else 0
         
-        for date_key in sorted_dates:
-            day_stats = chart_data[date_key]
+        if is_exact and total_orders_exact > 0:
+            # Распределяем пропорционально заказам (так график выглядит максимально реалистично)
+            # Коэффициент: сколько просмотров приходится на 1 заказ в среднем
+            views_per_order = v3_visitors / total_orders_exact
+            carts_per_order = v3_carts / total_orders_exact
             
-            if use_fallback:
-                # Заполняем средними значениями
-                day_stats["orders"] = int(avg_order_cnt)
-                day_stats["orders_sum"] = int(avg_order_sum)
-                day_stats["buyouts"] = int(avg_buyout_cnt)
-                day_stats["buyouts_sum"] = int(avg_buyout_sum)
-                orders_metric = int(avg_order_cnt)
-            else:
-                orders_metric = day_stats["orders"]
+            # Остатки, которые не попали в пропорцию (дни без заказов)
+            remaining_views = v3_visitors
+            remaining_carts = v3_carts
             
-            # Аппроксимация для Воронки (Просмотры/Корзины)
-            if orders_metric > 0:
-                estimated_carts = int(orders_metric / cr_cart_order) if cr_cart_order > 0 else orders_metric * 5
-                estimated_visitors = int(estimated_carts / cr_view_cart) if cr_view_cart > 0 else estimated_carts * 10
-            else:
-                # "Шум"
-                estimated_carts = max(0, int((v3_carts - final_orders_count) / days)) if days > 0 else 0
-                estimated_visitors = max(0, int((v3_visitors - (final_orders_count * 10)) / days)) if days > 0 else 0
+            for d in sorted_dates:
+                orders_today = chart_data[d]["orders"]
+                
+                if orders_today > 0:
+                    # Основная доля
+                    day_views = int(orders_today * views_per_order)
+                    day_carts = int(orders_today * carts_per_order)
+                    
+                    chart_data[d]["visitors"] = day_views
+                    chart_data[d]["cart"] = day_carts
+                    
+                    remaining_views -= day_views
+                    remaining_carts -= day_carts
+            
+            # Раскидываем остатки равномерно по всем дням (сглаживание)
+            if days > 0:
+                base_views = max(0, int(remaining_views / days))
+                base_carts = max(0, int(remaining_carts / days))
+                for d in sorted_dates:
+                    chart_data[d]["visitors"] += base_views
+                    chart_data[d]["cart"] += base_carts
+        else:
+            # Если заказов нет или данных V1 нет - равномерное распределение
+            avg_views = int(v3_visitors / days) if days > 0 else 0
+            avg_carts = int(v3_carts / days) if days > 0 else 0
+            
+            for d in sorted_dates:
+                chart_data[d]["visitors"] = avg_views
+                chart_data[d]["cart"] = avg_carts
+                # Если fallback
+                if not is_exact:
+                    chart_data[d]["orders"] = int(final_orders / days)
+                    chart_data[d]["orders_sum"] = int(final_revenue / days)
 
-            day_stats["cart"] = estimated_carts
-            day_stats["visitors"] = estimated_visitors
-            final_chart.append(day_stats)
+        # Конверсии (Средние за период)
+        cr_view_cart = (v3_carts / v3_visitors * 100) if v3_visitors > 0 else 0
+        cr_cart_order = (final_orders / v3_carts * 100) if v3_carts > 0 else 0
+        cr_order_buyout = (final_buyouts / final_orders * 100) if final_orders > 0 else 0
+        
+        # Формируем итоговый массив для графика
+        final_chart = [chart_data[d] for d in sorted_dates]
 
         return {
             "period": f"{days} дн.",
-            "limit_used": days,
-            "max_limit": limit_days,
             "totals": {
                 "visitors": v3_visitors,
                 "cart": v3_carts,
-                "orders": final_orders_count,
-                "buyouts": final_buyouts_count,
-                "revenue": final_orders_sum,
-                "buyouts_revenue": final_buyouts_sum # Added explicit revenue for buyouts
+                "orders": final_orders,
+                "buyouts": final_buyouts,
+                "revenue": final_revenue,
+                "buyouts_revenue": final_buyouts_sum
             },
             "conversions": {
-                "view_to_cart": round(cr_view_cart * 100, 1),
-                "cart_to_order": round(cr_cart_order * 100, 1),
-                "order_to_buyout": round((final_buyouts_count / final_orders_count * 100), 1) if final_orders_count else 0
+                "view_to_cart": round(cr_view_cart, 1),
+                "cart_to_order": round(cr_cart_order, 1),
+                "order_to_buyout": round(cr_order_buyout, 1)
             },
             "chart": final_chart,
-            "is_estimated": use_fallback
+            "is_exact": is_exact # Флаг, точные ли данные
         }
 
     except Exception as e:
-        print(f"Funnel Error: {e}")
+        logger.error(f"Funnel Error: {e}", exc_info=True)
+        # Возвращаем пустую структуру вместо 500 ошибки
         return {
             "period": f"{days} дн.",
-            "limit_used": days, 
-            "max_limit": limit_days,
             "totals": {"visitors": 0, "cart": 0, "orders": 0, "buyouts": 0, "revenue": 0, "buyouts_revenue": 0},
             "conversions": {"view_to_cart": 0, "cart_to_order": 0, "order_to_buyout": 0},
             "chart": [],
