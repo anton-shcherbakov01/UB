@@ -275,16 +275,12 @@ class WBStatisticsMixin(WBApiBase):
                         items = response_data.get("cards", [])
                     
                     if not items:
-                        # Detailed logging to diagnose "No cards" issue
-                        logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
+                        # Log only if really no items found to avoid spam if it's just end of list
+                        if offset == 0:
+                              logger.info(f"No products/cards found in Funnel API v3 response. Offset: {offset}. Payload: {payload}. Response keys: {data.keys()}. Data keys: {response_data.keys()}")
                         is_more = False
                         break
                     
-                    # --- DEBUG LOGGING START ---
-                    if offset == 0:
-                        logger.info(f"V3 Funnel Item Structure Sample: {items[0]}")
-                    # --- DEBUG LOGGING END ---
-
                     for c in items:
                         # UPDATED MAPPING FOR V3 BASED ON LOGS
                         # 'statistic' (singular) -> 'selected'
@@ -760,3 +756,88 @@ class WBStatisticsAPI:
             await asyncio.sleep(0.5)
             
         return all_reports
+
+    # --- ДОБАВЛЕННЫЙ МЕТОД ДЛЯ CALCULATE_TRANSIT ---
+    async def calculate_transit(self, volume: int, origin: str = "Казань", destination: str = "Коледино", transit_rate: float = None):
+        """
+        Калькулятор транзита.
+        volume: объем в литрах
+        origin: откуда везем (не используется в расчете, справочно)
+        destination: куда везем (для поиска тарифа)
+        transit_rate: ставка транзита за литр
+        """
+        # Default transit rate if not provided (approx 4.5 rub/liter is common for transit)
+        if transit_rate is None:
+            transit_rate = 4.5
+
+        # 1. Calculate Transit Cost (Your warehouse -> Transit Warehouse -> End Warehouse)
+        # Usually: Delivery to transit point (user cost) + WB Transit Fee
+        # WB Transit Fee = Volume * Rate
+        transit_cost = volume * transit_rate
+
+        # 2. Calculate Direct Cost (Your warehouse -> End Warehouse)
+        # We need real tariffs for the Destination (e.g., Koledino)
+        # URL: https://common-api.wildberries.ru/api/v1/tariffs/box
+        
+        direct_cost = 0
+        dest_tariff = None
+        
+        try:
+            # Fetch tariffs
+            url = "https://common-api.wildberries.ru/api/v1/tariffs/box"
+            today = datetime.now().strftime("%Y-%m-%d")
+            params = {"date": today}
+            
+            data = await self._request(url, params=params) # _request handles full URLs now
+            
+            if data and 'response' in data and 'data' in data['response']:
+                wh_list = data['response']['data'].get('warehouseList', [])
+                for w in wh_list:
+                    if w.get('warehouseName') == destination:
+                        dest_tariff = w
+                        break
+                
+                # Fallback to Koledino if destination not found
+                if not dest_tariff:
+                    for w in wh_list:
+                        if w.get('warehouseName') == "Коледино":
+                            dest_tariff = w
+                            break
+        except Exception as e:
+            logger.error(f"Failed to fetch tariffs for calc: {e}")
+
+        # Calculate Direct Cost based on tariff
+        if dest_tariff:
+            try:
+                base = float(str(dest_tariff.get('boxDeliveryBase', '0')).replace(',', '.'))
+                liter = float(str(dest_tariff.get('boxDeliveryLiter', '0')).replace(',', '.'))
+                
+                if volume <= 5:
+                    direct_cost = base
+                else:
+                    direct_cost = base + (volume - 5) * liter
+            except:
+                direct_cost = volume * 15 # Fallback rough estimate
+        else:
+             direct_cost = volume * 15 # Fallback
+
+        # 3. Formulate Result
+        benefit = direct_cost - transit_cost
+        
+        return {
+            "volume": volume,
+            "transit": {
+                "origin": origin,
+                "rate": transit_rate,
+                "total": round(transit_cost, 2)
+            },
+            "direct": {
+                "destination": destination,
+                "base": dest_tariff.get('boxDeliveryBase') if dest_tariff else "?",
+                "rate": dest_tariff.get('boxDeliveryLiter') if dest_tariff else "?",
+                "total": round(direct_cost, 2)
+            },
+            "benefit": round(benefit, 2),
+            "is_profitable": benefit > 0,
+            "recommendation": "Транзит выгоднее" if benefit > 0 else "Прямая поставка выгоднее"
+        }
