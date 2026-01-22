@@ -76,7 +76,7 @@ async def btn_link(message: types.Message):
     user_id = message.from_user.id
     # Глубокая ссылка на Mini App
     # Формат startapp=agent_ID
-    link = f"https://t.me/juicystat_bot/app?startapp=agent_{user_id}"
+    link = f"https://t.me/juicystat_bot/juicystat?startapp=agent_{user_id}"
     
     text = (
         "🎯 <b>Твоя боевая ссылка:</b>\n"
@@ -289,7 +289,7 @@ async def btn_training(message: types.Message):
     await message.answer(
         "Все скрипты, видео, баннеры и правила лежат в нашем закрытом канале.\n"
         "Обязательно подпишись, там мы постим новости и топы лучших агентов.\n\n"
-        "👉 https://t.me/+AbCdEfGhIjK (Замените ссылку)"
+        "👉 https://t.me/+er6o69YWTDw2ODBi"
     )
 
 @dp.message(F.text == "🆘 Поддержка")
