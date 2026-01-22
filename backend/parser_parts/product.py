@@ -10,6 +10,7 @@ import asyncio
 import aiohttp
 import zipfile
 import concurrent.futures
+import redis
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -39,11 +40,18 @@ GEO_ZONES = {
     "novosibirsk": "-1257493"
 }
 
+# Инициализация Redis для кэширования хостов (Optimization)
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+try:
+    r_client = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    logger.warning(f"Redis not available in Parser: {e}")
+    r_client = None
+
 class ProductParser:
     """
-    Восстановленная логика парсинга Wildberries (Legacy/Stable).
-    Использует перебор корзин для поиска card.json и Selenium для цен.
-    Гибридная версия: Async для метаданных + Sync (requests) для отзывов.
+    Парсер Wildberries (v14 Optimized).
+    Использует Redis для запоминания хостов корзин.
     """
     def __init__(self):
         self.headless = os.getenv("HEADLESS", "True").lower() == "true"
@@ -59,7 +67,7 @@ class ProductParser:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         ]
 
-    # --- ЛОГИКА ПОИСКА КОРЗИН (Legacy/Core) ---
+    # --- ЛОГИКА ПОИСКА КОРЗИН ---
     
     def _calc_basket_static(self, sku: int) -> str:
         vol = sku // 100000
@@ -83,13 +91,30 @@ class ProductParser:
         return "18"
 
     async def _find_card_json(self, sku: int):
-        """Поиск card.json brute-force методом (до 50 корзины)"""
+        """
+        Поиск card.json с кэшированием хоста в Redis.
+        """
         vol = sku // 100000
         part = sku // 1000
         
-        calc_host = self._calc_basket_static(sku)
+        # 1. Проверяем кэш
+        cache_key = f"host:{sku}"
+        cached_host = None
+        if r_client:
+            try:
+                cached_host = r_client.get(cache_key)
+            except: pass
+            
+        if cached_host:
+            # Если есть в кэше, проверяем только его
+            async with aiohttp.ClientSession() as session:
+                url = f"https://basket-{cached_host}.wbbasket.ru/vol{vol}/part{part}/{sku}/info/ru/card.json"
+                res = await self._check_url(session, url, cached_host)
+                if res: return res
+                # Если кэш протух (товар переехал), идем в перебор
         
-        # Приоритет: расчетный хост, затем популярные, затем все остальные
+        # 2. Если нет в кэше - полный перебор
+        calc_host = self._calc_basket_static(sku)
         hosts_priority = [calc_host] + [f"{i:02d}" for i in range(1, 20)] + [f"{i:02d}" for i in range(20, 51)]
         hosts = list(dict.fromkeys(hosts_priority)) 
 
@@ -104,7 +129,12 @@ class ProductParser:
                 
                 results = await asyncio.gather(*tasks)
                 for res in results:
-                    if res: return res
+                    if res:
+                        # Нашли! Сохраняем хост в Redis на 24 часа
+                        if r_client:
+                            found_host = res.get('host', '01')
+                            r_client.setex(cache_key, 86400, found_host)
+                        return res
         return None
 
     async def _check_url(self, session, url, host):
@@ -116,6 +146,7 @@ class ProductParser:
                     part = url.split('part')[1].split('/')[0]
                     sku = url.split('/')[5]
                     data['image_url'] = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
+                    data['host'] = host # Сохраняем хост для кэша
                     return data
         except: pass
         return None
@@ -179,24 +210,15 @@ class ProductParser:
     # --- БЕЗОПАСНЫЙ ЗАПУСК ASYNC КОДА В CELERY ---
     
     def _safe_run_async(self, coro):
-        """
-        Безопасный запуск async кода в Celery (защита от RuntimeError).
-        Проверяет наличие running event loop и использует ThreadPoolExecutor если нужно.
-        """
         try:
-            # Пытаемся получить running loop
             asyncio.get_running_loop()
-            # Если дошли сюда - loop уже есть, нужно использовать другой подход
-            # Создаем новый loop в отдельном потоке
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, coro)
                 return future.result()
         except RuntimeError:
-            # Нет running loop - безопасно использовать asyncio.run()
             return asyncio.run(coro)
         except Exception as e:
             logger.error(f"Error in _safe_run_async: {e}", exc_info=True)
-            # Fallback: создаем новый loop вручную
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -208,20 +230,14 @@ class ProductParser:
     # --- МЕТОДЫ ДЛЯ API / ROUTER ---
 
     async def get_review_stats(self, sku: int):
-        """
-        Метод для 'Check' этапа на фронтенде. 
-        Возвращает метаданные и РЕАЛЬНОЕ кол-во отзывов из card.json.
-        """
         logger.info(f"--- CHECK STATS SKU: {sku} ---")
         try:
             card_data = await self._find_card_json(sku)
             if not card_data: 
                 return {"status": "error", "message": "Товар не найден (card.json not found)"}
             
-            # Извлекаем кол-во отзывов
             feedbacks_count = card_data.get('feedbacks') or card_data.get('feedbackCount') or 0
             
-            # Формируем URL изображения
             image_url = card_data.get('image_url')
             if not image_url:
                 host = card_data.get('host', '01')
@@ -233,7 +249,7 @@ class ProductParser:
                 "sku": sku,
                 "name": card_data.get('imt_name') or card_data.get('subj_name', f"Товар {sku}"),
                 "image": image_url,
-                "total_reviews": feedbacks_count, # Это значение пойдет в Max ползунка
+                "total_reviews": feedbacks_count, 
                 "status": "success"
             }
         except Exception as e:
@@ -241,13 +257,11 @@ class ProductParser:
             return {"status": "error", "message": str(e)}
 
     def get_product_data(self, sku: int):
-        """Парсинг цен (оставлен для совместимости с task)"""
         logger.info(f"--- ПАРСИНГ ЦЕН SKU: {sku} ---")
         static_info = {"name": f"Товар {sku}", "brand": "WB", "image": ""}
         total_qty = 0
 
         try:
-            # Используем безопасный запуск async кода для корректной работы в Celery
             data = self._safe_run_async(self._find_card_json(sku))
             
             if data:
@@ -301,21 +315,14 @@ class ProductParser:
         return {"id": sku, "status": "error", "message": "Failed to parse prices after retries"}
 
     def get_full_product_info(self, sku: int, limit: int = 50):
-        """
-        Основной метод парсинга отзывов.
-        СИНХРОННЫЙ, использует asyncio.run только для card.json.
-        Использует requests для получения отзывов (стабильно).
-        """
         logger.info(f"--- АНАЛИЗ ОТЗЫВОВ SKU: {sku} (Limit: {limit}) ---")
         try:
-            # Используем безопасный запуск async кода для корректной работы в Celery
             static_data = self._safe_run_async(self._find_card_json(sku))
 
             if not static_data: return {"status": "error", "message": "Card not found"}
             root_id = static_data.get('root') or static_data.get('root_id') or static_data.get('imt_id')
             if not root_id: return {"status": "error", "message": "Root ID not found"}
 
-            # Эндпоинты из старого файла
             endpoints = [
                 f"https://feedbacks1.wb.ru/feedbacks/v1/{root_id}",
                 f"https://feedbacks2.wb.ru/feedbacks/v1/{root_id}",
@@ -324,89 +331,44 @@ class ProductParser:
             
             feed_data = None
             headers = {"User-Agent": random.choice(self.user_agents)}
-            last_error = None
             
             for url in endpoints:
                 try:
                     r = requests.get(url, headers=headers, timeout=10)
-                    if r.status_code != 200:
-                        continue
-                    try:
+                    if r.status_code == 200:
                         feed_data = r.json()
-                    except (ValueError, TypeError) as json_err:
-                        logger.warning(f"Invalid JSON from {url[:50]}...: {json_err}")
-                        continue
-                    if isinstance(feed_data, dict):
                         break
-                    feed_data = None
-                except requests.RequestException as req_err:
-                    last_error = str(req_err)
-                    logger.debug(f"Requests error for {url[:40]}...: {req_err}")
-                    continue
-                except Exception as e:
-                    last_error = str(e)
-                    logger.debug(f"Unexpected error fetching {url[:40]}...: {e}")
-                    continue
+                except: continue
             
             if not feed_data or not isinstance(feed_data, dict):
-                msg = "API отзывов недоступен"
-                if last_error:
-                    msg = f"{msg} ({last_error[:80]})"
-                return {"status": "error", "message": msg}
+                return {"status": "error", "message": "API отзывов недоступен"}
 
-            # Защита от пустых и неожиданных структур данных WB
             data_part = feed_data.get('data') if isinstance(feed_data.get('data'), dict) else {}
             raw_feedbacks = feed_data.get('feedbacks') or data_part.get('feedbacks') or []
-            if not isinstance(raw_feedbacks, list):
-                raw_feedbacks = []
             valuation = feed_data.get('valuation') or data_part.get('valuation', 0)
             
             reviews = []
             for f in raw_feedbacks:
-                if not isinstance(f, dict):
-                    continue
                 txt = f.get('text', '')
-                if txt and isinstance(txt, str) and txt.strip():
-                    reviews.append({"text": txt.strip(), "rating": f.get('productValuation', 5)})
+                if txt: reviews.append({"text": txt.strip(), "rating": f.get('productValuation', 5)})
                 if len(reviews) >= limit: break
             
-            # Safely convert rating to float
-            try:
-                rating_value = float(valuation) if valuation else 0.0
-            except (ValueError, TypeError):
-                rating_value = 0.0
-            
-            # Убедиться, что все значения сериализуемы (базовые типы Python)
-            result = {
+            return {
                 "sku": int(sku),
                 "name": str(static_data.get('imt_name') or static_data.get('subj_name') or f"Товар {sku}"),
                 "image": str(static_data.get('image_url') or ""),
-                "rating": float(rating_value),
-                "reviews": reviews,  # Уже список словарей с базовыми типами
+                "rating": float(valuation),
+                "reviews": reviews,
                 "reviews_count": int(len(reviews)),
                 "status": "success"
             }
-            
-            # Проверка сериализуемости перед возвратом
-            try:
-                json.dumps(result)
-            except (TypeError, ValueError) as ser_error:
-                logger.error(f"Result not serializable: {ser_error}")
-                return {"status": "error", "message": "Ошибка сериализации данных"}
-            
-            return result
 
         except Exception as e:
             logger.error(f"get_full_product_info error for SKU {sku}: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
     async def get_seo_data(self, sku: int):
-        """
-        Master SEO Extraction: Извлекает чистые поисковые запросы, а не просто слова.
-        """
         logger.info(f"--- 💎 SEO MASTER PARSE SKU: {sku} ---")
-        
-        # Расширенный список стоп-слов для E-com
         STOP_WORDS = {
             'нет', 'да', 'отсутствует', 'без', 'рисунка', 'принта', 'китай', 'россия', 
             'узбекистан', 'турция', 'корея', 'вид', 'тип', 'для', 'на', 'из', 'от', 'и', 'в', 'с', 'по', 
@@ -415,8 +377,6 @@ class ProductParser:
             'назначение', 'пол', 'сезон', 'коллекция', 'страна', 'бренд', 'артикул', 'код',
             'особенности', 'модели', 'элементы', 'вещи', 'предметы', 'очень', 'как', 'так', 'или'
         }
-
-        # Характеристики, откуда точно стоит брать ключи
         TARGET_PARAMS = {
             'назначение', 'рисунок', 'фактура', 'декоративные элементы', 
             'особенности модели', 'вид застежки', 'тип рукава', 'вырез горловины', 
@@ -429,16 +389,11 @@ class ProductParser:
                 return {"status": "error", "message": "Card not found"}
 
             raw_text_corpus = []
-
-            # 1. ЗАГОЛОВОК (Самый вес)
             name = str(card_data.get('imt_name') or card_data.get('subj_name') or '').strip()
             if name: raw_text_corpus.append(name)
-            
-            # 2. БРЕНД (Важно для SEO)
             brand = str(card_data.get('selling', {}).get('brand_name', '')).strip()
             if brand: raw_text_corpus.append(brand)
 
-            # 3. ХАРАКТЕРИСТИКИ (Точечно)
             options = card_data.get('options', [])
             if not options:
                 grouped = card_data.get('grouped_options', [])
@@ -448,45 +403,27 @@ class ProductParser:
             for opt in options:
                 param_name = str(opt.get('name', '')).lower()
                 val = str(opt.get('value', '')).strip()
-                
                 if not val or val.lower() in STOP_WORDS: continue
-
-                # Если это целевая характеристика - берем значение целиком и по частям
                 if param_name in TARGET_PARAMS or any(p in param_name for p in ['назначение', 'особенност', 'декор']):
-                    # Разбиваем "повседневная; школа" -> "повседневная", "школа"
                     parts = re.split(r'[,;/]', val)
                     raw_text_corpus.extend(parts)
 
-            # 4. ОПИСАНИЕ (Только существительные и биграммы)
             description = str(card_data.get('description', ''))
-            # Убираем HTML
             description = re.sub(r'<[^>]+>', ' ', description)
             if description:
-                # Разбиваем описание на предложения, чтобы не смешивать контекст
                 sentences = re.split(r'[.!?]', description)
-                # Берем только первые 3-5 предложений (там обычно самое важное) и последние (призывы)
-                # Но для SEO лучше взять всё и отфильтровать
                 raw_text_corpus.extend(sentences)
 
-            # --- ОБРАБОТКА И ЧИСТКА ---
-            final_keywords = {} # key: phrase, value: weight
-
+            final_keywords = {} 
             for text_fragment in raw_text_corpus:
                 if not text_fragment: continue
-                
-                # Приводим к нижнему регистру и чистим от спецсимволов
                 clean_text = re.sub(r'[^\w\s-]', ' ', text_fragment.lower())
                 words = clean_text.split()
                 
-                # Проходим по словам (униграммы)
                 for w in words:
-                    w = w.strip('-') # убрать дефисы по краям
+                    w = w.strip('-')
                     if len(w) > 2 and w not in STOP_WORDS and not w.isdigit():
-                        # Простой стемминг (удаление окончаний) для группировки
-                        # "платья" -> "плать"
                         root = w[:-2] if len(w) > 5 else w[:-1] if len(w) > 4 else w
-                        
-                        # Если слово уже есть в похожем виде, увеличиваем вес
                         found = False
                         for k in final_keywords:
                             if k.startswith(root):
@@ -496,29 +433,20 @@ class ProductParser:
                         if not found:
                             final_keywords[w] = 1
 
-                # Биграммы (фразы из 2 слов) - это часто и есть SEO запросы ("вечернее платье")
                 for i in range(len(words) - 1):
                     w1 = words[i].strip('-')
                     w2 = words[i+1].strip('-')
                     if len(w1) > 2 and len(w2) > 2 and w1 not in STOP_WORDS and w2 not in STOP_WORDS:
                         phrase = f"{w1} {w2}"
-                        final_keywords[phrase] = final_keywords.get(phrase, 0) + 3 # Биграммы ценнее
+                        final_keywords[phrase] = final_keywords.get(phrase, 0) + 3
 
-            # --- ФИНАЛЬНЫЙ ОТБОР ---
-            # Сортируем по весу (частоте)
             sorted_kw = sorted(final_keywords.items(), key=lambda x: x[1], reverse=True)
-            
-            # Берем топ-40, исключая вхождения (если есть "платье", "женское платье", оставляем оба, но фильтруем дубли корней)
             result_list = []
             seen_roots = set()
 
             for kw, score in sorted_kw:
                 if len(result_list) >= 40: break
-                
-                # Грубая проверка уникальности
-                # Берем корень фразы (первые 70% символов)
                 root = kw[:int(len(kw)*0.7)]
-                
                 if root not in seen_roots:
                     result_list.append(kw)
                     seen_roots.add(root)
