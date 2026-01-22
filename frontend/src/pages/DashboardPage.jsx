@@ -3,7 +3,7 @@ import {
     Wallet, RefreshCw, Loader2, ArrowUpRight, ArrowDownRight,
     PieChart, Truck, TrendingUp, Wand2, Lock, Microscope, 
     Gavel, ScanBarcode, Calendar, Brain, HelpCircle, Filter,
-    ShieldAlert // <--- Добавили иконку
+    ShieldAlert 
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 import StoriesBar from '../components/StoriesBar';
@@ -102,19 +102,22 @@ const DashboardPage = ({ onNavigate, user }) => {
                             <div className="font-bold mb-2">Обзор сервисов</div>
                             <p className="mb-2">На главной странице отображаются все доступные вам сервисы:</p>
                             <ul className="space-y-1 text-[10px] list-disc list-inside">
-                                <li><strong>Unit-экономика</strong> - анализ прибыльности</li>
-                                <li><strong>Контроль цен</strong> - защита от авто-скидок</li>
-                                <li><strong>Поставки</strong> - управление запасами</li>
-                                <li><strong>SEO генератор</strong> - создание описаний</li>
-                                <li><strong>AI Стратег</strong> - анализ отзывов</li>
+                                <li><strong>Unit-экономика</strong> - анализ прибыльности товаров, P&L отчеты</li>
+                                <li><strong>Поставки</strong> - управление запасами, ABC/XYZ анализ</li>
+                                <li><strong>Слоты</strong> - мониторинг доступности слотов на складах</li>
+                                <li><strong>SEO генератор</strong> - создание оптимизированных описаний</li>
+                                <li><strong>AI Стратег</strong> - анализ отзывов и психографика</li>
+                                <li><strong>Воронка</strong> - визуализация конверсии и динамика</li>
+                                <li><strong>Форензика</strong> - анализ возвратов и проблем</li>
                             </ul>
+                            <p className="mt-2 text-[10px]">Доступность сервисов зависит от вашего тарифа.</p>
                             <div className="absolute bottom-0 right-4 transform translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-slate-900"></div>
                         </div>
                     </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                     
-                    {/* 1. Unit Eco */}
+                    {/* 1. Unit Eco (Full Width) */}
                     <div onClick={() => onNavigate('finance')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                         <div className="bg-emerald-100 w-12 h-12 rounded-2xl flex items-center justify-center text-emerald-600">
                             <PieChart size={24} />
@@ -125,22 +128,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* --- НОВЫЙ БЛОК: PRICE CONTROL --- */}
-                    <div onClick={() => onNavigate('price_control')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
-                        <div className="flex justify-between items-start">
-                            <div className="bg-rose-100 w-12 h-12 rounded-2xl flex items-center justify-center text-rose-600">
-                                <ShieldAlert size={24} />
-                            </div>
-                            <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">NEW</span>
-                        </div>
-                        <div>
-                            <span className="font-bold text-slate-800 block">Контроль цен</span>
-                            <span className="text-xs text-slate-400">Stop-Loss защита от акций</span>
-                        </div>
-                    </div>
-                    {/* ---------------------------------- */}
-
-                    {/* 2. Logistics */}
+                    {/* 2. Logistics Row (Split) */}
                     <div onClick={() => onNavigate('supply')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-orange-100 w-12 h-12 rounded-2xl flex items-center justify-center text-orange-600">
                             <Truck size={24} />
@@ -157,11 +145,11 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                         <div>
                             <span className="font-bold text-slate-800 block">Слоты</span>
-                            <span className="text-xs text-slate-400">Лимиты</span>
+                            <span className="text-xs text-slate-400">Лимиты и Кэфы</span>
                         </div>
                     </div>
 
-                    {/* 3. Marketing */}
+                    {/* 3. Marketing Row (Split) */}
                     <div onClick={() => onNavigate('seo')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer">
                         <div className="bg-yellow-100 w-12 h-12 rounded-2xl flex items-center justify-center text-yellow-600">
                             <Wand2 size={24} />
@@ -182,7 +170,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         </div>
                     </div>
 
-                    {/* 4. AI & Funnel */}
+                    {/* 4. AI Analysis (Full Width) */}
                     <div onClick={() => onNavigate('ai')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-purple-100 w-12 h-12 rounded-2xl flex items-center justify-center text-purple-600">
@@ -192,23 +180,25 @@ const DashboardPage = ({ onNavigate, user }) => {
                          </div>
                          <div>
                              <span className="font-bold text-slate-800 block">AI Ассистент</span>
-                             <span className="text-xs text-slate-400">Анализ отзывов</span>
+                             <span className="text-xs text-slate-400">Анализ отзывов и продаж</span>
                          </div>
                     </div>
 
+                    {/* 5. Funnel (Full Width) */}
                     <div onClick={() => onNavigate('funnel')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                         <div className="flex justify-between items-start">
                             <div className="bg-rose-100 w-12 h-12 rounded-2xl flex items-center justify-center text-rose-600">
                                 <Filter size={24} />
                             </div>
+                            <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-1 rounded-lg">NEW</span>
                         </div>
                         <div>
                             <span className="font-bold text-slate-800 block">Воронка продаж</span>
-                            <span className="text-xs text-slate-400">Конверсии</span>
+                            <span className="text-xs text-slate-400">Конверсии: Просмотры → Корзина → Заказ</span>
                         </div>
                     </div>
 
-                    {/* 6. PRO Analytics */}
+                    {/* 6. PRO Analytics (Full Width) */}
                     <div onClick={() => onNavigate('analytics_advanced')} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer col-span-2">
                          <div className="flex justify-between items-start">
                              <div className="bg-indigo-100 w-12 h-12 rounded-2xl flex items-center justify-center text-indigo-600">
@@ -218,7 +208,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                          </div>
                          <div>
                              <span className="font-bold text-slate-800 block">Глубокая аналитика</span>
-                             <span className="text-xs text-slate-400">Форензика и Cash Gap</span>
+                             <span className="text-xs text-slate-400">Форензика возвратов и Кассовые разрывы</span>
                          </div>
                     </div>
                 </div>
@@ -230,11 +220,30 @@ const DashboardPage = ({ onNavigate, user }) => {
                     <Lock size={16} /> Скоро
                 </h3>
                 <div className="grid grid-cols-2 gap-4">
+                    
+                    {/* Контроль цен (Здесь теперь живет этот модуль) */}
+                    <div 
+                        onClick={() => setComingSoonModal({
+                            title: "Контроль цен",
+                            icon: <ShieldAlert size={40} />,
+                            description: "Автоматическая защита от акций WB. Установка Stop-Loss для цен и мгновенные уведомления при падении маржинальности."
+                        })} 
+                        className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
+                    >
+                        <div className="bg-rose-100 w-12 h-12 rounded-2xl flex items-center justify-center text-rose-600">
+                            <ShieldAlert size={24} />
+                        </div>
+                        <div>
+                            <span className="font-bold text-slate-800 block">Контроль цен</span>
+                            <span className="text-xs text-slate-400">Stop-Loss</span>
+                        </div>
+                    </div>
+
                     <div 
                         onClick={() => setComingSoonModal({
                             title: "Биддер",
                             icon: <Gavel size={40} />,
-                            description: "Автоматическое управление ставками рекламы. AI-оптимизация бюджета."
+                            description: "Автоматическое управление ставками рекламы. AI-оптимизация бюджета, защита от переплат и максимизация ROI."
                         })} 
                         className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
                     >
@@ -251,7 +260,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                         onClick={() => setComingSoonModal({
                             title: "Сканер цен",
                             icon: <ScanBarcode size={40} />,
-                            description: "Быстрый поиск товаров по артикулу. Проверка цен и СПП."
+                            description: "Быстрый поиск товаров по артикулу. Проверка цен, СПП и рейтинга перед добавлением в мониторинг."
                         })} 
                         className="bg-white/60 p-5 rounded-3xl border border-slate-200/50 shadow-sm flex flex-col gap-3 active:scale-[0.98] transition-all cursor-pointer opacity-75 hover:opacity-100 hover:bg-white"
                     >
@@ -266,6 +275,7 @@ const DashboardPage = ({ onNavigate, user }) => {
                 </div>
             </div>
 
+            {/* Модальное окно "В разработке" */}
             <ComingSoonModal
                 isOpen={comingSoonModal !== null}
                 onClose={() => setComingSoonModal(null)}

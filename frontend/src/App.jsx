@@ -23,7 +23,7 @@ import TariffsPage from './pages/TariffsPage';
 import FunnelPage from './pages/FunnelPage';
 import PaymentSuccessPage from './pages/PaymentSuccessPage';
 import PaymentFailPage from './pages/PaymentFailPage';
-import PriceControlPage from './pages/PriceControlPage'; // <--- ДОБАВЛЕН ИМПОРТ
+// import PriceControlPage from './pages/PriceControlPage'; // <--- ОТКЛЮЧЕНО
 
 const AppContent = () => {
   const [user, setUser] = useState(null);
@@ -32,17 +32,14 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Функция загрузки пользователя (вызывается при старте и при обновлении токена)
   const fetchUser = () => {
       fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() })
         .then(r => r.json())
         .then(data => {
           setUser(data);
-          // Проверяем, принята ли оферта
           if (!data.offer_accepted) {
             setShowOfferModal(true);
           } else if (!data.privacy_accepted) {
-            // Показываем политику конфиденциальности только после принятия оферты
             setShowPrivacyModal(true);
           }
         })
@@ -61,11 +58,9 @@ const AppContent = () => {
       });
       if (res.ok) {
         setShowOfferModal(false);
-        fetchUser(); // Обновляем данные пользователя
+        fetchUser(); 
       }
-    } catch (e) {
-      console.error('Failed to accept offer:', e);
-    }
+    } catch (e) { console.error('Failed to accept offer:', e); }
   };
   
   const handleAcceptPrivacy = async () => {
@@ -76,11 +71,9 @@ const AppContent = () => {
       });
       if (res.ok) {
         setShowPrivacyModal(false);
-        fetchUser(); // Обновляем данные пользователя
+        fetchUser();
       }
-    } catch (e) {
-      console.error('Failed to accept privacy:', e);
-    }
+    } catch (e) { console.error('Failed to accept privacy:', e); }
   };
 
   const activeTab = location.pathname === '/' ? 'home' : location.pathname.substring(1);
@@ -92,7 +85,6 @@ const AppContent = () => {
 
   return (
     <div className="min-h-screen bg-[#F4F4F9] font-sans text-slate-900 select-none pb-24">
-        {/* Модальное окно с офертой при первом запуске */}
         {showOfferModal && (
           <div className="fixed top-0 left-0 right-0 bottom-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -101,7 +93,6 @@ const AppContent = () => {
           </div>
         )}
         
-        {/* Модальное окно с политикой конфиденциальности */}
         {showPrivacyModal && (
           <div className="fixed top-0 left-0 right-0 bottom-0 z-[9999] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
@@ -118,16 +109,10 @@ const AppContent = () => {
             <Route path="/ai" element={<AIAnalysisPage user={user} onUserUpdate={fetchUser} />} />
             <Route path="/supply" element={<SupplyPage />} />
             
-            {/* --- НОВЫЙ РОУТ ДЛЯ КОНТРОЛЯ ЦЕН --- */}
-            <Route path="/price_control" element={<PriceControlPage onBack={() => navigate('/')} />} />
-            {/* ----------------------------------- */}
+            {/* <Route path="/price_control" element={<PriceControlPage onBack={() => navigate('/')} />} /> */}
 
-            {/* Передаем user в SlotsPage */}
             <Route path="/slots" element={<SlotsPage user={user} onNavigate={handleTabChange} />} />
-            
-            {/* Передаем функцию refreshUser в ProfilePage */}
             <Route path="/profile" element={<ProfilePage onNavigate={handleTabChange} refreshUser={fetchUser} />} />
-            
             <Route path="/admin" element={<AdminPage onBack={() => navigate('/profile')} />} />
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} user={user} />} />
             <Route path="/funnel" element={<FunnelPage onBack={() => navigate('/')} />} />
@@ -139,7 +124,6 @@ const AppContent = () => {
             <Route path="/support" element={<SupportPage onBack={() => navigate('/profile')} />} />
             <Route path="/tariffs" element={<TariffsPage onBack={() => navigate('/profile')} />} />
             
-            {/* Catch-all route возвращает на главную */}
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <TabNav active={activeTab} setTab={handleTabChange} isAdmin={user?.is_admin} />

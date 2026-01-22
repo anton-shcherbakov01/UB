@@ -7,7 +7,7 @@ from redis import asyncio as aioredis
 from dotenv import load_dotenv
 
 from celery_app import REDIS_URL
-# ДОБАВЛЕН ИМПОРТ price_control В СПИСОК
+# ИМПОРТ СОХРАНЯЕМ, НО ПОДКЛЮЧЕНИЕ НИЖЕ ОТКЛЮЧАЕМ
 from routers import users, finance, monitoring, seo, ai, payments, admin, supply, dashboard, analytics, slots, notifications, bidder, support, price_control
 
 load_dotenv()
@@ -40,8 +40,8 @@ app.include_router(slots.router)
 app.include_router(notifications.router)
 app.include_router(support.router)
 
-# --- ПОДКЛЮЧЕНИЕ НОВОГО РОУТЕРА ---
-app.include_router(price_control.router)
+# --- ОТКЛЮЧЕНО (В РАЗРАБОТКЕ) ---
+# app.include_router(price_control.router)
 # ----------------------------------
 
 @app.on_event("startup")
