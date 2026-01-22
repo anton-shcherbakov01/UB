@@ -4,13 +4,13 @@ import {
     ArrowLeft, Download, RefreshCw, Calendar, Package, TrendingUp, AlertTriangle
 } from 'lucide-react';
 import { 
-    BarChart, Bar, Tooltip as RechartsTooltip, ResponsiveContainer, 
-    Cell, ReferenceLine, XAxis, YAxis, CartesianGrid
+    ComposedChart, Line, Bar, Tooltip as RechartsTooltip, ResponsiveContainer, 
+    Cell, ReferenceLine, XAxis, YAxis, CartesianGrid, Area
 } from 'recharts';
 import { API_URL, getTgHeaders } from '../config';
 import CostEditModal from '../components/CostEditModal';
 
-// Компонент подсказки (Tooltip)
+// Компонент подсказки (Tooltip) для текста
 const InfoTooltip = ({ text }) => (
     <div className="group/tooltip relative inline-flex items-center ml-1.5 align-middle">
         <HelpCircle size={14} className="text-slate-300 cursor-help hover:text-indigo-400 transition-colors" />
@@ -20,6 +20,53 @@ const InfoTooltip = ({ text }) => (
         </div>
     </div>
 );
+
+// Кастомный Тултип для Графика (P&L Breakdown)
+const CustomChartTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+        const data = payload[0].payload;
+        return (
+            <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-100 text-xs z-50 min-w-[200px]">
+                <div className="font-bold text-slate-500 mb-2 border-b border-slate-100 pb-2">
+                    {new Date(data.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </div>
+                
+                <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Выручка:</span>
+                        <span className="font-bold text-indigo-600">+{Math.round(data.gross_sales).toLocaleString()} ₽</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Комиссия:</span>
+                        <span className="text-slate-700">-{Math.round(data.commission).toLocaleString()} ₽</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Логистика:</span>
+                        <span className="text-slate-700">-{Math.round(data.logistics).toLocaleString()} ₽</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Себестоимость:</span>
+                        <span className="text-slate-700">-{Math.round(data.cogs).toLocaleString()} ₽</span>
+                    </div>
+                    {(data.penalties > 0) && (
+                        <div className="flex justify-between items-center text-rose-500">
+                            <span>Штрафы:</span>
+                            <span>-{Math.round(data.penalties).toLocaleString()} ₽</span>
+                        </div>
+                    )}
+                    
+                    <div className="border-t border-slate-100 my-2 pt-2 flex justify-between items-center text-sm">
+                        <span className="font-bold text-slate-800">Прибыль:</span>
+                        <span className={`font-black ${data.profit >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {Math.round(data.profit).toLocaleString()} ₽
+                        </span>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+    return null;
+};
 
 const FinancePage = ({ user, onNavigate }) => {
     // --- State ---
@@ -222,31 +269,18 @@ const FinancePage = ({ user, onNavigate }) => {
         if (!pnlRawData || pnlRawData.length === 0) return null;
 
         const sum = pnlRawData.reduce((acc, item) => {
-            const gross = item.gross_sales || 0;       // Продажи (грязные)
-            const net_sales = item.net_sales || 0;     // К перечислению (ppvz_for_pay)
+            const gross = item.gross_sales || 0;       
+            const net_sales = item.net_sales || 0;     
             const logistics = item.logistics || 0;
             const penalties = item.penalties || 0;
-            const adjustments = item.adjustments || 0; // Доплаты
+            const adjustments = item.adjustments || 0; 
             const cogs = item.cogs || 0;
-            
-            // --- UPDATED COMMISSION LOGIC (Fixing 250 rub issue) ---
-            // Вместо того чтобы верить полю commission из API (где часто 0 или копейки из-за СПП),
-            // мы считаем "Эффективную комиссию" как разрыв:
-            // Грязная выручка - (К перечислению + Логистика внутри строки + Штрафы внутри строки)
-            // Но так как net_sales (ppvz_for_pay) в API уже очищен от комиссии WB, 
-            // но НЕ очищен от логистики (delivery_rub) в общем смысле, но часто delivery_rub идет отдельно.
-            
-            // Простая математика: 
-            // Клиент заплатил: 32 875
-            // Нам начислили за товар: 22 107
-            // Разница: 10 768. Это деньги, которые оставил себе WB (Комиссия + СПП).
             
             let effectiveCommission = 0;
             if (gross > 0) {
                  effectiveCommission = gross - net_sales;
                  if (effectiveCommission < 0) effectiveCommission = 0;
             } else {
-                 // Если продаж нет, берем то что пришло
                  effectiveCommission = item.commission || 0;
             }
             
@@ -258,7 +292,7 @@ const FinancePage = ({ user, onNavigate }) => {
             acc.total_penalty += penalties;
             acc.total_adjustments += adjustments;
             
-            // Profit считается от net_sales, так как это база денег от ВБ
+            // Profit считается от net_sales
             const dayProfit = (net_sales + adjustments) - logistics - penalties - cogs;
             acc.net_profit += dayProfit;
             
@@ -274,7 +308,6 @@ const FinancePage = ({ user, onNavigate }) => {
             net_profit: 0
         });
         
-        // Расчет ROI
         sum.roi = sum.total_cost_price > 0 
             ? (sum.net_profit / sum.total_cost_price) * 100 
             : 0;
@@ -287,7 +320,7 @@ const FinancePage = ({ user, onNavigate }) => {
         return pnlRawData.map(item => ({
             ...item,
             date: item.date, // 'YYYY-MM-DD'
-            // Profit для графика: берем cm3 с бэкенда или считаем ту же формулу
+            // Profit для графика
             profit: item.cm3 !== undefined 
                 ? item.cm3 
                 : ((item.net_sales || 0) + (item.adjustments || 0) - (item.logistics || 0) - (item.penalties || 0) - (item.cogs || 0))
@@ -445,10 +478,16 @@ const FinancePage = ({ user, onNavigate }) => {
                             </div>
                         ) : (pnlChartData.length > 0 && pnlSummary) ? (
                             <>
-                                {/* Graph */}
+                                {/* Graph (COMPOSED CHART UPDATE) */}
                                 <div className="h-64 w-full mb-8">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={pnlChartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+                                        <ComposedChart data={pnlChartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+                                            <defs>
+                                                <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.8}/>
+                                                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0.1}/>
+                                                </linearGradient>
+                                            </defs>
                                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                             <XAxis 
                                                 dataKey="date" 
@@ -457,6 +496,7 @@ const FinancePage = ({ user, onNavigate }) => {
                                                 axisLine={false}
                                                 tickLine={false}
                                                 dy={10}
+                                                minTickGap={20}
                                             />
                                             <YAxis 
                                                 tick={{fontSize: 10, fill: '#94a3b8'}}
@@ -464,19 +504,43 @@ const FinancePage = ({ user, onNavigate }) => {
                                                 tickLine={false}
                                                 tickFormatter={(val) => `${(val / 1000).toFixed(0)}k`}
                                             />
-                                            <RechartsTooltip 
-                                                cursor={{fill: '#f8fafc', radius: 4}}
-                                                contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 40px -5px rgba(0,0,0,0.1)', fontSize: '12px', padding: '12px'}}
-                                                labelFormatter={(label) => `Дата: ${label}`}
-                                            />
+                                            <RechartsTooltip content={<CustomChartTooltip />} cursor={{fill: '#f8fafc', opacity: 0.5}} />
                                             <ReferenceLine y={0} stroke="#cbd5e1" />
-                                            <Bar dataKey="profit" name="Чистая прибыль" radius={[6, 6, 6, 6]} barSize={20}>
-                                                {pnlChartData.map((entry, index) => (
-                                                    <Cell key={`cell-${index}`} fill={entry.profit > 0 ? '#10b981' : '#ef4444'} />
-                                                ))}
-                                            </Bar>
-                                        </BarChart>
+                                            
+                                            {/* Столбцы - Выручка */}
+                                            <Bar 
+                                                dataKey="gross_sales" 
+                                                name="Выручка" 
+                                                fill="url(#colorRevenue)" 
+                                                radius={[4, 4, 4, 4]} 
+                                                barSize={8}
+                                                opacity={0.8}
+                                            />
+                                            
+                                            {/* Линия - Прибыль */}
+                                            <Line 
+                                                type="monotone" 
+                                                dataKey="profit" 
+                                                name="Чистая прибыль" 
+                                                stroke="#10b981" 
+                                                strokeWidth={3} 
+                                                dot={{r: 0, fill: '#10b981', strokeWidth: 0}}
+                                                activeDot={{r: 6, fill: '#fff', stroke: '#10b981', strokeWidth: 3}}
+                                            />
+                                        </ComposedChart>
                                     </ResponsiveContainer>
+                                    
+                                    {/* Легенда графика */}
+                                    <div className="flex justify-center gap-4 mt-2">
+                                        <div className="flex items-center gap-2 text-xs">
+                                            <div className="w-3 h-3 rounded-full bg-indigo-500 opacity-50"></div>
+                                            <span className="text-slate-500">Выручка</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-xs">
+                                            <div className="w-4 h-1 bg-emerald-500 rounded-full"></div>
+                                            <span className="text-slate-500">Чистая прибыль</span>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 {/* Summary Table WITH TOOLTIPS */}
@@ -491,7 +555,6 @@ const FinancePage = ({ user, onNavigate }) => {
                                         </span>
                                     </div>
                                     
-                                    {/* Commission Row */}
                                     <div className="flex justify-between items-center py-2.5 border-b border-slate-200/50">
                                         <span className="text-sm text-slate-500 font-medium flex items-center">
                                             Комиссия WB + СПП
