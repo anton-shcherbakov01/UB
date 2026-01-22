@@ -23,6 +23,7 @@ import TariffsPage from './pages/TariffsPage';
 import FunnelPage from './pages/FunnelPage';
 import PaymentSuccessPage from './pages/PaymentSuccessPage';
 import PaymentFailPage from './pages/PaymentFailPage';
+import PriceControlPage from './pages/PriceControlPage'; // <--- ДОБАВЛЕН ИМПОРТ
 
 const AppContent = () => {
   const [user, setUser] = useState(null);
@@ -117,6 +118,10 @@ const AppContent = () => {
             <Route path="/ai" element={<AIAnalysisPage user={user} onUserUpdate={fetchUser} />} />
             <Route path="/supply" element={<SupplyPage />} />
             
+            {/* --- НОВЫЙ РОУТ ДЛЯ КОНТРОЛЯ ЦЕН --- */}
+            <Route path="/price_control" element={<PriceControlPage onBack={() => navigate('/')} />} />
+            {/* ----------------------------------- */}
+
             {/* Передаем user в SlotsPage */}
             <Route path="/slots" element={<SlotsPage user={user} onNavigate={handleTabChange} />} />
             
@@ -127,12 +132,14 @@ const AppContent = () => {
             <Route path="/analytics_advanced" element={<AdvancedAnalyticsPage onBack={() => navigate('/')} user={user} />} />
             <Route path="/funnel" element={<FunnelPage onBack={() => navigate('/')} />} />
             <Route path="/notifications" element={<NotificationsPage onNavigate={handleTabChange} user={user} />} />
-              <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
-              <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />
-              <Route path="/payment/success" element={<PaymentSuccessPage />} />
-              <Route path="/payment/fail" element={<PaymentFailPage />} />
+            <Route path="/offer" element={<OfferPage onBack={() => navigate('/profile')} />} />
+            <Route path="/privacy" element={<PrivacyPage onBack={() => navigate('/profile')} />} />
+            <Route path="/payment/success" element={<PaymentSuccessPage />} />
+            <Route path="/payment/fail" element={<PaymentFailPage />} />
             <Route path="/support" element={<SupportPage onBack={() => navigate('/profile')} />} />
             <Route path="/tariffs" element={<TariffsPage onBack={() => navigate('/profile')} />} />
+            
+            {/* Catch-all route возвращает на главную */}
             <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <TabNav active={activeTab} setTab={handleTabChange} isAdmin={user?.is_admin} />
