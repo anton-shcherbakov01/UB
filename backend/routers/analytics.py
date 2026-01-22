@@ -6,6 +6,8 @@ from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import io
 import asyncio
+import logging
+
 from concurrent.futures import ThreadPoolExecutor
 
 # Импортируем сервис и модели
@@ -63,8 +65,6 @@ async def get_sales_funnel(
 
     try:
         # 1. Запускаем параллельные запросы
-        # V3 - для общих цифр трафика (Просмотры, Корзины)
-        # V1 - для точной истории Заказов и Выкупов
         task_v3 = wb_api.get_sales_funnel_full(user.wb_api_token, date_from_str, date_to_str, nm_ids=list(filter_ids))
         task_orders = wb_api.get_orders(days=days)
         task_sales = wb_api.get_sales(days=days)
@@ -77,12 +77,12 @@ async def get_sales_funnel(
             d = (date_from + timedelta(days=i)).strftime("%Y-%m-%d")
             chart_data[d] = {
                 "date": d,
-                "visitors": 0,  # Будет распределено
-                "cart": 0,      # Будет распределено
-                "orders": 0,    # Точно из V1
-                "buyouts": 0,   # Точно из V1
-                "orders_sum": 0, # Точно из V1
-                "buyouts_sum": 0 # Точно из V1
+                "visitors": 0,  
+                "cart": 0,      
+                "orders": 0,    
+                "buyouts": 0,   
+                "orders_sum": 0, 
+                "buyouts_sum": 0 
             }
 
         # 3. Обработка ЗАКАЗОВ (V1 - Точные данные)
@@ -93,15 +93,20 @@ async def get_sales_funnel(
             for order in orders_history:
                 if filter_ids and order.get("nmId") not in filter_ids:
                     continue
-                if order.get("isCancel"): # Игнорируем отмены
+                if order.get("isCancel"): 
                     continue
 
-                # Дата заказа (обрезаем время)
                 d_raw = order.get("date", "")
                 d = d_raw[:10]
                 
                 if d in chart_data:
+                    # FIX: Расчет цены (fallback если API вернул 0)
                     price = order.get("priceWithDiscount", 0)
+                    if price == 0:
+                        total_price = order.get("totalPrice", 0)
+                        discount = order.get("discountPercent", 0)
+                        price = total_price * (1 - discount/100)
+                    
                     chart_data[d]["orders"] += 1
                     chart_data[d]["orders_sum"] += price
                     total_orders_exact += 1
@@ -115,7 +120,6 @@ async def get_sales_funnel(
             for sale in sales_history:
                 if filter_ids and sale.get("nmId") not in filter_ids:
                     continue
-                # Игнорируем возвраты (isStorno=1) и берем только продажи (S)
                 if sale.get("isStorno") or not sale.get("saleID", "").startswith("S"):
                     continue
 
@@ -123,21 +127,22 @@ async def get_sales_funnel(
                 d = d_raw[:10]
                 
                 if d in chart_data:
+                    # FIX: Расчет цены (fallback)
                     price = sale.get("priceWithDiscount", 0)
+                    if price == 0:
+                        total_price = sale.get("totalPrice", 0)
+                        discount = sale.get("discountPercent", 0)
+                        price = total_price * (1 - discount/100)
+
                     chart_data[d]["buyouts"] += 1
                     chart_data[d]["buyouts_sum"] += price
                     total_buyouts_exact += 1
                     total_buyouts_sum_exact += price
 
-        # 5. Обработка ТРАФИКА (V3 - Агрегаты -> Распределение)
-        # WB не отдает историю просмотров по дням через легкое API, только общую сумму за период.
-        # Чтобы график был красивым и коррелировал, мы распределяем общие просмотры пропорционально заказам.
-        # Если заказов в день не было, используем равномерное распределение остатка.
-        
+        # 5. Обработка ТРАФИКА (V3 -> Распределение)
         v3_visitors = funnel_total.get("visitors", 0)
         v3_carts = funnel_total.get("addToCart", 0)
         
-        # Если V1 пустой (нет ключа или данных), берем цифры из V3 для итогов, но график будет плоским
         is_exact = total_orders_exact > 0
         
         final_orders = total_orders_exact if is_exact else funnel_total.get("ordersCount", 0)
@@ -145,34 +150,26 @@ async def get_sales_funnel(
         final_buyouts = total_buyouts_exact if is_exact else funnel_total.get("buyoutsCount", 0)
         final_buyouts_sum = total_buyouts_sum_exact if is_exact else funnel_total.get("buyoutsSum", 0)
 
-        # Алгоритм распределения трафика
+        # Распределение трафика
         sorted_dates = sorted(chart_data.keys())
         
         if is_exact and total_orders_exact > 0:
-            # Распределяем пропорционально заказам (так график выглядит максимально реалистично)
-            # Коэффициент: сколько просмотров приходится на 1 заказ в среднем
             views_per_order = v3_visitors / total_orders_exact
             carts_per_order = v3_carts / total_orders_exact
             
-            # Остатки, которые не попали в пропорцию (дни без заказов)
             remaining_views = v3_visitors
             remaining_carts = v3_carts
             
             for d in sorted_dates:
                 orders_today = chart_data[d]["orders"]
-                
                 if orders_today > 0:
-                    # Основная доля
                     day_views = int(orders_today * views_per_order)
                     day_carts = int(orders_today * carts_per_order)
-                    
                     chart_data[d]["visitors"] = day_views
                     chart_data[d]["cart"] = day_carts
-                    
                     remaining_views -= day_views
                     remaining_carts -= day_carts
             
-            # Раскидываем остатки равномерно по всем дням (сглаживание)
             if days > 0:
                 base_views = max(0, int(remaining_views / days))
                 base_carts = max(0, int(remaining_carts / days))
@@ -180,24 +177,21 @@ async def get_sales_funnel(
                     chart_data[d]["visitors"] += base_views
                     chart_data[d]["cart"] += base_carts
         else:
-            # Если заказов нет или данных V1 нет - равномерное распределение
             avg_views = int(v3_visitors / days) if days > 0 else 0
             avg_carts = int(v3_carts / days) if days > 0 else 0
             
             for d in sorted_dates:
                 chart_data[d]["visitors"] = avg_views
                 chart_data[d]["cart"] = avg_carts
-                # Если fallback
                 if not is_exact:
                     chart_data[d]["orders"] = int(final_orders / days)
                     chart_data[d]["orders_sum"] = int(final_revenue / days)
 
-        # Конверсии (Средние за период)
+        # Конверсии
         cr_view_cart = (v3_carts / v3_visitors * 100) if v3_visitors > 0 else 0
         cr_cart_order = (final_orders / v3_carts * 100) if v3_carts > 0 else 0
         cr_order_buyout = (final_buyouts / final_orders * 100) if final_orders > 0 else 0
         
-        # Формируем итоговый массив для графика
         final_chart = [chart_data[d] for d in sorted_dates]
 
         return {
@@ -207,8 +201,8 @@ async def get_sales_funnel(
                 "cart": v3_carts,
                 "orders": final_orders,
                 "buyouts": final_buyouts,
-                "revenue": final_revenue,
-                "buyouts_revenue": final_buyouts_sum
+                "revenue": int(final_revenue), # Принудительно int для красоты
+                "buyouts_revenue": int(final_buyouts_sum)
             },
             "conversions": {
                 "view_to_cart": round(cr_view_cart, 1),
@@ -216,12 +210,11 @@ async def get_sales_funnel(
                 "order_to_buyout": round(cr_order_buyout, 1)
             },
             "chart": final_chart,
-            "is_exact": is_exact # Флаг, точные ли данные
+            "is_exact": is_exact
         }
 
     except Exception as e:
         logger.error(f"Funnel Error: {e}", exc_info=True)
-        # Возвращаем пустую структуру вместо 500 ошибки
         return {
             "period": f"{days} дн.",
             "totals": {"visitors": 0, "cart": 0, "orders": 0, "buyouts": 0, "revenue": 0, "buyouts_revenue": 0},

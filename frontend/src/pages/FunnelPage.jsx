@@ -53,6 +53,7 @@ const FunnelPage = ({ onBack }) => {
     
     const [nmIds, setNmIds] = useState('');
     const [isFilterOpen, setIsFilterOpen] = useState(false);
+    const [showHelp, setShowHelp] = useState(false); // FIX: State для подсказки
 
     useEffect(() => {
         fetchFunnelData();
@@ -89,12 +90,17 @@ const FunnelPage = ({ onBack }) => {
 
     const CustomTooltip = ({ active, payload, label }) => {
         if (active && payload && payload.length) {
+            // Ищем данные из массива payload
+            const visitors = payload.find(p => p.dataKey === 'visitors')?.value || 0;
+            const orders = payload.find(p => p.dataKey === 'orders')?.value || 0;
+            const revenue = payload.find(p => p.dataKey === 'orders')?.payload?.orders_sum || 0;
+
             return (
-                <div className="bg-white/95 backdrop-blur shadow-xl rounded-2xl p-4 border border-slate-100 text-xs">
+                <div className="bg-white/95 backdrop-blur shadow-xl rounded-2xl p-4 border border-slate-100 text-xs z-50">
                     <p className="font-bold text-slate-500 mb-2 border-b border-slate-100 pb-1">{label}</p>
-                    <p className="text-indigo-600 font-bold mb-1">👁 Просмотры: {formatNum(payload[0].value)}</p>
-                    <p className="text-amber-500 font-bold mb-1">📦 Заказы: {formatNum(payload[1].value)}</p>
-                    <p className="text-emerald-500 font-bold">💰 Выручка: {formatNum(payload[1].payload.orders_sum)} ₽</p>
+                    <p className="text-indigo-600 font-bold mb-1">👁 Просмотры: {formatNum(visitors)}</p>
+                    <p className="text-amber-500 font-bold mb-1">📦 Заказы: {formatNum(orders)}</p>
+                    <p className="text-emerald-500 font-bold">💰 Выручка: {formatNum(revenue)} ₽</p>
                 </div>
             );
         }
@@ -139,10 +145,30 @@ const FunnelPage = ({ onBack }) => {
                       >
                           <ArrowLeft size={24}/>
                       </button>
-                      <div className="group relative h-full">
-                        <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
+                      <div className="relative h-full">
+                        <button 
+                            onClick={() => setShowHelp(!showHelp)}
+                            className={`h-full w-full rounded-2xl shadow-sm transition-colors flex items-center justify-center active:scale-95 ${showHelp ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white text-slate-400 hover:text-indigo-600'}`}
+                        >
                             <HelpCircle size={24}/>
                         </button>
+                        
+                        {/* FIX: Tooltip с явным состоянием */}
+                        {showHelp && (
+                            <div className="absolute top-full right-0 mt-2 w-64 p-4 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-[60] animate-in fade-in zoom-in-95">
+                                <div className="font-bold mb-2 text-rose-300">Как читать воронку?</div>
+                                <ul className="space-y-1.5 list-disc pl-3 mb-2">
+                                    <li><span className="text-slate-300">Просмотры:</span> Уникальные открытия карточки.</li>
+                                    <li><span className="text-slate-300">Корзина:</span> Конверсия (CR) в добавление.</li>
+                                    <li><span className="text-slate-300">Заказы:</span> Оформленные покупки.</li>
+                                    <li><span className="text-slate-300">Выкупы:</span> Товар фактически выкуплен.</li>
+                                </ul>
+                                <div className="text-[10px] text-slate-400 leading-tight border-t border-slate-700 pt-2">
+                                    Данные по заказам и выкупам - точные (из финансового отчета). Просмотры и корзины - распределенные.
+                                </div>
+                                <button onClick={() => setShowHelp(false)} className="mt-3 w-full bg-slate-800 py-1.5 rounded-lg text-slate-300 font-bold hover:bg-slate-700">Понятно</button>
+                            </div>
+                        )}
                       </div>
                  </div>
             </div>
@@ -231,59 +257,62 @@ const FunnelPage = ({ onBack }) => {
                     </div>
 
                     {/* 3. ADVANCED CHART (Traffic vs Orders) */}
-                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 h-[400px]">
-                        <div className="flex justify-between items-center mb-4">
+                    {/* FIX: Изменили верстку на Flexbox, чтобы легенда не уезжала */}
+                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100 h-[450px] flex flex-col">
+                        <div className="flex justify-between items-center mb-4 shrink-0">
                             <h3 className="font-bold text-slate-800 flex items-center gap-2">
                                 <TrendingUp size={18} className="text-indigo-600"/>
                                 Динамика (Трафик vs Заказы)
                             </h3>
                         </div>
                         
-                        <ResponsiveContainer width="100%" height="90%">
-                            <ComposedChart data={data.chart}>
-                                <defs>
-                                    <linearGradient id="colorVis" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
-                                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
-                                <XAxis 
-                                    dataKey="date" 
-                                    tickFormatter={(str) => {
-                                        const d = new Date(str);
-                                        return `${d.getDate()}.${d.getMonth()+1}`;
-                                    }}
-                                    tick={{fontSize: 10, fill: '#94a3b8'}} 
-                                    axisLine={false} 
-                                    tickLine={false}
-                                    minTickGap={15}
-                                />
-                                <YAxis yAxisId="left" orientation="left" hide />
-                                <YAxis yAxisId="right" orientation="right" hide />
-                                <Tooltip content={<CustomTooltip />} />
-                                
-                                {/* Area: Просмотры (Левая ось) */}
-                                <Area 
-                                    yAxisId="left"
-                                    type="monotone" 
-                                    dataKey="visitors" 
-                                    stroke="#6366f1" 
-                                    strokeWidth={2}
-                                    fill="url(#colorVis)" 
-                                />
-                                
-                                {/* Bar: Заказы (Правая ось - чтобы видеть пики) */}
-                                <Bar 
-                                    yAxisId="right"
-                                    dataKey="orders" 
-                                    barSize={8}
-                                    fill="#fbbf24" 
-                                    radius={[4, 4, 4, 4]}
-                                />
-                            </ComposedChart>
-                        </ResponsiveContainer>
-                        <div className="flex justify-center gap-4 text-[10px] mt-2 font-bold text-slate-400">
+                        <div className="flex-1 w-full min-h-0">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart data={data.chart}>
+                                    <defs>
+                                        <linearGradient id="colorVis" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
+                                            <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => {
+                                            const d = new Date(str);
+                                            return `${d.getDate()}.${d.getMonth()+1}`;
+                                        }}
+                                        tick={{fontSize: 10, fill: '#94a3b8'}} 
+                                        axisLine={false} 
+                                        tickLine={false}
+                                        minTickGap={15}
+                                    />
+                                    <YAxis yAxisId="left" orientation="left" hide />
+                                    <YAxis yAxisId="right" orientation="right" hide />
+                                    <Tooltip content={<CustomTooltip />} cursor={{fill: '#f8fafc', opacity: 0.5}} />
+                                    
+                                    {/* Area: Просмотры (Левая ось) */}
+                                    <Area 
+                                        yAxisId="left"
+                                        type="monotone" 
+                                        dataKey="visitors" 
+                                        stroke="#6366f1" 
+                                        strokeWidth={2}
+                                        fill="url(#colorVis)" 
+                                    />
+                                    
+                                    {/* Bar: Заказы (Правая ось - чтобы видеть пики) */}
+                                    <Bar 
+                                        yAxisId="right"
+                                        dataKey="orders" 
+                                        barSize={8}
+                                        fill="#fbbf24" 
+                                        radius={[4, 4, 4, 4]}
+                                    />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <div className="flex justify-center gap-4 text-[10px] mt-3 font-bold text-slate-400 shrink-0">
                             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-indigo-500 rounded-full opacity-50"></div> Просмотры</div>
                             <div className="flex items-center gap-1"><div className="w-3 h-3 bg-amber-400 rounded-full"></div> Заказы</div>
                         </div>
