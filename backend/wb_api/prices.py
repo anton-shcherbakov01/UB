@@ -13,10 +13,6 @@ class WBPricesMixin(WBApiBase):
     PRICES_URL = "https://discounts-prices-api.wildberries.ru"
 
     async def get_goods_list(self, token: str, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
-        """
-        Получение списка товаров с ценами и скидками.
-        Это самый быстрый способ узнать текущую цену селлера.
-        """
         url = f"{self.PRICES_URL}/api/v2/list/goods/filter"
         headers = {"Authorization": token}
         params = {
@@ -24,11 +20,23 @@ class WBPricesMixin(WBApiBase):
             "offset": offset
         }
         
+        # ДЕБАГ: Логируем запрос
+        # logger.info(f"Requesting Prices API: offset={offset}, limit={limit}")
+        
         # Используем session=None, чтобы базовый класс создал новую
+        # Метод GET, как требует документация
         data = await self._request_with_retry(None, url, headers, params=params, method='GET')
         
-        if data and 'data' in data and 'listGoods' in data['data']:
-            return data['data']['listGoods']
+        if data:
+            # ДЕБАГ: Если данные пришли, проверим структуру
+            if 'data' in data and 'listGoods' in data['data']:
+                goods = data['data']['listGoods']
+                # logger.info(f"Got {len(goods)} goods from Prices API")
+                return goods
+            else:
+                logger.error(f"WB Prices API Error structure: {data}")
+        else:
+            logger.error("WB Prices API returned None (Check Token Scopes 'Prices & Discounts')")
         
         return []
 
@@ -52,4 +60,5 @@ class WBPricesMixin(WBApiBase):
                 
             offset += limit
             
+        logger.info(f"Total goods fetched from Prices API: {len(all_goods)}")
         return all_goods

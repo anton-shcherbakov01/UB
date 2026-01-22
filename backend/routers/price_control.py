@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
 from database import get_db, User, PriceAlert, ProductCost
 from dependencies import get_current_user
@@ -35,9 +36,10 @@ async def get_controlled_items(
         wb_goods = await wb_api_service.get_all_goods_prices(user.wb_api_token)
     except Exception as e:
         logger.error(f"Failed to fetch prices: {e}")
-        return []
+        raise HTTPException(502, f"WB API Error: {str(e)}")
 
     if not wb_goods:
+        logger.warning(f"User {user.id}: WB returned 0 goods. Check 'Prices & Discounts' token scope.")
         return []
 
     # Собираем SKU для запроса к БД
@@ -64,8 +66,7 @@ async def get_controlled_items(
         base_price = int(item.get('price', 0))
         discount = int(item.get('discount', 0))
         
-        # Эту цену установил селлер. Ниже нее он не получит (за вычетом комиссии).
-        # СПП применяется уже к ней, но за счет WB.
+        # Эту цену установил селлер.
         seller_price = int(base_price * (1 - discount / 100))
         
         alert = alerts_map.get(sku)
@@ -86,8 +87,6 @@ async def get_controlled_items(
                 status = "warning" # Близко к дну (5%)
         
         # Используем фото из API Контента или заглушку
-        # API Цен не отдает фото и названия, но мы можем взять их из кеша, если есть, 
-        # или просто сгенерировать ссылку на корзину
         vol = sku // 100000
         part = sku // 1000
         photo_url = f"https://basket-01.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
@@ -102,7 +101,9 @@ async def get_controlled_items(
             "cost_price": cost_price,
             "is_active": is_active,
             "status": status,
-            "diff_percent": diff_percent
+            "diff_percent": diff_percent,
+            "name": f"Товар {sku}", # API цен не дает названия, это нормально
+            "brand": "WB"
         })
 
     # Сортировка: сначала Danger, потом Warning, потом активные
@@ -127,7 +128,7 @@ async def update_alert(
         alert.min_price = req.min_price
         alert.is_active = req.is_active
         # Сразу обновляем last_check, чтобы не спамить
-        alert.last_check = datetime.utcnow() # Fix import needed
+        alert.last_check = datetime.utcnow()
     else:
         alert = PriceAlert(
             user_id=user.id,
@@ -140,5 +141,14 @@ async def update_alert(
     await db.commit()
     return {"status": "updated"}
 
-# Для фикса импорта datetime
-from datetime import datetime
+@router.post("/refresh/{sku}")
+async def force_refresh_price(
+    sku: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Для принудительного обновления одного товара мы можем также использовать API
+    # Но для одиночного это неэффективно (API отдает списком).
+    # Пока оставим заглушку или вернем цену из списка, если она есть.
+    # В текущей реализации мы каждый раз грузим список при входе, так что refresh менее актуален.
+    return {"status": "ok"}
