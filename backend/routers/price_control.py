@@ -19,6 +19,31 @@ class AlertUpdateRequest(BaseModel):
     min_price: int
     is_active: bool = True
 
+# --- ХЕЛПЕР: Определение сервера для фото (Алгоритм WB 2025) ---
+def get_basket_number(sku: int) -> str:
+    vol = sku // 100000
+    if 0 <= vol <= 143: return '01'
+    if 144 <= vol <= 287: return '02'
+    if 288 <= vol <= 431: return '03'
+    if 432 <= vol <= 719: return '04'
+    if 720 <= vol <= 1007: return '05'
+    if 1008 <= vol <= 1061: return '06'
+    if 1062 <= vol <= 1115: return '07'
+    if 1116 <= vol <= 1169: return '08'
+    if 1170 <= vol <= 1313: return '09'
+    if 1314 <= vol <= 1601: return '10'
+    if 1602 <= vol <= 1655: return '11'
+    if 1656 <= vol <= 1919: return '12'
+    if 1920 <= vol <= 2045: return '13'
+    if 2046 <= vol <= 2189: return '14'
+    if 2190 <= vol <= 2405: return '15'
+    if 2406 <= vol <= 2621: return '16'
+    if 2622 <= vol <= 2837: return '17'
+    if 2838 <= vol <= 3053: return '18'
+    if 3054 <= vol <= 3269: return '19'
+    if 3270 <= vol <= 3485: return '20'
+    return '21' # Fallback на новые сервера
+
 @router.get("/list")
 async def get_controlled_items(
     user: User = Depends(get_current_user),
@@ -26,12 +51,12 @@ async def get_controlled_items(
 ):
     """
     Получает список товаров напрямую из API Цен и Скидок.
-    Матчит с настройками алертов из БД.
+    Исправлен алгоритм получения цены (из sizes) и фото.
     """
     if not user.wb_api_token:
         raise HTTPException(400, "Token required")
 
-    # 1. Загружаем актуальные цены из WB API (Быстро)
+    # 1. Загружаем актуальные цены из WB API
     try:
         wb_goods = await wb_api_service.get_all_goods_prices(user.wb_api_token)
     except Exception as e:
@@ -50,7 +75,7 @@ async def get_controlled_items(
     alerts_res = await db.execute(alerts_stmt)
     alerts_map = {a.sku: a for a in alerts_res.scalars().all()}
 
-    # 3. Получаем себестоимость (для расчета маржи)
+    # 3. Получаем себестоимость
     costs_stmt = select(ProductCost).where(ProductCost.user_id == user.id)
     costs_res = await db.execute(costs_stmt)
     costs_map = {c.sku: c.cost_price for c in costs_res.scalars().all()}
@@ -58,17 +83,32 @@ async def get_controlled_items(
     result = []
     
     for item in wb_goods:
-        sku = item['nmID']
+        sku = item.get('nmID')
+        if not sku: continue
         
-        # Основная математика WB API
-        # price - это базовая цена (до скидки, зачеркнутая)
-        # discount - процент скидки
+        # --- ЛОГИКА ЦЕН (ИСПРАВЛЕНО) ---
+        # Сначала ищем в корне, если нет (0) - ищем в размерах
         base_price = int(item.get('price', 0))
         discount = int(item.get('discount', 0))
-        
-        # Эту цену установил селлер.
+
+        # Если в корне пусто, лезем в размеры
+        if base_price == 0 and 'sizes' in item and len(item['sizes']) > 0:
+            first_size = item['sizes'][0]
+            base_price = int(first_size.get('price', 0))
+            # Скидка обычно общая, но иногда может быть внутри
+            if discount == 0: 
+                discount = int(first_size.get('discount', 0))
+
+        # Эту цену установил селлер (до СПП)
         seller_price = int(base_price * (1 - discount / 100))
         
+        # --- ФОТО (ИСПРАВЛЕНО) ---
+        host = get_basket_number(sku)
+        vol = sku // 100000
+        part = sku // 1000
+        photo_url = f"https://basket-{host}.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
+
+        # --- БД ---
         alert = alerts_map.get(sku)
         cost_price = costs_map.get(sku, 0)
         
@@ -81,20 +121,15 @@ async def get_controlled_items(
         
         if min_price > 0:
             if seller_price < min_price:
-                status = "danger" # Пробили дно
+                status = "danger"
                 diff_percent = round((1 - seller_price/min_price) * 100, 1)
             elif seller_price < (min_price * 1.05):
-                status = "warning" # Близко к дну (5%)
+                status = "warning"
         
-        # Используем фото из API Контента или заглушку
-        vol = sku // 100000
-        part = sku // 1000
-        photo_url = f"https://basket-01.wbbasket.ru/vol{vol}/part{part}/{sku}/images/c246x328/1.webp"
-
         result.append({
             "sku": sku,
             "photo": photo_url,
-            "current_price": seller_price, # Цена селлера
+            "current_price": seller_price,
             "base_price": base_price,
             "discount": discount,
             "min_price": min_price,
@@ -102,11 +137,11 @@ async def get_controlled_items(
             "is_active": is_active,
             "status": status,
             "diff_percent": diff_percent,
-            "name": f"Товар {sku}", # API цен не дает названия, это нормально
+            "name": item.get('vendorCode', f"Товар {sku}"), # Используем артикул продавца как название
             "brand": "WB"
         })
 
-    # Сортировка: сначала Danger, потом Warning, потом активные
+    # Сортировка: Danger -> Warning -> Active -> Others
     result.sort(key=lambda x: (
         0 if x['status'] == 'danger' else 
         1 if x['status'] == 'warning' else 
@@ -127,7 +162,6 @@ async def update_alert(
     if alert:
         alert.min_price = req.min_price
         alert.is_active = req.is_active
-        # Сразу обновляем last_check, чтобы не спамить
         alert.last_check = datetime.utcnow()
     else:
         alert = PriceAlert(
@@ -147,8 +181,6 @@ async def force_refresh_price(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # Для принудительного обновления одного товара мы можем также использовать API
-    # Но для одиночного это неэффективно (API отдает списком).
-    # Пока оставим заглушку или вернем цену из списка, если она есть.
-    # В текущей реализации мы каждый раз грузим список при входе, так что refresh менее актуален.
+    # Принудительное обновление для одного товара не всегда возможно через этот API 
+    # (он отдает списки). Для UI просто вернем "ок", так как основной список обновляется при загрузке.
     return {"status": "ok"}
