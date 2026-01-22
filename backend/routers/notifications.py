@@ -18,9 +18,9 @@ class NotifyConfig(BaseModel):
     notify_hourly_stats: bool
     summary_interval: int # 1, 3, 6, 12, 24
     show_funnel: bool
-    # Restore show_daily_revenue to prevent validation errors if frontend sends it, 
-    # and to support DB models that might require it during creation.
     show_daily_revenue: Optional[bool] = None 
+    # НОВОЕ ПОЛЕ
+    notify_price_drop: bool = True 
 
     class Config:
         from_attributes = True
@@ -39,8 +39,8 @@ async def get_settings(user: User = Depends(get_current_user), db: AsyncSession 
         settings.notify_hourly_stats = True
         settings.summary_interval = 24
         settings.show_funnel = True
-        # Если в базе есть колонка, лучше инициализировать, чтобы избежать ошибок
         settings.show_daily_revenue = True 
+        settings.notify_price_drop = True # Default On
         
         db.add(settings)
         await db.commit()
@@ -56,7 +56,6 @@ async def update_settings(
 ):
     # Проверка лимитов тарифа
     min_interval = get_limit(user.subscription_plan, "min_summary_interval")
-    # Если min_interval не задан (например 0), ставим дефолт 24
     if min_interval == 0: min_interval = 24
 
     if config.notify_hourly_stats and config.summary_interval < min_interval:
@@ -75,8 +74,8 @@ async def update_settings(
     settings.notify_hourly_stats = config.notify_hourly_stats
     settings.summary_interval = config.summary_interval
     settings.show_funnel = config.show_funnel
+    settings.notify_price_drop = config.notify_price_drop # Сохраняем новую настройку
     
-    # Legacy support: Если фронтенд отправляет это поле, сохраняем его или используем как фолбэк
     if config.show_daily_revenue is not None:
         settings.show_daily_revenue = config.show_daily_revenue
 

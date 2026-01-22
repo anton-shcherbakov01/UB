@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle, AlertTriangle, Lock } from 'lucide-react';
+import { Bell, ShoppingCart, DollarSign, BarChart3, Filter, ArrowLeft, Save, Loader2, Clock, HelpCircle, AlertTriangle, Lock, ShieldAlert } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
 // Карта цветов для Tailwind
@@ -8,6 +8,7 @@ const COLOR_MAPS = {
     emerald: { bg: 'bg-emerald-500', light: 'bg-emerald-100', text: 'text-emerald-600' },
     blue: { bg: 'bg-blue-500', light: 'bg-blue-100', text: 'text-blue-600' },
     violet: { bg: 'bg-violet-500', light: 'bg-violet-100', text: 'text-violet-600' },
+    rose: { bg: 'bg-rose-500', light: 'bg-rose-100', text: 'text-rose-600' },
 };
 
 const Toggle = ({ label, description, checked, onChange, icon: Icon, color, badge, badgeColor }) => {
@@ -45,7 +46,6 @@ const NotificationsPage = ({ onNavigate, user }) => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
-    // Определяем лимиты на основе плана пользователя
     const userPlan = user?.plan || 'start';
     const minInterval = userPlan === 'strategist' ? 1 : (userPlan === 'analyst' ? 3 : 24);
 
@@ -53,7 +53,6 @@ const NotificationsPage = ({ onNavigate, user }) => {
         fetch(`${API_URL}/api/notifications/settings`, { headers: getTgHeaders() })
             .then(r => r.json())
             .then(data => {
-                // Если с сервера пришел интервал меньше допустимого для текущего плана (например, при даунгрейде), визуально ставим минимально разрешенный
                 if (data.summary_interval < minInterval) {
                     data.summary_interval = minInterval;
                 }
@@ -87,9 +86,8 @@ const NotificationsPage = ({ onNavigate, user }) => {
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
             
-            {/* Unified Header */}
+            {/* Header */}
             <div className="flex justify-between items-stretch h-24 mb-6">
-                 {/* Main Header Card */}
                  <div className="bg-gradient-to-r from-violet-600 to-indigo-600 p-5 rounded-[28px] text-white shadow-xl shadow-indigo-200 relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500">
                     <div className="relative z-10">
                         <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
@@ -110,7 +108,6 @@ const NotificationsPage = ({ onNavigate, user }) => {
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
                  </div>
                  
-                 {/* Right Sidebar Buttons */}
                  <div className="flex flex-col gap-2 w-14 shrink-0">
                      <button 
                         onClick={() => onNavigate('profile')} 
@@ -123,14 +120,13 @@ const NotificationsPage = ({ onNavigate, user }) => {
                         <button className="bg-white h-full w-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95">
                             <HelpCircle size={24}/>
                         </button>
-                        {/* Tooltip */}
                         <div className="hidden group-hover:block absolute top-0 right-full mr-2 w-64 p-4 bg-slate-900 text-white text-xs rounded-xl shadow-xl z-50">
                             <div className="font-bold mb-2 text-indigo-300">Настройки уведомлений</div>
                             <p className="mb-2">Включите уведомления о важных событиях:</p>
                             <ul className="space-y-1 text-[10px] list-disc pl-3">
                                 <li><strong>Новые заказы</strong> - мгновенно при поступлении</li>
                                 <li><strong>Выкупы</strong> - фиксация прибыли</li>
-                                <li><strong>Сводка</strong> - отчеты по расписанию</li>
+                                <li><strong>Stop-Loss</strong> - если цена упала ниже порога</li>
                             </ul>
                             <div className="absolute top-6 right-0 translate-x-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-l-slate-900"></div>
                         </div>
@@ -152,6 +148,15 @@ const NotificationsPage = ({ onNavigate, user }) => {
                         checked={settings.notify_buyouts} onChange={v => update('notify_buyouts', v)}
                         icon={DollarSign} color="emerald"
                         badge="Быстро" badgeColor="bg-emerald-100 text-emerald-600"
+                    />
+                    {/* НОВЫЙ ТОГГЛ */}
+                    <Toggle 
+                        label="Контроль цен (Stop-Loss)" 
+                        description="Тревога, если цена упала ниже порога"
+                        checked={settings.notify_price_drop} 
+                        onChange={v => update('notify_price_drop', v)}
+                        icon={ShieldAlert} color="rose"
+                        badge="Важно" badgeColor="bg-rose-100 text-rose-600"
                     />
                 </section>
 
@@ -204,11 +209,10 @@ const NotificationsPage = ({ onNavigate, user }) => {
                                 badge="Задержка ~24ч" badgeColor="bg-amber-100 text-amber-600"
                             />
                             
-                            {/* Информационная плашка */}
                             <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex gap-3 text-[10px] text-slate-500 leading-relaxed">
                                 <AlertTriangle className="text-amber-500 shrink-0" size={16} />
                                 <div>
-                                    <span className="font-bold text-slate-700">Важно:</span> Wildberries обновляет данные о просмотрах и корзинах раз в сутки. В утренних отчетах эти поля могут быть пустыми или показывать вчерашние данные. Заказы и выкупы приходят без задержек.
+                                    <span className="font-bold text-slate-700">Важно:</span> Wildberries обновляет данные о просмотрах и корзинах раз в сутки. В утренних отчетах эти поля могут быть пустыми.
                                 </div>
                             </div>
                         </div>

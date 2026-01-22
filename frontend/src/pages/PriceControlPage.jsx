@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
-    ArrowLeft, ShieldAlert, CheckCircle2, AlertOctagon, 
-    Search, Loader2, DollarSign, PenLine, TrendingDown,
-    Save, X
+    ArrowLeft, ShieldAlert, AlertOctagon, RefreshCw, Search, 
+    Loader2, DollarSign, PenLine, Save, X, HelpCircle, TrendingDown 
 } from 'lucide-react';
 import { API_URL, getTgHeaders } from '../config';
 
@@ -10,8 +9,12 @@ const PriceControlPage = ({ onBack }) => {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
-    const [editingSku, setEditingSku] = useState(null); // Какой SKU редактируем
-    const [tempPrice, setTempPrice] = useState('');     // Временное значение инпута
+    const [editingSku, setEditingSku] = useState(null); 
+    const [tempPrice, setTempPrice] = useState('');     
+    const [refreshing, setRefreshing] = useState(null);
+    
+    // НОВОЕ: Состояние для модалки помощи
+    const [showHelp, setShowHelp] = useState(false);
 
     useEffect(() => { fetchItems(); }, []);
 
@@ -31,12 +34,9 @@ const PriceControlPage = ({ onBack }) => {
 
     const savePrice = async (sku) => {
         const priceVal = Number(tempPrice);
-        
-        // Optimistic update
         setItems(prev => prev.map(i => i.sku === sku ? { 
             ...i, 
             min_price: priceVal,
-            // Пересчитываем статус на лету
             status: priceVal > 0 && i.current_price < priceVal ? 'danger' : 'ok'
         } : i));
         
@@ -48,23 +48,83 @@ const PriceControlPage = ({ onBack }) => {
                 headers: { ...getTgHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sku, min_price: priceVal, is_active: true })
             });
-        } catch (e) { console.error(e); fetchItems(); } // Revert on error
+        } catch (e) { console.error(e); fetchItems(); }
+    };
+
+    const handleForceRefresh = async (sku) => {
+        setRefreshing(sku);
+        try {
+            const res = await fetch(`${API_URL}/api/control/refresh/${sku}`, {
+                method: 'POST',
+                headers: getTgHeaders()
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setItems(prev => prev.map(i => i.sku === sku ? { ...i, current_price: data.current_price } : i));
+            }
+        } catch (e) { alert("Ошибка обновления"); }
+        finally { setRefreshing(null); }
     };
 
     const filteredItems = items.filter(i => 
         String(i.sku).includes(search)
     );
 
-    // Подсчет статистики для хедера
     const dangerCount = items.filter(i => i.status === 'danger').length;
     const activeCount = items.filter(i => i.min_price > 0).length;
 
+    // --- Модалка помощи ---
+    const HelpModal = () => {
+        if (!showHelp) return null;
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in" onClick={() => setShowHelp(false)}>
+                <div className="bg-white rounded-[32px] w-full max-w-sm p-6 shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => setShowHelp(false)} className="absolute top-4 right-4 p-2 bg-slate-50 rounded-full text-slate-400 hover:bg-slate-100 transition-colors">
+                        <X size={20} />
+                    </button>
+                    
+                    <div className="text-center mb-6">
+                        <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-500">
+                            <ShieldAlert size={32} />
+                        </div>
+                        <h3 className="text-xl font-black text-slate-800">Как это работает?</h3>
+                    </div>
+                    
+                    <div className="space-y-4 text-sm text-slate-600 leading-relaxed">
+                        <p>
+                            Система защищает вас от <b>автоматических акций Wildberries</b>, когда цена товара падает ниже вашей рентабельности.
+                        </p>
+                        
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1 flex items-center gap-2"><DollarSign size={14} className="text-indigo-600"/> Stop-Loss</div>
+                            Это минимальная цена, которую вы готовы принять. Если WB опустит цену ниже этого порога — мы пришлем уведомление.
+                        </div>
+
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                            <div className="font-bold text-slate-800 mb-1 flex items-center gap-2"><RefreshCw size={14} className="text-emerald-600"/> Мониторинг</div>
+                            Бот проверяет ваши цены <b>каждые 15 минут</b> через официальный API.
+                        </div>
+                        
+                        <p className="text-xs text-slate-400 text-center pt-2">
+                            Уведомления приходят в Telegram бот. Убедитесь, что они включены в настройках.
+                        </p>
+                    </div>
+                    
+                    <button onClick={() => setShowHelp(false)} className="w-full bg-slate-900 text-white py-3.5 rounded-2xl font-bold mt-6 active:scale-95 transition-transform">
+                        Все понятно
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="p-4 space-y-6 pb-32 animate-in fade-in bg-[#F4F4F9] min-h-screen">
+            <HelpModal />
             
             {/* Header */}
             <div className="flex justify-between items-stretch h-24 mb-6">
-                 <div className={`bg-gradient-to-br ${dangerCount > 0 ? 'from-rose-500 to-red-600' : 'from-emerald-500 to-teal-600'} p-5 rounded-[28px] text-white shadow-xl ${dangerCount > 0 ? 'shadow-rose-200' : 'shadow-emerald-200'} relative overflow-hidden flex-1 mr-3 flex flex-col justify-center transition-all duration-500`}>
+                 <div className={`bg-gradient-to-br ${dangerCount > 0 ? 'from-rose-500 to-red-600' : 'from-emerald-500 to-teal-600'} p-5 rounded-[28px] text-white shadow-xl ${dangerCount > 0 ? 'shadow-rose-200' : 'shadow-emerald-200'} relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-all duration-500`}>
                     <div className="relative z-10">
                         <h1 className="text-xl font-black flex items-center gap-2 mb-1">
                             {dangerCount > 0 ? <AlertOctagon size={24} className="text-white animate-pulse"/> : <ShieldAlert size={24} className="text-white"/>}
@@ -83,6 +143,9 @@ const PriceControlPage = ({ onBack }) => {
                      <button onClick={onBack} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100">
                          <ArrowLeft size={24}/>
                      </button>
+                     <button onClick={() => setShowHelp(true)} className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100">
+                         <HelpCircle size={24}/>
+                     </button>
                  </div>
             </div>
 
@@ -91,7 +154,7 @@ const PriceControlPage = ({ onBack }) => {
                 <Search className="text-slate-400 ml-2" size={20}/>
                 <input 
                     className="w-full p-2 outline-none text-sm font-bold bg-transparent placeholder:font-normal"
-                    placeholder="Поиск по SKU..."
+                    placeholder="Поиск по названию или SKU..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                 />
