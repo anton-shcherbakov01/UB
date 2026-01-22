@@ -10,8 +10,8 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 from sqlalchemy.future import select
 from sqlalchemy import text
 
-# Импортируем нашу БД (используем тот же движок, что и основное приложение)
-from database import AsyncSessionLocal, Partner, Lead, User, PayoutRequest
+# ИСПРАВЛЕНО: Добавлен импорт Payment
+from database import AsyncSessionLocal, Partner, Lead, User, PayoutRequest, Payment
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
