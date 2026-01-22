@@ -95,7 +95,7 @@ class Lead(Base):
     expires_at = Column(DateTime) # reserved_at + 24 hours
     status = Column(String, default='reserved') # 'reserved', 'converted', 'lost'
 
-class PayoutRequest(BaseModel):
+class PayoutRequest(Base):
     """Заявки на вывод средств"""
     __tablename__ = "payout_requests"
     
