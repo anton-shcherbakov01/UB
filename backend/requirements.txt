@@ -30,3 +30,4 @@ httpx
 aiodns
 psutil
 python-multipart
+aiogram
