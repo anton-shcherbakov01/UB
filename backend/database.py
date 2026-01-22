@@ -72,6 +72,7 @@ class User(Base):
     supply_settings = relationship("SupplySettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     slot_monitors = relationship("SlotMonitor", back_populates="user", cascade="all, delete-orphan")
     notification_settings = relationship("NotificationSettings", uselist=False, back_populates="user", cascade="all, delete-orphan")
+    price_alerts = relationship("PriceAlert", back_populates="user", cascade="all, delete-orphan")
 
 # --- НОВЫЕ ТАБЛИЦЫ ДЛЯ ПАРТНЕРКИ ---
 
@@ -121,6 +122,26 @@ class NotificationSettings(Base):
     show_daily_revenue = Column(Boolean, default=True)
     show_funnel = Column(Boolean, default=True)
     user = relationship("User", back_populates="notification_settings")
+    notify_price_drop = Column(Boolean, default=True)
+
+class PriceAlert(Base):
+    """
+    Таблица для контроля своих цен (Stop-Loss).
+    """
+    __tablename__ = "price_alerts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    sku = Column(BigInteger, index=True)
+    
+    min_price = Column(Integer, default=0) # Порог цены (ниже которого - тревога)
+    last_price = Column(Integer, default=0) # Последняя зафиксированная цена
+    
+    is_active = Column(Boolean, default=True)
+    last_check = Column(DateTime, default=datetime.utcnow)
+    last_alert_sent = Column(DateTime, nullable=True) # Чтобы не спамить каждую минуту
+    
+    user = relationship("User", back_populates="price_alerts")
 
 class SlotMonitor(Base):
     __tablename__ = "slot_monitors"
