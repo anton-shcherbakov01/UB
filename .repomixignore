@@ -1,0 +1,16 @@
+# Убираем проблемные файлы
+*.xml
+Политика конфиденциальности.xml
+Публичная Оферта.xml
+
+# Стандартный мусор
+package-lock.json
+yarn.lock
+output.txt
+repomix-output.xml
+repomix-output.txt
+node_modules
+.git
+.venv
+__pycache__
+backend/msedgedriver

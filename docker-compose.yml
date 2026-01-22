@@ -228,6 +228,21 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  partner_bot:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wb_partner_bot
+    restart: always
+    command: python partner_bot.py
+    volumes: 
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    depends_on: 
+      db:
+        condition: service_healthy
+
 volumes:
   postgres_data_final:
   clickhouse_data:

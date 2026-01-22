@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 
-from database import get_db, User, Payment
+# Добавлен импорт Partner для работы с партнерской программой
+from database import get_db, User, Payment, Partner
 from dependencies import get_current_user
 from bot_service import bot_service
 from services.robokassa_service import RobokassaService
@@ -110,6 +111,40 @@ async def telegram_webhook(
                 user.extra_ai_balance = 0
                 user.cluster_requests_used = 0
                 
+                # --- ПАРТНЕРСКАЯ ЛОГИКА ДЛЯ STARS ---
+                # Если оплата прошла успешно и у пользователя есть реферер
+                if user.referrer_id:
+                    try:
+                        partner = await db.get(Partner, user.referrer_id)
+                        commission = 500  # Фиксированная комиссия 500р (или эквивалент в звездах, если нужно)
+                        
+                        if not partner:
+                            # Если партнера нет в базе (редкий кейс), создаем
+                            partner = Partner(
+                                user_id=user.referrer_id,
+                                balance=0,
+                                total_earned=0
+                            )
+                            db.add(partner)
+                        
+                        partner.balance = float(partner.balance) + commission
+                        partner.total_earned = float(partner.total_earned) + commission
+                        db.add(partner)
+                        
+                        # Уведомляем партнера
+                        try:
+                            await bot_service.send_message(
+                                partner.user_id, 
+                                f"💰 <b>Твой клиент оплатил (Stars)!</b>\nНачислено: +{commission}₽\nКлиент: {user.first_name} (@{user.username})"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to notify partner {partner.user_id}: {e}")
+                            
+                        logger.info(f"Partner commission {commission} RUB credited to agent {user.referrer_id} (Stars payment)")
+                    except Exception as comm_e:
+                        logger.error(f"Failed to credit partner commission (Stars): {comm_e}")
+                # -----------------------------------
+
                 db.add(user)
                 await db.commit()
                 logger.info(f"User {user.telegram_id} upgraded to {plan} via Stars (quotas reset)")
@@ -230,6 +265,36 @@ async def yookassa_webhook(request: Request, db: AsyncSession = Depends(get_db))
             user.ai_requests_used = 0
             user.extra_ai_balance = 0
             user.is_recurring = False 
+            
+            # --- ПАРТНЕРСКАЯ ЛОГИКА ДЛЯ YOOKASSA ---
+            if user.referrer_id:
+                try:
+                    partner = await db.get(Partner, user.referrer_id)
+                    commission = 500
+                    
+                    if not partner:
+                        partner = Partner(
+                            user_id=user.referrer_id,
+                            balance=0,
+                            total_earned=0
+                        )
+                        db.add(partner)
+                    
+                    partner.balance = float(partner.balance) + commission
+                    partner.total_earned = float(partner.total_earned) + commission
+                    db.add(partner)
+                    
+                    try:
+                        await bot_service.send_message(
+                            partner.user_id, 
+                            f"💰 <b>Твой клиент оплатил (YooKassa)!</b>\nНачислено: +{commission}₽\nКлиент: {user.first_name} (@{user.username})"
+                        )
+                    except: pass
+                    logger.info(f"Partner commission credited via YooKassa to {user.referrer_id}")
+                except Exception as e:
+                    logger.error(f"Failed to credit partner (YooKassa): {e}")
+            # ---------------------------------------
+
             db.add(user)
             await db.commit()
             logger.info(f"User {user.telegram_id} subscription extended (YooKassa, quotas reset).")
@@ -363,7 +428,7 @@ async def create_robokassa_addon(
 @router.post("/payment/robokassa/result")
 async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Robokassa ResultURL webhook handler.
+    Robokassa ResultURL webhook handler with Partner Logic.
     """
     try:
         # Robokassa sends form data
@@ -378,9 +443,6 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     inv_id_str = data.get("InvId", "")
     signature_value = data.get("SignatureValue", "")
     
-    # Get additional parameters (Shp_*)
-    # user_id = data.get("Shp_user_id") # Not strictly needed if we look up by payment ID
-    
     # Collect all Shp_ parameters for signature verification
     shp_params = {}
     for key, value in data.items():
@@ -393,7 +455,6 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     
     try:
         inv_id = int(inv_id_str)
-        # amount = float(out_sum) # Used inside verification
     except (ValueError, TypeError) as e:
         logger.error(f"Invalid amount or InvId in callback: {e}")
         return "ERROR"
@@ -432,7 +493,11 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
     # Process payment based on type
     plan_id = payment.plan_id
     
+    # Flag to determine if we should pay commission (only for subscriptions)
+    is_subscription = True
+
     if plan_id.startswith("addon_"):
+        is_subscription = False
         # Process addon purchase
         addon_id = plan_id.replace("addon_", "")
         addon_config = ADDONS.get(addon_id)
@@ -467,6 +532,39 @@ async def robokassa_result_webhook(request: Request, db: AsyncSession = Depends(
             user.cluster_requests_used = 0
             
             logger.info(f"User {user.id} subscription updated to {plan_id} via Robokassa (quotas reset)")
+
+    # --- ПАРТНЕРСКОЕ НАЧИСЛЕНИЕ ---
+    # Начисляем 500р, если это подписка и есть реферер
+    if is_subscription and user.referrer_id:
+        try:
+            partner = await db.get(Partner, user.referrer_id)
+            commission = 500
+            
+            if partner:
+                partner.balance = float(partner.balance) + commission
+                partner.total_earned = float(partner.total_earned) + commission
+                db.add(partner)
+                
+                # Уведомление агенту (пожарный и забыл)
+                try:
+                    await bot_service.send_message(
+                        partner.user_id, 
+                        f"💰 <b>Твой клиент оплатил!</b>\nНачислено: +{commission}₽\nКлиент: {user.first_name} (@{user.username})"
+                    )
+                except: pass
+            else:
+                # Если партнера нет в БД (редкий кейс), создаем
+                new_partner = Partner(
+                    user_id=user.referrer_id, 
+                    balance=commission,
+                    total_earned=commission
+                )
+                db.add(new_partner)
+                
+            logger.info(f"Partner commission {commission} RUB credited to agent {user.referrer_id}")
+        except Exception as comm_e:
+            logger.error(f"Failed to credit partner commission: {comm_e}")
+    # -----------------------------
     
     db.add(user)
     await db.commit()
