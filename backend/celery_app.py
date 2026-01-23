@@ -19,7 +19,9 @@ celery_app = Celery(
         'tasks.seo',           
         'tasks.finance',       
         'tasks.supply',        
-        'tasks.price_control', # Оставляем импорт файла, чтобы не ломался код
+        'tasks.price_control',
+        'tasks.slots_sniper',
+         # Оставляем импорт файла, чтобы не ломался код
     ] 
 )
 

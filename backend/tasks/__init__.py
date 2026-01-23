@@ -6,6 +6,7 @@ from .utils import get_status
 from .supply import sync_supply_data_task
 # Добавлен импорт новой задачи
 from .price_control import check_price_alerts
+from .slots_sniper import sniper_check_slots 
 
 __all__ = [
     "bidder_producer_task",
@@ -22,5 +23,6 @@ __all__ = [
     "check_new_orders",
     "get_status",
     "sync_supply_data_task",
-    "check_price_alerts" # <--- Добавлено в список экспорта
+    "check_price_alerts",
+    "sniper_check_slots", # <--- Добавлено в список экспорта
 ]
