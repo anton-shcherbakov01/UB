@@ -14,6 +14,22 @@ class SlotsService:
     """
     BASE_URL = "https://supplies-api.wildberries.ru/api/v1"
 
+    # ID популярных складов для fallback-запроса, если общий список пуст
+    POPULAR_WAREHOUSES = [
+        117901, # Коледино
+        120762, # Электросталь
+        117501, # Подольск
+        121709, # Казань
+        124731, # Тула
+        130744, # Краснодар
+        159402, # Санкт-Петербург (Уткина Заводь)
+        119276, # Екатеринбург
+        161404, # Новосибирск
+        173295, # Невинномысск
+        131615, # Астана
+        131613, # Минск
+    ]
+
     def __init__(self, token: str):
         self.token = token
         self.headers = {
@@ -24,15 +40,6 @@ class SlotsService:
     async def get_coefficients(self, warehouse_ids: Optional[List[int]] = None) -> List[Dict]:
         """
         Fetches acceptance coefficients.
-        Returns a list of dicts:
-        {
-            "date": "2023-10-25T00:00:00Z",
-            "coefficient": 0,
-            "warehouseID": 117901,
-            "warehouseName": "Коледино",
-            "boxTypeName": "Короба",
-            "boxTypeID": 1
-        }
         """
         url = f"{self.BASE_URL}/acceptance/coefficients"
         try:
@@ -46,6 +53,12 @@ class SlotsService:
                         return []
                     
                     data = await resp.json()
+                    
+                    # Если данных мало, попробуем запросить конкретные склады (иногда это помогает)
+                    if isinstance(data, list) and len(data) == 0 and not warehouse_ids:
+                         logger.info("Slots API returned empty list, trying specific warehouses...")
+                         return await self.get_coefficients(self.POPULAR_WAREHOUSES)
+
                     if not isinstance(data, list):
                         return []
                         

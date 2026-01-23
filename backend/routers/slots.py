@@ -2,14 +2,15 @@ import logging
 import json
 import io
 import asyncio
+from datetime import datetime
+from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import StreamingResponse
-from typing import List, Optional
 from pydantic import BaseModel, validator
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from sqlalchemy import select, delete, func # <--- ВАЖНО: добавлен func
 
 from dependencies import get_current_user, get_redis_client, get_db
 from database import User, SlotMonitor
@@ -18,23 +19,11 @@ from services.slots_service import SlotsService
 logger = logging.getLogger("SlotsRouter")
 router = APIRouter(prefix="/api/slots", tags=["Slots"])
 
+executor = ThreadPoolExecutor(max_workers=2)
+
 # =======================
-# 1. MODELS (Обязательно в начале!)
+# 1. MODELS
 # =======================
-
-class MonitorCreate(BaseModel):
-    warehouse_id: int
-    warehouse_name: str
-    target_coefficient: int = 0  # 0 (бесплатно) или 1
-    box_type: str = "all"
-
-# Эта модель вызывала ошибку, если стояла ниже
-class MonitorResponse(MonitorCreate):
-    id: int
-    is_active: bool
-
-    class Config:
-        orm_mode = True
 
 class SlotItem(BaseModel):
     date: str
@@ -51,6 +40,39 @@ class SlotItem(BaseModel):
         box_id = values.get("boxTypeID")
         return "Монопаллеты" if box_id == 2 else "Короба"
 
+# Модель для создания задачи (V1 - Legacy)
+class MonitorCreate(BaseModel):
+    warehouse_id: int
+    warehouse_name: str
+    target_coefficient: int = 0
+    box_type: str = "all"
+
+# Модель для создания умной задачи (V2 - Sniper)
+class MonitorCreateV2(BaseModel):
+    warehouse_id: int
+    warehouse_name: str
+    box_type_id: int = 1 # 1=Короба, 2=Паллеты
+    date_from: datetime
+    date_to: datetime
+    target_coefficient: int
+    auto_book: bool = False
+    preorder_id: Optional[int] = None
+
+# Модель ответа (обновленная структура БД)
+class MonitorResponse(BaseModel):
+    id: int
+    warehouse_id: int
+    warehouse_name: str
+    box_type_id: int = 1
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    target_coefficient: int = 0
+    auto_book: bool = False
+    is_active: bool
+    
+    class Config:
+        orm_mode = True
+
 # =======================
 # 2. ENDPOINTS
 # =======================
@@ -59,7 +81,8 @@ class SlotItem(BaseModel):
 async def get_slots(user: User = Depends(get_current_user), refresh: bool = False):
     """Получение коэффициентов (логика с кешем)"""
     if not user.wb_api_token:
-        raise HTTPException(status_code=400, detail="WB API Token required")
+        # Возвращаем пустой список, чтобы не ломать фронтенд ошибкой
+        return []
 
     r_client = get_redis_client()
     cache_key = f"slots:coeff:{user.id}"
@@ -85,26 +108,34 @@ async def get_slots(user: User = Depends(get_current_user), refresh: bool = Fals
 
     return data
 
-# --- Monitoring (Bot) Endpoints ---
+# --- Monitoring Endpoints ---
 
 @router.get("/monitors", response_model=List[MonitorResponse])
 async def get_monitors(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Список складов на отслеживании"""
+    """Список активных задач на отслеживание"""
     result = await db.execute(select(SlotMonitor).where(SlotMonitor.user_id == user.id))
     monitors = result.scalars().all()
-    return monitors
+    
+    # Небольшая обработка для старых записей, где новые поля могут быть NULL
+    cleaned_monitors = []
+    for m in monitors:
+        if m.box_type_id is None: m.box_type_id = 1
+        if m.target_coefficient is None: m.target_coefficient = 0
+        cleaned_monitors.append(m)
+        
+    return cleaned_monitors
 
 @router.post("/monitors", response_model=MonitorResponse)
-async def add_monitor(
+async def add_monitor_legacy(
     data: MonitorCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Добавить склад в отслеживание"""
-    # Проверка дублей
+    """Добавить склад в отслеживание (Legacy V1)"""
+    # Проверка дублей (упрощенная)
     existing = await db.execute(select(SlotMonitor).where(
         SlotMonitor.user_id == user.id,
         SlotMonitor.warehouse_id == data.warehouse_id
@@ -117,7 +148,10 @@ async def add_monitor(
         warehouse_id=data.warehouse_id,
         warehouse_name=data.warehouse_name,
         target_coefficient=data.target_coefficient,
-        box_type=data.box_type,
+        # Заполняем новые поля дефолтами для старого API
+        box_type_id=1, 
+        date_from=datetime.now(),
+        date_to=datetime.now(),
         is_active=True
     )
     db.add(monitor)
@@ -125,21 +159,60 @@ async def add_monitor(
     await db.refresh(monitor)
     return monitor
 
-@router.delete("/monitors/{warehouse_id}")
-async def delete_monitor(
-    warehouse_id: int,
+@router.post("/monitors/v2")
+async def create_monitor_v2(
+    data: MonitorCreateV2,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Удалить склад из отслеживания"""
+    """Создание задачи снайпера/монитора (V2)"""
+    
+    # 1. Проверка прав на авто-бронь
+    if data.auto_book:
+        if user.subscription_plan == 'start':
+            raise HTTPException(403, "Авто-бронирование доступно только на PRO тарифе")
+        if not data.preorder_id:
+            raise HTTPException(400, "Для авто-бронирования необходим ID поставки (preorder_id)")
+
+    # 2. Проверка лимитов на количество задач
+    count_stmt = select(func.count()).select_from(SlotMonitor).where(SlotMonitor.user_id == user.id)
+    current_count = (await db.execute(count_stmt)).scalar() or 0
+    
+    limit = 50 if user.subscription_plan != 'start' else 3
+    
+    if current_count >= limit:
+        raise HTTPException(403, f"Лимит задач исчерпан ({limit})")
+
+    # 3. Создание записи
+    monitor = SlotMonitor(
+        user_id=user.id,
+        warehouse_id=data.warehouse_id,
+        warehouse_name=data.warehouse_name,
+        box_type_id=data.box_type_id,
+        date_from=data.date_from,
+        date_to=data.date_to,
+        target_coefficient=data.target_coefficient,
+        auto_book=data.auto_book,
+        preorder_id=data.preorder_id,
+        is_active=True
+    )
+    db.add(monitor)
+    await db.commit()
+    return {"status": "ok", "message": "Снайпер запущен"}
+
+@router.delete("/monitors/{id}")
+async def delete_monitor(
+    id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Удалить задачу по ID"""
     await db.execute(delete(SlotMonitor).where(
         SlotMonitor.user_id == user.id, 
-        SlotMonitor.warehouse_id == warehouse_id
+        SlotMonitor.id == id
     ))
     await db.commit()
     return {"status": "deleted"}
-
-executor = ThreadPoolExecutor(max_workers=2)
 
 @router.get("/report/slots-pdf")
 async def generate_slots_pdf(user: User = Depends(get_current_user)):
@@ -179,52 +252,3 @@ async def generate_slots_pdf(user: User = Depends(get_current_user)):
         media_type='application/pdf',
         headers={'Content-Disposition': 'attachment; filename="slots_analysis.pdf"'}
     )
-
-class MonitorCreateV2(BaseModel):
-    warehouse_id: int
-    warehouse_name: str
-    box_type_id: int = 1 # 1=Короба, 2=Паллеты
-    date_from: datetime
-    date_to: datetime
-    target_coefficient: int
-    auto_book: bool = False
-    preorder_id: Optional[int] = None # ID плана поставки (число)
-
-@router.post("/monitors/v2")
-async def create_smart_monitor(
-    data: MonitorCreateV2,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # --- MONETIZATION CHECK ---
-    # Авто-бронирование только для Analyst и Strategist
-    if data.auto_book:
-        if user.subscription_plan == 'start':
-            raise HTTPException(403, "Авто-бронирование доступно на тарифе Analyst и выше")
-            
-    # Проверка лимитов на количество задач
-    current_count = (await db.execute(select(func.count()).select_from(SlotMonitor).where(SlotMonitor.user_id == user.id))).scalar()
-    
-    limit = 50 # Базовый лимит
-    if user.subscription_plan == 'start': limit = 3
-    
-    if current_count >= limit:
-        raise HTTPException(403, f"Лимит мониторов исчерпан ({limit})")
-
-    # Создание записи
-    monitor = SlotMonitor(
-        user_id=user.id,
-        warehouse_id=data.warehouse_id,
-        warehouse_name=data.warehouse_name,
-        box_type_id=data.box_type_id,
-        date_from=data.date_from,
-        date_to=data.date_to,
-        target_coefficient=data.target_coefficient,
-        auto_book=data.auto_book,
-        preorder_id=data.preorder_id,
-        is_active=True
-    )
-    db.add(monitor)
-    await db.commit()
-    
-    return {"status": "ok", "message": "Снайпер запущен"}
