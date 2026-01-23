@@ -291,12 +291,13 @@ const SlotsPage = ({ user, onNavigate }) => {
             const matchSearch = item.warehouseName?.toLowerCase().includes(search.toLowerCase());
             const matchFree = onlyFree ? item.coefficient === 0 : true;
             
-            const typeName = item.boxTypeName?.toLowerCase() || "короба";
-            const isPallet = item.boxTypeID === 2 || typeName.includes('моно');
+            // Определение типа по ID (1-Короба, 2-Паллеты)
+            // Важно: проверяем именно по boxTypeID, а не по названию
+            const isPallet = item.boxTypeID === 2;
             
             let matchType = true;
             if (boxType === 'pallet') matchType = isPallet;
-            if (boxType === 'box') matchType = !isPallet;
+            if (boxType === 'box') matchType = !isPallet; // Не паллеты (значит короба)
 
             return matchSearch && matchFree && matchType;
         });
@@ -380,6 +381,7 @@ const SlotsPage = ({ user, onNavigate }) => {
 
             {/* HEADER */}
             <div className="flex justify-between items-stretch h-24 mb-6">
+                 {/* Main Header Card */}
                  <div className={`bg-gradient-to-br ${headerGradient} p-5 rounded-[28px] text-white shadow-xl ${headerShadow} relative overflow-hidden flex-1 mr-3 flex items-center justify-between transition-colors duration-500`}>
                     <div className="relative z-10">
                         <h1 className="text-lg md:text-xl font-black flex items-center gap-2">
@@ -403,10 +405,12 @@ const SlotsPage = ({ user, onNavigate }) => {
                     <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
                  </div>
                  
+                 {/* Right Sidebar Buttons */}
                  <div className="flex flex-col gap-2 w-14 shrink-0">
                      <button 
                         onClick={() => onNavigate('home')} 
                         className="bg-white h-full rounded-2xl shadow-sm text-slate-400 hover:text-indigo-600 transition-colors flex items-center justify-center active:scale-95 border border-slate-100"
+                        title="Назад"
                       >
                           <ArrowLeft size={24}/>
                       </button>
@@ -501,8 +505,9 @@ const SlotsPage = ({ user, onNavigate }) => {
                                             {wh.isSortingCenter && <span className="bg-slate-200 text-slate-600 text-[9px] px-1.5 py-0.5 rounded font-black">СЦ</span>}
                                         </div>
                                     </div>
-                                    <div className="text-[10px] text-slate-400 font-medium">
-                                        {wh.slots[0]?.boxTypeName || 'Короба'}
+                                    {/* ИСПРАВЛЕНО: Теперь плашка жестко зависит от фильтра */}
+                                    <div className="text-[10px] text-slate-400 font-medium bg-white px-2 py-0.5 rounded border border-slate-100">
+                                        {boxType === 'pallet' ? 'Паллеты' : boxType === 'box' ? 'Короба' : (wh.slots[0]?.boxTypeID === 2 ? 'Паллеты' : 'Короба')}
                                     </div>
                                 </div>
                                 <div className="p-3">

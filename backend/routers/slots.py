@@ -165,32 +165,31 @@ async def create_monitor_v2(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Создание задачи снайпера/монитора (V2)"""
-    
-    # 1. Проверка прав на авто-бронь
+    # Проверка прав на авто-бронь
     if data.auto_book:
         if user.subscription_plan == 'start':
-            raise HTTPException(403, "Авто-бронирование доступно только на PRO тарифе")
+            raise HTTPException(403, "Авто-бронирование доступно только на PRO тарифе и выше")
         if not data.preorder_id:
             raise HTTPException(400, "Для авто-бронирования необходим ID поставки (preorder_id)")
 
-    # 2. Проверка лимитов на количество задач
-    count_stmt = select(func.count()).select_from(SlotMonitor).where(SlotMonitor.user_id == user.id)
-    current_count = (await db.execute(count_stmt)).scalar() or 0
-    
+    # Проверка лимитов
+    current_count = (await db.execute(select(func.count()).select_from(SlotMonitor).where(SlotMonitor.user_id == user.id))).scalar()
     limit = 50 if user.subscription_plan != 'start' else 3
     
     if current_count >= limit:
-        raise HTTPException(403, f"Лимит задач исчерпан ({limit})")
+        raise HTTPException(403, f"Лимит мониторов исчерпан ({limit})")
 
-    # 3. Создание записи
+    # --- FIX: Убираем временную зону из дат для совместимости с PostgreSQL ---
+    clean_date_from = data.date_from.replace(tzinfo=None)
+    clean_date_to = data.date_to.replace(tzinfo=None)
+
     monitor = SlotMonitor(
         user_id=user.id,
         warehouse_id=data.warehouse_id,
         warehouse_name=data.warehouse_name,
         box_type_id=data.box_type_id,
-        date_from=data.date_from,
-        date_to=data.date_to,
+        date_from=clean_date_from, # Используем очищенную дату
+        date_to=clean_date_to,     # Используем очищенную дату
         target_coefficient=data.target_coefficient,
         auto_book=data.auto_book,
         preorder_id=data.preorder_id,
