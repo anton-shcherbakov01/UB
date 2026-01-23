@@ -107,7 +107,12 @@ celery_app.conf.update(
         "train-forecasts-daily": {
             "task": "train_forecasting_models",
             "schedule": crontab(hour=3, minute=30),
-        }
+        },
+
+        "slots-sniper-minutely": {
+            "task": "sniper_check_slots",
+            "schedule": crontab(minute="*"), # Каждую минуту
+        },
     }
 )
 

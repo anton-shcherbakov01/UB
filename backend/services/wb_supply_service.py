@@ -57,3 +57,53 @@ class WBSupplyService:
             return []
 
 # Singleton factory is not needed here as we need per-user token
+
+class WBSupplyBookingService(WBSupplyService):
+    """
+    Расширенный сервис для работы с API Поставок (v1/planning).
+    Позволяет бронировать слоты.
+    """
+    
+    async def get_coefficients_v2(self, warehouse_ids: List[int]):
+        """Получение коэффициентов для конкретных складов (оптимизация)"""
+        url = f"{self.BASE_URL}/acceptance/coefficients"
+        # API может принимать список в query params
+        params = {"warehouseIDs": ",".join(map(str, warehouse_ids))}
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=self.headers, params=params, timeout=10) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+            except Exception as e:
+                logger.error(f"Error fetching coeffs v2: {e}")
+        return []
+
+    async def book_slot(self, pre_order_id: int, date_str: str, coefficient: int, warehouse_id: int):
+        """
+        Попытка забронировать слот для созданного плана (pre_order_id).
+        date_str format: '2024-01-25T00:00:00Z'
+        """
+        # Эндпоинт для постановки плана в таймслот
+        url = f"{self.BASE_URL}/planning/{pre_order_id}/slots"
+        
+        payload = {
+            "warehouseId": warehouse_id,
+            "date": date_str,
+            "coefficient": coefficient
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                # Обычно это PUT или POST запрос (зависит от версии API WB, сейчас чаще PUT)
+                async with session.put(url, headers=self.headers, json=payload) as resp:
+                    if resp.status in [200, 204]:
+                        logger.info(f"✅ Slot booked! Plan {pre_order_id} -> {date_str} (x{coefficient})")
+                        return True
+                    
+                    text = await resp.text()
+                    logger.error(f"❌ Booking failed for {pre_order_id}: {resp.status} - {text}")
+                    return False
+            except Exception as e:
+                logger.error(f"Booking exception: {e}")
+                return False

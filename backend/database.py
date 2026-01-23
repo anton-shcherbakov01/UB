@@ -147,12 +147,27 @@ class SlotMonitor(Base):
     __tablename__ = "slot_monitors"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    
+    # Параметры поиска
     warehouse_id = Column(Integer)
     warehouse_name = Column(String)
-    target_coefficient = Column(Integer, default=0)
-    box_type = Column(String, default="all")
+    box_type_id = Column(Integer, default=1) # 1=Короба, 2=Монопаллеты, 3=Суперсейф
+    
+    # Диапазон дат для поиска
+    date_from = Column(DateTime)
+    date_to = Column(DateTime)
+    
+    # Условия
+    target_coefficient = Column(Integer, default=0) # Макс. кэф (0-20)
+    
+    # АВТО-БРОНИРОВАНИЕ (Sniper)
+    auto_book = Column(Boolean, default=False)
+    preorder_id = Column(BigInteger, nullable=True) # ID "Планирования" из WB (нужен для вставки слота)
+    
+    # Статус
     is_active = Column(Boolean, default=True)
     last_notified_at = Column(DateTime, nullable=True)
+    
     user = relationship("User", back_populates="slot_monitors")
 
 class SupplySettings(Base):

@@ -9,6 +9,7 @@ from pydantic import BaseModel, validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from dependencies import get_current_user, get_redis_client, get_db
 from database import User, SlotMonitor
@@ -178,3 +179,52 @@ async def generate_slots_pdf(user: User = Depends(get_current_user)):
         media_type='application/pdf',
         headers={'Content-Disposition': 'attachment; filename="slots_analysis.pdf"'}
     )
+
+class MonitorCreateV2(BaseModel):
+    warehouse_id: int
+    warehouse_name: str
+    box_type_id: int = 1 # 1=Короба, 2=Паллеты
+    date_from: datetime
+    date_to: datetime
+    target_coefficient: int
+    auto_book: bool = False
+    preorder_id: Optional[int] = None # ID плана поставки (число)
+
+@router.post("/monitors/v2")
+async def create_smart_monitor(
+    data: MonitorCreateV2,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # --- MONETIZATION CHECK ---
+    # Авто-бронирование только для Analyst и Strategist
+    if data.auto_book:
+        if user.subscription_plan == 'start':
+            raise HTTPException(403, "Авто-бронирование доступно на тарифе Analyst и выше")
+            
+    # Проверка лимитов на количество задач
+    current_count = (await db.execute(select(func.count()).select_from(SlotMonitor).where(SlotMonitor.user_id == user.id))).scalar()
+    
+    limit = 50 # Базовый лимит
+    if user.subscription_plan == 'start': limit = 3
+    
+    if current_count >= limit:
+        raise HTTPException(403, f"Лимит мониторов исчерпан ({limit})")
+
+    # Создание записи
+    monitor = SlotMonitor(
+        user_id=user.id,
+        warehouse_id=data.warehouse_id,
+        warehouse_name=data.warehouse_name,
+        box_type_id=data.box_type_id,
+        date_from=data.date_from,
+        date_to=data.date_to,
+        target_coefficient=data.target_coefficient,
+        auto_book=data.auto_book,
+        preorder_id=data.preorder_id,
+        is_active=True
+    )
+    db.add(monitor)
+    await db.commit()
+    
+    return {"status": "ok", "message": "Снайпер запущен"}
