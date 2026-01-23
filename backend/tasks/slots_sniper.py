@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from datetime import datetime
-from sqlalchemy import select
 from celery import shared_task
 
 from database import SyncSessionLocal, SlotMonitor, User
@@ -36,8 +35,10 @@ def sniper_check_slots():
         # 3. Запуск асинхронного цикла проверки
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(process_users_slots(user_tasks, session))
-        loop.close()
+        try:
+            loop.run_until_complete(process_users_slots(user_tasks, session))
+        finally:
+            loop.close()
         
     except Exception as e:
         logger.error(f"Sniper critical error: {e}")
@@ -46,20 +47,24 @@ def sniper_check_slots():
 
 async def process_users_slots(user_tasks, session):
     for user_id, monitors in user_tasks.items():
+        # Берем первого попавшегося монитора, чтобы достать юзера и токен
+        if not monitors: continue
         user = monitors[0].user
+        
+        # Инициализируем сервис с токеном юзера
         service = WBSupplyBookingService(user.wb_api_token)
         
-        # Собираем ID складов для оптимизации запроса
+        # Собираем ID складов для оптимизации запроса (только уникальные)
         wh_ids = list(set([m.warehouse_id for m in monitors]))
         
         try:
-            # Получаем слоты для всех интересующих складов
+            # Получаем слоты для всех интересующих складов одним запросом
             slots_data = await service.get_coefficients_v2(wh_ids)
             if not slots_data: continue
             
-            # Проверяем каждый монитор
+            # Проверяем каждый монитор этого пользователя
             for monitor in monitors:
-                # Фильтр по ID склада и Типу короба
+                # Фильтр по ID склада и Типу короба (в API WB они должны совпадать)
                 relevant_slots = [
                     s for s in slots_data 
                     if s.get('warehouseID') == monitor.warehouse_id 
@@ -67,25 +72,33 @@ async def process_users_slots(user_tasks, session):
                 ]
                 
                 for slot in relevant_slots:
-                    slot_date_str = slot.get('date') # '2024-01-25T00:00:00Z'
+                    slot_date_str = slot.get('date') # Пример: '2024-01-25T00:00:00Z'
                     coeff = slot.get('coefficient')
                     
                     try:
-                        slot_date = datetime.strptime(slot_date_str, "%Y-%m-%dT%H:%M:%SZ")
+                        # Парсим дату (обрезаем Z если есть, для простоты)
+                        clean_date_str = slot_date_str.replace('Z', '')
+                        slot_date = datetime.fromisoformat(clean_date_str)
                     except:
-                        continue # Ошибка парсинга даты
+                        continue # Ошибка парсинга даты, пропускаем
                     
                     # --- ПРОВЕРКА УСЛОВИЙ ---
-                    # 1. Дата входит в диапазон?
-                    if not (monitor.date_from <= slot_date <= monitor.date_to):
+                    
+                    # 1. Дата входит в диапазон? (сравниваем date(), чтобы игнорировать время)
+                    monitor_from = monitor.date_from.date() if monitor.date_from else datetime.min.date()
+                    monitor_to = monitor.date_to.date() if monitor.date_to else datetime.max.date()
+                    current_date = slot_date.date()
+                    
+                    if not (monitor_from <= current_date <= monitor_to):
                         continue
                         
                     # 2. Коэффициент подходит? (меньше или равен целевому, и не закрыт -1)
+                    # Если кэф -1 (приемка закрыта), то это нам не подходит
                     if coeff == -1 or coeff > monitor.target_coefficient:
                         continue
                         
                     # --- ДЕЙСТВИЕ ---
-                    clean_date = slot_date.strftime("%d.%m.%Y")
+                    display_date = slot_date.strftime("%d.%m.%Y")
                     
                     # A. АВТО-БРОНИРОВАНИЕ
                     if monitor.auto_book and monitor.preorder_id:
@@ -100,7 +113,7 @@ async def process_users_slots(user_tasks, session):
                             msg = (
                                 f"✅ <b>СЛОТ ЗАБРОНИРОВАН!</b>\n"
                                 f"📦 Склад: {monitor.warehouse_name}\n"
-                                f"📅 Дата: {clean_date}\n"
+                                f"📅 Дата: {display_date}\n"
                                 f"💰 Кэф: <b>x{coeff}</b>\n"
                                 f"🆔 Поставка: {monitor.preorder_id}"
                             )
@@ -108,8 +121,9 @@ async def process_users_slots(user_tasks, session):
                             
                             # Отключаем монитор, задача выполнена
                             monitor.is_active = False
+                            # ВНИМАНИЕ: session.add - синхронный метод, await не нужен!
                             session.add(monitor)
-                            break # Выходим из цикла слотов для этого монитора
+                            break # Выходим из цикла слотов для этого монитора (поймали!)
                     
                     # B. УВЕДОМЛЕНИЕ (если не авто-бронь или если авто-бронь не сработала/не настроена)
                     else:
@@ -119,16 +133,18 @@ async def process_users_slots(user_tasks, session):
                             msg = (
                                 f"🔔 <b>НАЙДЕН СЛОТ!</b>\n"
                                 f"📦 Склад: {monitor.warehouse_name}\n"
-                                f"📅 Дата: {clean_date}\n"
+                                f"📅 Дата: {display_date}\n"
                                 f"💰 Кэф: <b>x{coeff}</b>\n"
                                 f"<i>Зайдите на портал, чтобы забронировать!</i>"
                             )
                             await bot_service.send_message(user.telegram_id, msg)
                             
                             monitor.last_notified_at = datetime.utcnow()
+                            # ВНИМАНИЕ: session.add - синхронный метод, await не нужен!
                             session.add(monitor)
                             
         except Exception as e:
             logger.error(f"Error processing user {user_id}: {e}")
     
-    await session.commit() # Сохраняем изменения статусов
+    # ВНИМАНИЕ: session.commit - синхронный метод, await не нужен!
+    session.commit()
