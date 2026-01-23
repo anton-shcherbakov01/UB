@@ -26,7 +26,6 @@ def wait_for_db(retries=30, delay=2):
     return False
 
 def migrate():
-    # Читаем флаг из environment. По умолчанию True, но в docker-compose для воркеров ставим False
     run_migrations = os.getenv("RUN_MIGRATIONS", "true").lower() == "true"
     
     logger.info(f"🚀 Старт проверки БД (Режим мигратора: {run_migrations})...")
@@ -39,7 +38,7 @@ def migrate():
         logger.info("✋ Я воркер, миграции не запускаю. Просто жду БД. Готов к работе.")
         return
 
-    # Только API (или тот, у кого RUN_MIGRATIONS=true) создает таблицы
+    # 1. Создание новых таблиц
     try:
         logger.info("🛠 Создание/проверка таблиц...")
         Base.metadata.create_all(bind=engine_sync)
@@ -48,18 +47,35 @@ def migrate():
         logger.error(f"❌ Ошибка создания таблиц: {e}")
         return
 
-    # Альтеры для существующих таблиц (защищенные try-except)
+    # 2. Миграция колонок (ALTER TABLE)
+    # Это добавит недостающие колонки в существующие таблицы
     try:
         with engine_sync.connect() as conn:
             trans = conn.begin()
             try:
+                # --- Users ---
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS wb_api_token VARCHAR"))
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_order_check TIMESTAMP WITHOUT TIME ZONE"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS referrer_id BIGINT"))
+                
+                # --- Slot Monitors (ВАЖНОЕ ИСПРАВЛЕНИЕ) ---
+                logger.info("📦 Обновление таблицы slot_monitors...")
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS box_type_id INTEGER DEFAULT 1"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS date_from TIMESTAMP WITHOUT TIME ZONE"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS date_to TIMESTAMP WITHOUT TIME ZONE"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS target_coefficient INTEGER DEFAULT 0"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS auto_book BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS preorder_id BIGINT"))
+                conn.execute(text("ALTER TABLE slot_monitors ADD COLUMN IF NOT EXISTS supply_id VARCHAR"))
+                
+                # Удаляем старую колонку box_type, если она мешает (опционально, но лучше оставить для совместимости или удалить позже)
+                # conn.execute(text("ALTER TABLE slot_monitors DROP COLUMN IF EXISTS box_type"))
+
                 trans.commit()
-                logger.info("✅ Альтеры колонок применены.")
-            except Exception:
+                logger.info("✅ Альтеры колонок успешно применены.")
+            except Exception as e:
                 trans.rollback()
-                # Игнорируем ошибки "already exists" молча, чтобы не пугать в логах
+                logger.error(f"⚠️ Ошибка при обновлении колонок (возможно, они уже есть): {e}")
                 pass
     except Exception as e:
          logger.error(f"❌ Ошибка подключения для альтеров: {e}")
