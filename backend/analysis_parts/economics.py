@@ -108,6 +108,7 @@ class EconomicsModule:
     async def get_pnl_data(self, user_id: int, date_from: datetime, date_to: datetime, db: AsyncSession) -> List[Dict[str, Any]]:
         """
         Оптимизированный расчет P&L. Агрегация происходит на стороне ClickHouse.
+        ДОБАВЛЕН РАСЧЕТ НАЛОГА 6%.
         """
         logger.info(f"📊 [PnL] Формирование финансового отчета для user={user_id}")
 
@@ -127,27 +128,14 @@ class EconomicsModule:
         SELECT 
             toDate(sale_dt) as report_date,
             nm_id,
-            
-            -- Выручка (Продажи минус возвраты по цене ритейла)
             sumIf(retail_price_withdisc_rub, doc_type_name = 'Продажа') - sumIf(retail_price_withdisc_rub, doc_type_name = 'Возврат') as gross_sales,
-            
-            -- К перечислению (уже очищено от комиссии WB)
             sum(ppvz_for_pay) as net_sales,
-            
-            -- Комиссия (расчетная)
             sum(ppvz_sales_commission) as wb_commission,
-            
-            -- Логистика
             sum(delivery_rub) as logistics,
-            
-            -- Штрафы и доплаты
             sum(penalty) as penalties,
             sum(additional_payment) as adjustments,
-            
-            -- Количество для расчета себестоимости
             sumIf(quantity, doc_type_name = 'Продажа') as qty_sold,
             sumIf(quantity, doc_type_name = 'Возврат') as qty_returned
-
         FROM wb_analytics.realization_reports FINAL
         WHERE supplier_id = {uid:UInt64} 
           AND sale_dt >= {start:DateTime} 
@@ -185,13 +173,13 @@ class EconomicsModule:
         except Exception as e:
             logger.error(f"Error fetching product costs: {e}")
 
-        # 3. Финальная агрегация по дням в Python (быстрая, т.к. строк мало)
+        # 3. Финальная агрегация по дням в Python
         daily_pnl = {}
         
         for row in rows:
             r_date, sku, gross, net_pay, commission, logistics, penalties, adjustments, q_sold, q_ret = row
             
-            # Приведение типов (на всякий случай, хотя CH драйвер обычно возвращает корректные)
+            # Приведение типов
             gross = float(gross or 0)
             net_pay = float(net_pay or 0)
             commission = float(commission or 0)
@@ -202,9 +190,12 @@ class EconomicsModule:
             q_ret = int(q_ret or 0)
 
             # Расчет себестоимости проданных товаров (COGS)
-            # COGS = (Продано - Возвращено) * Себестоимость единицы
             unit_cost = costs_map.get(sku, 0)
             total_cogs = (q_sold - q_ret) * unit_cost
+            
+            # --- FIX: РАСЧЕТ НАЛОГА (6% от ВЫРУЧКИ) ---
+            # Налог платится с "Выручки" (Gross Sales), а не с того, что пришло на счет!
+            tax = (gross * 0.06) if gross > 0 else 0
 
             date_str = r_date.strftime("%Y-%m-%d")
             
@@ -218,7 +209,8 @@ class EconomicsModule:
                     "logistics": 0.0,
                     "penalties": 0.0,
                     "adjustments": 0.0,
-                    "cm3": 0.0 # Чистая прибыль
+                    "tax": 0.0, # Новый параметр
+                    "cm3": 0.0 
                 }
             
             d = daily_pnl[date_str]
@@ -229,16 +221,17 @@ class EconomicsModule:
             d["penalties"] += penalties
             d["adjustments"] += adjustments
             d["cogs"] += total_cogs
+            d["tax"] += tax
         
         # 4. Формирование итогового списка
         final_output = []
         for date_str, m in sorted(daily_pnl.items()):
-            # Итоговая прибыль (CM3) = К перечислению + Доплаты - Логистика - Штрафы - Себестоимость
-            # Примечание: net_sales (ppvz_for_pay) уже очищен от комиссии WB
-            m["cm3"] = (m["net_sales"] + m["adjustments"]) - m["logistics"] - m["penalties"] - m["cogs"]
+            # Чистая прибыль (Net Profit)
+            # = (К перечислению + Доплаты) - Логистика - Штрафы - Себестоимость - Налог
+            m["cm3"] = (m["net_sales"] + m["adjustments"]) - m["logistics"] - m["penalties"] - m["cogs"] - m["tax"]
             
             # Округляем для красоты
-            for k in ["gross_sales", "net_sales", "cogs", "commission", "logistics", "penalties", "adjustments", "cm3"]:
+            for k in ["gross_sales", "net_sales", "cogs", "commission", "logistics", "penalties", "adjustments", "tax", "cm3"]:
                 m[k] = round(m[k], 2)
             
             final_output.append(m)

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException
 
+# Попытка импорта базового класса
 try:
     from .base import WBApiBase
 except ImportError:
@@ -60,7 +61,6 @@ class WBStatisticsMixin(WBApiBase):
             tasks = {
                 "content": self._probe(session, "GET", f"{self.URLS['content']}/content/v2/cards/limits", headers),
                 "marketplace": self._probe(session, "GET", f"{self.URLS['marketplace']}/api/v3/warehouses", headers),
-                # Обновлено на v3 согласно документу
                 "analytics": self._probe(session, "POST", f"{self.URLS['analytics']}/api/analytics/v3/sales-funnel/products", headers, json_data=analytics_payload),
                 "advert": self._probe(session, "GET", f"{self.URLS['advert']}/adv/v1/promotion/count", headers),
                 "feedbacks": self._probe(session, "GET", f"{self.URLS['feedbacks']}/api/v1/questions/count", headers, params={"isAnswered": "false"}),
@@ -89,7 +89,7 @@ class WBStatisticsMixin(WBApiBase):
             "promotion": promotion_scope,
             "returns": raw_res.get("marketplace", False),
             "documents": raw_res.get("content", False),
-            "statistics": analytics_access, # Если работает аналитика v3, то и статистика скорее всего
+            "statistics": analytics_access, 
             "finance": analytics_access,
             "supplies": raw_res.get("marketplace", False) or raw_res.get("content", False),
             "chat": raw_res.get("feedbacks", False),
@@ -141,15 +141,19 @@ class WBStatisticsMixin(WBApiBase):
                 return "read_only"
 
     async def get_dashboard_stats(self, token: str):
-        """Сводка: Заказы сегодня и остатки"""
+        """Сводка с жестким фильтром 'Сегодня'"""
         if not token: 
             return {"orders_today": {"sum": 0, "count": 0}, "stocks": {"total_quantity": 0}}
 
         async with aiohttp.ClientSession() as session:
-            today_str = datetime.now().strftime("%Y-%m-%dT00:00:00")
+            # Берем начало текущего дня строго 00:00:00
+            now = datetime.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S")
             
+            # use_cache=True допустимо для дашборда
             orders_res = await self._get_orders_mixin(session, token, today_str, use_cache=True)
-            await asyncio.sleep(0.5) 
+            await asyncio.sleep(0.3) 
             stocks_res = await self._get_stocks_mixin(session, token, today_str, use_cache=True)
             
             return {
@@ -158,9 +162,11 @@ class WBStatisticsMixin(WBApiBase):
             }
 
     async def get_new_orders_since(self, token: str, last_check: datetime):
+        """Получение новых заказов с защитой от дублей и нулей"""
         if not last_check:
             last_check = datetime.now() - timedelta(hours=1)
         
+        # Берем с запасом, фильтруем в коде
         date_from_str = (last_check - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         
         async with aiohttp.ClientSession() as session:
@@ -172,24 +178,45 @@ class WBStatisticsMixin(WBApiBase):
             new_orders = []
             for order in orders_data["items"]:
                 try:
-                    order_date = datetime.strptime(order["date"][:19], "%Y-%m-%dT%H:%M:%S")
+                    # Дата в WB формате может быть с Z или без
+                    d_str = order["date"][:19]
+                    order_date = datetime.strptime(d_str, "%Y-%m-%dT%H:%M:%S")
+                    
                     last_check_normalized = last_check.replace(tzinfo=None) if last_check.tzinfo else last_check
+                    
+                    # Проверяем что заказ свежий
                     if order_date > last_check_normalized:
+                        # FIX ЦЕНЫ: Если priceWithDiscount пришел 0, считаем сами
+                        if order.get('priceWithDiscount', 0) == 0:
+                            total = order.get('totalPrice', 0)
+                            disc = order.get('discountPercent', 0)
+                            order['priceWithDiscount'] = int(total * (1 - disc/100))
+                        
                         new_orders.append(order)
-                except: continue
+                except Exception as e:
+                    continue
                 
             return new_orders
-    
-    # --- НОВЫЕ МЕТОДЫ ДЛЯ МОНИТОРИНГА ---
 
     async def get_sales_since(self, token: str, date_from: str) -> List[Dict]:
-        """Получение выкупов (продаж) через миксин (Использует старый API)"""
+        """Получение выкупов (продаж) с исправлением цен"""
         url = f"{self.URLS['statistics']}/api/v1/supplier/sales"
         params = {"dateFrom": date_from, "flag": 0}
         headers = {"Authorization": token}
         
         data = await self._request_with_retry(None, url, headers, params=params)
-        return data if isinstance(data, list) else []
+        
+        result = []
+        if isinstance(data, list):
+            for sale in data:
+                # FIX: Если цена 0, пересчитываем
+                if sale.get('priceWithDiscount', 0) == 0:
+                    total = sale.get('totalPrice', 0)
+                    disc = sale.get('discountPercent', 0)
+                    sale['priceWithDiscount'] = int(total * (1 - disc/100))
+                result.append(sale)
+                
+        return result
 
     async def get_sales_funnel_full(self, token: str, date_from: str, date_to: str, nm_ids: List[int] = None) -> Dict[str, Any]:
         """
@@ -307,41 +334,39 @@ class WBStatisticsMixin(WBApiBase):
 
     async def get_statistics_today(self, token: str) -> Dict[str, Any]:
         """
-        Сводная статистика за сегодня.
+        Сводная статистика за сегодня (ИСПРАВЛЕННАЯ).
         """
         today_date = datetime.now()
-        today_str_v1 = today_date.strftime("%Y-%m-%dT00:00:00")
+        # Для V1 API (Заказы/Продажи) нужно точное время начала дня
+        today_start = today_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_str_v1 = today_start.strftime("%Y-%m-%dT%H:%M:%S")
         
-        # Для v3 нужно YYYY-MM-DD
-        funnel_start = today_date.strftime("%Y-%m-%d")
-        funnel_end = today_date.strftime("%Y-%m-%d")
+        # Для V3 API (Воронка) нужна дата YYYY-MM-DD
+        funnel_date = today_date.strftime("%Y-%m-%d")
         
         try:
             async with aiohttp.ClientSession() as session:
-                # 1. Запрашиваем V1 (Финансы) - Быстро
-                orders_res = await self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
-                await asyncio.sleep(0.5) 
-                sales_res = await self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
+                # 1. Заказы и Продажи (V1)
+                # use_cache=False чтобы получать актуальные данные при каждом запросе бота
+                orders_task = self._get_orders_mixin(session, token, today_str_v1, use_cache=False)
+                sales_task = self._get_sales_mixin(session, token, today_str_v1, use_cache=False)
                 
-                # 2. Запрашиваем V3 (Воронка)
-                # Используем метод класса, а не self, чтобы передать правильный токен
-                funnel_res = await self.get_sales_funnel_full(token, funnel_start, funnel_end)
+                # 2. Воронка (V3)
+                funnel_task = self.get_sales_funnel_full(token, funnel_date, funnel_date)
                 
-                # Обработка результатов (V1)
-                orders_sum = 0
-                orders_count = 0
-                sales_sum = 0
-                sales_count = 0
+                results = await asyncio.gather(orders_task, sales_task, funnel_task, return_exceptions=True)
                 
-                if isinstance(orders_res, dict):
-                    orders_sum = orders_res.get("sum", 0)
-                    orders_count = orders_res.get("count", 0)
+                orders_res = results[0] if not isinstance(results[0], Exception) else {}
+                sales_res = results[1] if not isinstance(results[1], Exception) else {}
+                funnel_res = results[2] if not isinstance(results[2], Exception) else {}
 
-                if isinstance(sales_res, dict):
-                    sales_sum = sales_res.get("sum", 0)
-                    sales_count = sales_res.get("count", 0)
-
-                # Обработка результатов (V3)
+                # Извлекаем данные с защитой от None
+                orders_sum = orders_res.get("sum", 0) if isinstance(orders_res, dict) else 0
+                orders_count = orders_res.get("count", 0) if isinstance(orders_res, dict) else 0
+                
+                sales_sum = sales_res.get("sum", 0) if isinstance(sales_res, dict) else 0
+                sales_count = sales_res.get("count", 0) if isinstance(sales_res, dict) else 0
+                
                 visitors = 0
                 addToCart = 0
                 if isinstance(funnel_res, dict):
@@ -358,7 +383,7 @@ class WBStatisticsMixin(WBApiBase):
             }
 
         except Exception as e:
-            logger.error(f"Error getting statistics today hybrid: {e}", exc_info=True)
+            logger.error(f"Error getting statistics today: {e}", exc_info=True)
             return {
                 "orders_sum": 0, "orders_count": 0,
                 "sales_sum": 0, "sales_count": 0,
@@ -450,10 +475,11 @@ class WBStatisticsMixin(WBApiBase):
                 continue
         return tariffs
 
-    # --- Internal Helpers for Mixin ---
+    # --- ИСПРАВЛЕННЫЕ MIXIN МЕТОДЫ (С ФИКСОМ ЦЕНЫ И ДАТ) ---
+
     async def _get_orders_mixin(self, session, token: str, date_from: str, use_cache=True):
         url = "https://statistics-api.wildberries.ru/api/v1/supplier/orders"
-        params = {"dateFrom": date_from}
+        params = {"dateFrom": date_from, "flag": 0} 
         headers = {"Authorization": token}
         
         if hasattr(self, '_get_cached_or_request'):
@@ -469,8 +495,35 @@ class WBStatisticsMixin(WBApiBase):
             return {"count": 0, "sum": 0, "items": []}
         
         if isinstance(data, list):
-            valid_orders = [x for x in data if not x.get("isCancel")]
-            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_orders)
+            valid_orders = []
+            total_sum = 0.0
+            
+            # Фильтруем заказы именно по дате
+            try:
+                check_date = datetime.strptime(date_from[:10], "%Y-%m-%d").date()
+            except:
+                check_date = datetime.now().date()
+            
+            for x in data:
+                if x.get("isCancel"): continue
+                
+                # Проверка даты
+                try:
+                    order_dt = datetime.strptime(x["date"][:10], "%Y-%m-%d").date()
+                    if order_dt < check_date: continue
+                except: pass
+
+                # --- FIX: РАСЧЕТ ЦЕНЫ ---
+                price = x.get("priceWithDiscount", 0)
+                if price == 0:
+                    base = x.get("totalPrice", 0)
+                    disc = x.get("discountPercent", 0)
+                    price = int(base * (1 - disc/100))
+                
+                total_sum += price
+                x["priceWithDiscount"] = price # Update inplace just in case
+                valid_orders.append(x)
+                
             return {"count": len(valid_orders), "sum": int(total_sum), "items": valid_orders}
         return {"count": 0, "sum": 0, "items": []}
 
@@ -493,33 +546,39 @@ class WBStatisticsMixin(WBApiBase):
             return {"count": 0, "sum": 0, "items": []}
         
         if isinstance(data, list):
-            valid_sales = [x for x in data if not x.get("isStorno")]
-            total_sum = sum(item.get("priceWithDiscount", 0) for item in valid_sales)
+            valid_sales = []
+            total_sum = 0.0
+            
+            try:
+                check_date = datetime.strptime(date_from[:10], "%Y-%m-%d").date()
+            except:
+                check_date = datetime.now().date()
+
+            for x in data:
+                if x.get("isStorno"): continue
+                if str(x.get("saleID", "")).startswith("R"): continue
+                
+                try:
+                    sale_dt = datetime.strptime(x["date"][:10], "%Y-%m-%d").date()
+                    if sale_dt < check_date: continue
+                except: pass
+
+                # --- FIX: РАСЧЕТ ЦЕНЫ ---
+                price = x.get("priceWithDiscount", 0)
+                if price == 0:
+                    base = x.get("totalPrice", 0)
+                    disc = x.get("discountPercent", 0)
+                    price = int(base * (1 - disc/100))
+                
+                total_sum += price
+                x["priceWithDiscount"] = price
+                valid_sales.append(x)
+
             return {"count": len(valid_sales), "sum": int(total_sum), "items": valid_sales}
         return {"count": 0, "sum": 0, "items": []}
 
-    async def _get_stocks_mixin(self, session, token: str, date_from: str, use_cache=True):
-        url = "https://statistics-api.wildberries.ru/api/v1/supplier/stocks"
-        params = {"dateFrom": date_from}
-        headers = {"Authorization": token}
-        
-        if hasattr(self, '_get_cached_or_request'):
-            data = await self._get_cached_or_request(session, url, headers, params, use_cache=use_cache)
-        else:
-            async with session.get(url, headers=headers, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                else:
-                    data = []
-        
-        if not data: return {"total_quantity": 0}
-        if isinstance(data, list):
-            total_qty = sum(item.get("quantity", 0) for item in data)
-            return {"total_quantity": total_qty}
-        return {"total_quantity": 0}
 
-
-class WBStatisticsAPI:
+class WBStatisticsAPI(WBStatisticsMixin):
     """
     Standalone Client for Wildberries Statistics API.
     Used by Supply Service (New Logic) and Analytics Service.
