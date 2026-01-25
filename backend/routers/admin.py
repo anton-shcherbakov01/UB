@@ -565,13 +565,13 @@ async def get_server_metrics(user: User = Depends(get_current_user)):
 
 @router.get("/analytics/overview")
 async def get_analytics_overview(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Общая аналитика для админа"""
+    """Общая аналитика для админа (ПОЛНАЯ ЛОГИКА)"""
     if not user.is_admin: raise HTTPException(403, "Forbidden")
     
     now = datetime.utcnow()
     month_ago = now - timedelta(days=30)
     
-    # График регистраций (уже есть в users/stats, но дублируем для удобства)
+    # 1. График регистраций (30 дней)
     registration_chart = []
     for i in range(30):
         day_start = (now - timedelta(days=29-i)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -586,7 +586,20 @@ async def get_analytics_overview(user: User = Depends(get_current_user), db: Asy
             "count": count
         })
     
-    # График использования сервисов (последние 30 дней)
+    # 2. График использования сервисов (30 дней)
+    service_names = {
+        'ai': 'AI анализ',
+        'seo': 'SEO ген',
+        'seo_tracker': 'SEO трекер',
+        'pnl': 'P&L',
+        'unit_economy': 'Unit Eco',
+        'supply': 'Supply',
+        'forensics': 'Forensics',
+        'cashgap': 'Cash Gap',
+        'price': 'Price',
+        'slots': 'Slots'
+    }
+    
     services_usage_chart = []
     for i in range(30):
         day_start = (now - timedelta(days=29-i)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -606,7 +619,7 @@ async def get_analytics_overview(user: User = Depends(get_current_user), db: Asy
             day_data[service_key] = count
         services_usage_chart.append(day_data)
     
-    # Распределение пользователей по тарифам (для pie chart)
+    # 3. Распределение по тарифам
     plan_distribution = []
     total_users = (await db.execute(select(func.count(User.id)))).scalar() or 0
     for plan_key in ['start', 'analyst', 'strategist']:
@@ -620,7 +633,7 @@ async def get_analytics_overview(user: User = Depends(get_current_user), db: Asy
                 "percentage": round((count / total_users) * 100, 2)
             })
     
-    # Топ-10 самых активных пользователей
+    # 4. Топ-10 активных пользователей
     top_users = (await db.execute(
         select(
             User.id,
@@ -646,7 +659,7 @@ async def get_analytics_overview(user: User = Depends(get_current_user), db: Asy
             "usage_count": u.usage_count
         })
     
-    # Конверсия из бесплатных в платных
+    # 5. Конверсия
     free_users = (await db.execute(
         select(func.count(User.id)).where(User.subscription_plan == 'start')
     )).scalar() or 0

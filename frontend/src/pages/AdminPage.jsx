@@ -21,7 +21,7 @@ const AdminPage = ({ onBack }) => {
     const [servicesDetailed, setServicesDetailed] = useState(null);
     const [serverMetrics, setServerMetrics] = useState(null);
     const [analytics, setAnalytics] = useState(null);
-    const [partnersStats, setPartnersStats] = useState(null); // New state for partners
+    const [partnersStats, setPartnersStats] = useState(null); // NEW
     
     // Data states (Old Admin Panel - User Management)
     const [currentUser, setCurrentUser] = useState(null);
@@ -53,7 +53,7 @@ const AdminPage = ({ onBack }) => {
                 fetchServerMetrics(),
                 fetchAnalytics(),
                 fetchCurrentUser(),
-                fetchPartnersStats()
+                fetchPartnersStats() // NEW
             ]);
         } catch (e) {
             console.error('Error fetching admin data:', e);
@@ -101,6 +101,7 @@ const AdminPage = ({ onBack }) => {
         if (res.ok) setCurrentUser(await res.json());
     };
 
+    // NEW
     const fetchPartnersStats = async () => {
         const res = await fetch(`${API_URL}/api/admin/partners/stats`, { headers: getTgHeaders() });
         if (res.ok) setPartnersStats(await res.json());
@@ -268,7 +269,7 @@ const AdminPage = ({ onBack }) => {
                     { id: 'services', label: 'Сервисы', icon: Activity },
                     { id: 'load', label: 'Нагрузка', icon: Server },
                     { id: 'analytics', label: 'Аналитика', icon: PieChart },
-                    { id: 'testing', label: 'Тестирование', icon: Settings } // New tab for plan switching
+                    { id: 'testing', label: 'Тестирование', icon: Settings }
                 ].map(tab => {
                     const Icon = tab.icon;
                     return (
@@ -291,7 +292,7 @@ const AdminPage = ({ onBack }) => {
             {/* Partners Tab */}
             {activeTab === 'partners' && partnersStats && (
                 <div className="space-y-4 animate-in fade-in">
-                    {/* Summary Cards for Partners */}
+                    {/* Summary Cards */}
                     <div className="grid grid-cols-2 gap-3">
                         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
                             <p className="text-xs text-slate-400 font-bold uppercase mb-1">Всего партнеров</p>
