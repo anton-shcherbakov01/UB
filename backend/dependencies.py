@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import redis
+from datetime import datetime, timedelta
 from urllib.parse import parse_qsl
 from fastapi import Header, Query, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,8 +77,19 @@ async def get_current_user(
         try:
             username = user_data_dict.get('username')
             first_name = user_data_dict.get('first_name')
-            plan = "strategist" if is_super else "start"
+            
+            # --- ЛОГИКА ТАРИФОВ ПРИ РЕГИСТРАЦИИ (FREE TRIAL) ---
             is_adm = is_super
+            
+            if is_super:
+                # Админ получает полный доступ навсегда
+                plan = "strategist"
+                subscription_expires_at = None
+            else:
+                # Обычный пользователь получает PRO (Analyst) на 3 дня
+                plan = "analyst" 
+                subscription_expires_at = datetime.utcnow() + timedelta(days=3)
+            # ---------------------------------------------------
             
             # --- ПАРТНЕРСКАЯ ЛОГИКА ---
             referrer_id = None
@@ -112,7 +124,8 @@ async def get_current_user(
                 first_name=first_name,
                 is_admin=is_adm,
                 subscription_plan=plan,
-                referrer_id=referrer_id
+                referrer_id=referrer_id,
+                subscription_expires_at=subscription_expires_at # Записываем дату окончания триала
             )
             db.add(new_user)
             await db.commit()

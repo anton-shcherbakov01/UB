@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     ChevronLeft, Loader2, RefreshCw, Users, DollarSign, Activity, 
     TrendingUp, TrendingDown, Server, BarChart3, PieChart, LineChart,
-    ArrowUp, ArrowDown, Minus, Search, Filter, Check, Settings
+    ArrowUp, ArrowDown, Minus, Search, Filter, Check, Settings, Briefcase
 } from 'lucide-react';
 import { 
     BarChart, Bar, LineChart as RechartsLineChart, Line, PieChart as RechartsPieChart, 
@@ -21,6 +21,7 @@ const AdminPage = ({ onBack }) => {
     const [servicesDetailed, setServicesDetailed] = useState(null);
     const [serverMetrics, setServerMetrics] = useState(null);
     const [analytics, setAnalytics] = useState(null);
+    const [partnersStats, setPartnersStats] = useState(null); // New state for partners
     
     // Data states (Old Admin Panel - User Management)
     const [currentUser, setCurrentUser] = useState(null);
@@ -51,7 +52,8 @@ const AdminPage = ({ onBack }) => {
                 fetchServicesDetailed(),
                 fetchServerMetrics(),
                 fetchAnalytics(),
-                fetchCurrentUser() // Added from old version
+                fetchCurrentUser(),
+                fetchPartnersStats()
             ]);
         } catch (e) {
             console.error('Error fetching admin data:', e);
@@ -97,6 +99,11 @@ const AdminPage = ({ onBack }) => {
     const fetchCurrentUser = async () => {
         const res = await fetch(`${API_URL}/api/user/me`, { headers: getTgHeaders() });
         if (res.ok) setCurrentUser(await res.json());
+    };
+
+    const fetchPartnersStats = async () => {
+        const res = await fetch(`${API_URL}/api/admin/partners/stats`, { headers: getTgHeaders() });
+        if (res.ok) setPartnersStats(await res.json());
     };
 
     // --- Old Admin Panel Logic (Plan Changing) ---
@@ -256,6 +263,7 @@ const AdminPage = ({ onBack }) => {
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {[
                     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+                    { id: 'partners', label: 'Партнеры', icon: Briefcase }, // NEW TAB
                     { id: 'users', label: 'Пользователи', icon: Users },
                     { id: 'services', label: 'Сервисы', icon: Activity },
                     { id: 'load', label: 'Нагрузка', icon: Server },
@@ -279,6 +287,65 @@ const AdminPage = ({ onBack }) => {
                     );
                 })}
             </div>
+
+            {/* Partners Tab */}
+            {activeTab === 'partners' && partnersStats && (
+                <div className="space-y-4 animate-in fade-in">
+                    {/* Summary Cards for Partners */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs text-slate-400 font-bold uppercase mb-1">Всего партнеров</p>
+                            <p className="text-2xl font-black text-indigo-600">{partnersStats.length}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs text-slate-400 font-bold uppercase mb-1">Выплачено / Заработано</p>
+                            <p className="text-2xl font-black text-emerald-600">
+                                {partnersStats.reduce((acc, p) => acc + p.total_earned, 0).toLocaleString()} ₽
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 overflow-x-auto">
+                        <h3 className="text-lg font-bold text-slate-800 mb-4">Эффективность агентов</h3>
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-200">
+                                    <th className="text-left py-3 px-4 font-bold text-slate-600">Партнер</th>
+                                    <th className="text-right py-3 px-4 font-bold text-slate-600">Лиды</th>
+                                    <th className="text-right py-3 px-4 font-bold text-slate-600">Продажи</th>
+                                    <th className="text-right py-3 px-4 font-bold text-slate-600">Конверсия</th>
+                                    <th className="text-right py-3 px-4 font-bold text-slate-600">Баланс</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {partnersStats.map((p) => (
+                                    <tr key={p.partner_id} className="border-b border-slate-100 hover:bg-slate-50">
+                                        <td className="py-3 px-4">
+                                            <div>
+                                                <div className="font-bold text-slate-800">@{p.username}</div>
+                                                <div className="text-[10px] text-slate-400">ID: {p.partner_id}</div>
+                                            </div>
+                                        </td>
+                                        <td className="py-3 px-4 text-right font-medium">{p.leads_count}</td>
+                                        <td className="py-3 px-4 text-right font-bold text-indigo-600">{p.sales_count}</td>
+                                        <td className="py-3 px-4 text-right">
+                                            <span className={`px-2 py-1 rounded text-xs font-bold ${p.conversion > 5 ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                {p.conversion}%
+                                            </span>
+                                        </td>
+                                        <td className="py-3 px-4 text-right font-black text-slate-900">{p.balance} ₽</td>
+                                    </tr>
+                                ))}
+                                {partnersStats.length === 0 && (
+                                    <tr>
+                                        <td colSpan="5" className="py-8 text-center text-slate-400">Партнеров пока нет</td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
 
             {/* Dashboard Tab */}
             {activeTab === 'dashboard' && usersStats && (

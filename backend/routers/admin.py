@@ -12,7 +12,8 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
-from database import get_db, User, MonitoredItem, SearchHistory
+# ДОБАВЛЕНЫ: Partner, Payment
+from database import get_db, User, MonitoredItem, SearchHistory, Partner, Payment
 from dependencies import get_current_user, get_redis_client
 from config.plans import TIERS
 from celery_app import REDIS_URL, celery_app
@@ -119,6 +120,61 @@ async def get_users_stats(user: User = Depends(get_current_user), db: AsyncSessi
         },
         "registration_chart": registration_data
     }
+
+# --- НОВЫЙ ЭНДПОИНТ: СТАТИСТИКА ПАРТНЕРОВ ---
+@router.get("/partners/stats")
+async def get_partners_detailed_stats(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Полная статистика по партнерам для админа.
+    """
+    if not user.is_admin: 
+        raise HTTPException(403, "Forbidden")
+
+    # 1. Получаем всех партнеров
+    partners_stmt = select(Partner).order_by(Partner.total_earned.desc())
+    partners_res = await db.execute(partners_stmt)
+    partners = partners_res.scalars().all()
+
+    stats = []
+
+    for p in partners:
+        # 2. Количество регистраций (лидов) по реферальной ссылке
+        leads_count = (await db.execute(
+            select(func.count(User.id)).where(User.referrer_id == p.user_id)
+        )).scalar() or 0
+
+        # 3. Количество успешных оплат от этих лидов (Продажи)
+        # Ищем платежи пользователей, чьим реферером является этот партнер
+        # Исключаем платежи со статусом != succeeded и нулевые суммы
+        sales_count = (await db.execute(
+            select(func.count(Payment.id))
+            .join(User, Payment.user_id == User.id)
+            .where(
+                User.referrer_id == p.user_id,
+                Payment.status == 'succeeded',
+                Payment.amount > 0
+            )
+        )).scalar() or 0
+
+        # 4. Конверсия
+        conversion = round((sales_count / leads_count * 100), 1) if leads_count > 0 else 0
+
+        stats.append({
+            "partner_id": str(p.user_id),
+            "username": p.username or "Unknown",
+            "balance": float(p.balance),
+            "total_earned": float(p.total_earned),
+            "leads_count": leads_count,   
+            "sales_count": sales_count,   
+            "conversion": conversion,
+            "joined_at": p.created_at.strftime("%Y-%m-%d")
+        })
+
+    return stats
+# ---------------------------------------------
 
 @router.post("/set-plan")
 async def set_user_plan(
@@ -531,19 +587,6 @@ async def get_analytics_overview(user: User = Depends(get_current_user), db: Asy
         })
     
     # График использования сервисов (последние 30 дней)
-    service_names = {
-        'ai': 'AI анализ отзывов',
-        'seo': 'SEO генератор',
-        'seo_tracker': 'SEO трекер',
-        'pnl': 'P&L отчеты',
-        'unit_economy': 'Unit экономика',
-        'supply': 'Анализ поставок',
-        'forensics': 'Форензика',
-        'cashgap': 'Cash Gap',
-        'price': 'Мониторинг цен',
-        'slots': 'Слоты'
-    }
-    
     services_usage_chart = []
     for i in range(30):
         day_start = (now - timedelta(days=29-i)).replace(hour=0, minute=0, second=0, microsecond=0)

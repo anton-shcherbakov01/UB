@@ -6,11 +6,9 @@ from decimal import Decimal
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from sqlalchemy.future import select
-from sqlalchemy import text
 
-# ИСПРАВЛЕНО: Добавлен импорт Payment
 from database import AsyncSessionLocal, Partner, Lead, User, PayoutRequest, Payment
 
 # Настройка логирования
@@ -19,7 +17,7 @@ logger = logging.getLogger("PartnerBot")
 
 # Конфигурация
 PARTNER_BOT_TOKEN = os.getenv("PARTNER_BOT_TOKEN")
-ADMIN_ID = 901378787 # Замените на ваш Telegram ID
+ADMIN_ID = 901378787 # Ваш ID
 MIN_PAYOUT = 2000
 
 if not PARTNER_BOT_TOKEN:
@@ -75,17 +73,18 @@ async def cmd_start(message: types.Message):
 async def btn_link(message: types.Message):
     user_id = message.from_user.id
     # Глубокая ссылка на Mini App
-    # Формат startapp=agent_ID
     link = f"https://t.me/juicystat_bot/juicystat?startapp=agent_{user_id}"
     
     text = (
         "🎯 <b>Твоя боевая ссылка:</b>\n"
         f"<code>{link}</code>\n\n"
-        "<b>Как это работает:</b>\n"
-        "1. Человек переходит по ссылке.\n"
-        "2. Нажимает «Запустить».\n"
-        "3. Он закрепляется за тобой навсегда.\n"
-        "4. Как только он оплатит подписку — тебе прилетит <b>500₽</b>."
+        "<b>Твой оффер для клиентов (Продавай пользу!):</b>\n"
+        "«Держи ссылку на бесплатный доступ к JuicyStat. <b>3 дня тарифа PRO (Analyst) в подарок!</b>»\n\n"
+        "<b>Как ты заработаешь:</b>\n"
+        "1. Человек переходит, видит халявный PRO тариф.\n"
+        "2. Пользуется 3 дня, видит свои цифры и подсаживается.\n"
+        "3. Покупает продление.\n"
+        "4. Тебе прилетает <b>500₽</b> с первой оплаты."
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -108,8 +107,6 @@ async def check_lead_logic(message: types.Message):
 
     async with AsyncSessionLocal() as session:
         # 1. Проверяем, не клиент ли он уже
-        # ВАЖНО: В таблице users храним username без @, но регистр может быть разным
-        # Используем ilike для регистронезависимого поиска
         u_stmt = select(User).where(User.username.ilike(target_username))
         u_res = await session.execute(u_stmt)
         existing_user = u_res.scalars().first()
@@ -122,7 +119,7 @@ async def check_lead_logic(message: types.Message):
             )
             return
 
-        # 2. Проверяем таблицу Leads (резервы)
+        # 2. Проверяем таблицу Leads
         l_stmt = select(Lead).where(Lead.username == target_username)
         l_res = await session.execute(l_stmt)
         lead = l_res.scalars().first()
@@ -130,7 +127,6 @@ async def check_lead_logic(message: types.Message):
         now = datetime.utcnow()
 
         if lead:
-            # Если забронирован другим и срок не истёк
             if lead.reserved_by_partner_id != agent_id and lead.expires_at > now:
                 await message.answer(
                     "⛔️ <b>Лид занят.</b>\n"
@@ -140,7 +136,6 @@ async def check_lead_logic(message: types.Message):
                 )
                 return
             
-            # Если уже конвертирован (стал клиентом, но запись осталась)
             if lead.status == 'converted':
                 await message.answer("❌ Лид уже стал клиентом.")
                 return
@@ -148,13 +143,11 @@ async def check_lead_logic(message: types.Message):
         # 3. Бронируем!
         expires = now + timedelta(hours=24)
         if lead:
-            # Обновляем существующую просроченную или свою бронь
             lead.reserved_by_partner_id = agent_id
             lead.reserved_at = now
             lead.expires_at = expires
             lead.status = 'reserved'
         else:
-            # Создаем новую
             lead = Lead(
                 username=target_username,
                 reserved_by_partner_id=agent_id,
@@ -178,24 +171,18 @@ async def btn_stats(message: types.Message):
     user_id = message.from_user.id
     
     async with AsyncSessionLocal() as session:
-        # Получаем партнера
         partner = await get_or_create_partner(session, user_id, message.from_user.username)
         
-        # Считаем рефералов (User.referrer_id)
-        # count() function
         q_refs = select(User).where(User.referrer_id == user_id)
         res_refs = await session.execute(q_refs)
         refs = res_refs.scalars().all()
         
-        # Считаем оплаты (Payment.user_id in refs)
         ref_ids = [u.id for u in refs]
         paid_count = 0
         if ref_ids:
             q_pays = select(Payment).where(
                 Payment.user_id.in_(ref_ids),
-                Payment.status == 'succeeded',
-                # Исключаем аддоны, считаем только подписки (или как договорились)
-                # Payment.plan_id.not_like('addon_%') # Опционально
+                Payment.status == 'succeeded'
             )
             res_pays = await session.execute(q_pays)
             paid_count = len(res_pays.scalars().all())
@@ -206,7 +193,7 @@ async def btn_stats(message: types.Message):
     text = (
         "💼 <b>Твой кабинет:</b>\n\n"
         f"👣 Переходов/Регистраций: <b>{reg_count}</b>\n"
-        f"💰 Оплат: <b>{paid_count}</b> (Конверсия {conversion}%)\n"
+        f"💰 Оплат (Завершенных): <b>{paid_count}</b> (Конверсия {conversion}%)\n"
         f"💵 Баланс: <b>{partner.balance}₽</b>\n"
         f"🏆 Всего заработано: <b>{partner.total_earned}₽</b>\n\n"
         "Минимальная сумма для вывода: 2000₽"
@@ -230,8 +217,6 @@ async def btn_payout(message: types.Message):
             )
             return
 
-        # Если достаточно, просим реквизиты (упрощенно, через reply)
-        # Для продакшена лучше использовать FSMContext (states), но для MVP можно так:
         await message.answer(
             "💰 <b>Заявка на вывод</b>\n\n"
             "Напиши одним сообщением:\n"
@@ -254,7 +239,6 @@ async def process_payout(message: types.Message):
             await message.answer("Ошибка: Баланс изменился и стал меньше минимума.")
             return
 
-        # Создаем заявку
         amount = partner.balance
         req = PayoutRequest(
             partner_id=user_id,
@@ -264,13 +248,11 @@ async def process_payout(message: types.Message):
         )
         session.add(req)
         
-        # Списываем баланс (холдируем)
         partner.balance = 0
         session.add(partner)
         
         await session.commit()
         
-        # Уведомляем админа
         admin_text = (
             f"🔔 <b>ЗАЯВКА НА ВЫВОД!</b>\n"
             f"Агент: @{message.from_user.username} (ID {user_id})\n"
@@ -297,8 +279,6 @@ async def btn_support(message: types.Message):
     await message.answer(
         f"По всем вопросам пиши главному: @AAntonShch"
     )
-
-# --- STARTUP ---
 
 async def main():
     logger.info("Starting Partner Bot...")
