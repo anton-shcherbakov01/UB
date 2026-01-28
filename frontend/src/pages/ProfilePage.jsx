@@ -310,7 +310,6 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                         <Check size={10} strokeWidth={4} /> {wbToken === 'DEMO' ? 'ДЕМО' : 'ПОДКЛЮЧЕНО'}
                     </div>
                 )}
-            </div>
 
                 <div className="relative mb-5">
                     <input
