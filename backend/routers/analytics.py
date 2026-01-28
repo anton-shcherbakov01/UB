@@ -18,6 +18,7 @@ from database import get_db, User, ProductCost, SupplySettings
 from dependencies import get_current_user
 from wb_api.statistics import WBStatisticsAPI
 from config.plans import get_limit, has_feature, get_plan_config
+from mock_service import mock_service
 
 # Main analytics router (Data endpoints)
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -46,6 +47,9 @@ async def get_sales_funnel(
 
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="Требуется API токен WB")
+    
+    if user.wb_api_token == "DEMO":
+        return mock_service.get_funnel(days)
 
     date_to = datetime.now()
     date_from = date_to - timedelta(days=days)

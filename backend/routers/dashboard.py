@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db, User
 from dependencies import get_current_user
 from wb_api.statistics import WBStatisticsAPI
+from mock_service import mock_service
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -19,6 +20,9 @@ async def get_dashboard_summary(
 ):
     if not user.wb_api_token:
         return {"status": "no_token"}
+    
+    if user.wb_api_token == "DEMO":
+        return mock_service.get_dashboard_summary()
 
     # 1. Проверяем кэш
     current_time = time.time()

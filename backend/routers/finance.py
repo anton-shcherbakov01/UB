@@ -17,6 +17,7 @@ from dependencies.quota import QuotaCheck
 from wb_api_service import wb_api_service
 from analysis_service import analysis_service
 from tasks.finance import sync_product_metadata
+from mock_service import mock_service
 
 # Import ProductParser
 from parser_parts.product import ProductParser
@@ -130,6 +131,9 @@ async def get_my_products_finance(
     if not user.wb_api_token: 
         logger.warning(f"⚠️ [UnitEconomy] Нет токена у юзера {user.id}")
         return []
+    
+    if user.wb_api_token == "DEMO":
+        return mock_service.get_unit_economy()
     
     # 1. Получаем остатки из WB API
     try:
@@ -352,6 +356,14 @@ async def sync_pnl_data(
 ):
     if not user.wb_api_token:
         raise HTTPException(status_code=400, detail="No WB Token")
+    if user.wb_api_token == "DEMO":
+        # Генерируем 30 или 90 дней
+        return {
+            "plan": user.subscription_plan,
+            "date_from": date_from_dt.isoformat(),
+            "date_to": date_to_dt.isoformat(),
+            "data": mock_service.get_pnl_data(30)
+        }
     
     from tasks.report_loader import load_realization_reports_task
     background_tasks.add_task(load_realization_reports_task, user.id, user.wb_api_token, days=90)

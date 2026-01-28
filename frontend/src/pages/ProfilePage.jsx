@@ -295,6 +295,23 @@ const ProfilePage = ({ onNavigate, refreshUser }) => {
                     )}
                 </div>
 
+                {/* Кнопка ДЕМО */}
+                {!user?.has_wb_token && (
+                    <button 
+                        onClick={() => { setWbToken('DEMO'); setTimeout(() => saveToken(), 100); }} 
+                        className="text-[10px] font-bold bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-200 transition-colors animate-pulse"
+                    >
+                        🚀 Включить Демо-режим
+                    </button>
+                )}
+                
+                {user?.has_wb_token && (
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
+                        <Check size={10} strokeWidth={4} /> {wbToken === 'DEMO' ? 'ДЕМО' : 'ПОДКЛЮЧЕНО'}
+                    </div>
+                )}
+            </div>
+
                 <div className="relative mb-5">
                     <input
                         type="text"

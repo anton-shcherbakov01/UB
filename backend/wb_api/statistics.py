@@ -45,6 +45,14 @@ class WBStatisticsMixin(WBApiBase):
         """
         Параллельный опрос всех шлюзов WB для построения карты доступов.
         """
+        if token == "DEMO":
+            return {
+                "content": True, "marketplace": True, "analytics": True, "promotion": True,
+                "returns": True, "documents": True, "statistics": True, "finance": True,
+                "supplies": True, "chat": True, "questions": True, "prices": True, "users": True,
+                "api_mode": "read_only"
+            }
+
         headers = {"Authorization": token}
         
         # Payload для проверки v3 API

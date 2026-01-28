@@ -72,6 +72,11 @@ async def save_wb_token(
     db: AsyncSession = Depends(get_db)
 ):
     """Сохранение токена API WB и сразу проверка прав"""
+    if req.token == "DEMO":
+        user.wb_api_token = "DEMO"
+        db.add(user)
+        await db.commit()
+        return {"status": "saved", "message": "Демо-режим активирован", "scopes": {}}
     # 1. Проверяем валидность
     is_valid = await wb_api_service.check_token(req.token)
     if not is_valid:
